@@ -54,7 +54,7 @@ export function makeWorks(G) {
   const concreteExtra = {
     uniforms: { uMark: { value: -1e9 }, uSeal: { value: -1e9 }, uHalf: { value: 3 } },
     decl: 'uniform float uMark, uSeal, uHalf;',
-    frag: `{ float sp = texture2D(map, vRW.xz * .35).r; diffuseColor.rgb = vec3(.62, .61, .58) * (.85 + sp * .25);
+    frag: `{ float sp = texture2D(map, vRW.xz * .35).r; diffuseColor.rgb = vec3(.43, .425, .405) * (.85 + sp * .25);
       float j = step(fract(vSO.x / 4.5), .012) + step(abs(vSO.y), .015);
       diffuseColor.rgb *= 1. - min(j, 1.) * .45;
       if (vSO.x < uSeal) diffuseColor.rgb *= .92;
@@ -193,8 +193,8 @@ export function makeWorks(G) {
       if (P.kind === 'causeway') {
         const list = [], r = G.rand(P.seed);
         for (let s = -P.cw - 1; s <= P.cw + 1; s += .7) for (const sd of [-1, 1]) for (let k = 0; k < 3; k++) {
-          const o = sd * (hw + 1 + k * 1.1 + r() * .5), h = P_top(P, s, 'sub') - .55 - k * .55;
-          list.push([s + r() * .5, o, h, .45 + r() * .4, r() * 6, r() * 2]);
+          const o = sd * (hw + 1.3 + k * 1.2 + r() * .5), ss = s + r() * .5, [x, z] = pt(P, ss, o), sc = .45 + r() * .4;
+          list.push([ss, o, G.hAt(x, z) - sc * .15, sc, r() * 6, r() * 2]);
         }
         add('rip', along(P, G.rockGeo, rockMat, list));
       }
