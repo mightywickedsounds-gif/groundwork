@@ -553,11 +553,12 @@ export function makeCrew(G) {
         unstick(m, st, c, dt);
         break;
       }
-      case 'align': {
-        const [x, z] = pt(P, s0, o), [sv, e] = steerTo(m, x, z, false);
-        c.steer = sv; c.throttle = G.SPEC[m.type].tracks ? (Math.abs(e) < .3 ? .3 : 0) : .25;
-        if (s >= s0 - .5) st.state = 'work';
-        if (Math.hypot(x - m.x, z - m.z) > 16) st.state = 'toStart';
+      case 'align': {   // merge onto the road's line (a point would be circled by anything that can't turn on the spot)
+        st.at = (st.at || 0) + dt;
+        follow(m, c, P, o, 1, .25);
+        if (G.SPEC[m.type].tracks && facing(m, P) > .5) c.throttle = 0;
+        if (s >= s0 - .5 || st.at > 25) { st.state = 'work'; st.at = 0; }
+        if (s > s1) { st.state = 'toStart'; st.at = 0; }
         break;
       }
       case 'work': {
@@ -830,6 +831,17 @@ export function makeCrew(G) {
     buildAt(pm) { buildGrid(); const S = siteAt(pm); if (S) { const h = findHead(S); if (h !== null) begin(plan(S), h); } return proj; },
     findPath: (m, x1, z1) => { buildGrid(); return findPath(m, m.x, m.z, x1, z1); },
     skipStage() { if (proj) nextStage(proj); },
+    // tests: finish the current stage at once, with everything it leaves behind
+    finishStage() {
+      const P = proj; if (!P) return;
+      const id = stage(P), d = STG[id] || {};
+      if (d.earth) { P.front = endOf(P) + .6; shapeFill(P, fillStart(P), endOf(P) + .5); }
+      else if (id === 'culverts') P.pipes = P.culverts.length;
+      else if (id === 'crane') P.placed = P.items.length;
+      else if (id === 'deck') P.cut.deck = P.sR + .5;
+      else { P.lead = range(P)[1] + 2; applyLead(P, .1); }
+      W.refresh(P); nextStage(P);
+    },
     findHead, sOf, pt,
   };
 }
