@@ -43,6 +43,7 @@ function makeNoise(seed) {
 const H = new Float32Array(NN);      // ground height
 const H0 = new Float32Array(NN);     // the ground as it was before anyone dug (rebuilt from the seed; used for soil layers and bulking)
 const SWELL = 1.2;                   // dug soil takes up 20% more room loose than it did in the ground
+const COMP = new Uint8Array(NN);     // 1 = rolled flat by tracks or wheels (compacted fill resists washing away)
 const W = new Float32Array(NN);      // water depth
 const BED = new Float32Array(NN);    // can't dig below this
 const M = new Uint8Array(NN);        // top material: 0 grass, 1 dirt, 2 gravel
@@ -321,7 +322,7 @@ function waterStep(dt) {
         const sp = Math.hypot(vx, vz);
         if (sp > ERODE_V) {
           const n = Math.abs(vx) > Math.abs(vz) ? (vx > 0 ? k + 1 : k - 1) : (vz > 0 ? k + N : k - N);
-          const a = Math.min(ERODE_K * (sp - ERODE_V) * dt, .02, H[k] - BED[k]);
+          const a = Math.min(ERODE_K * (sp - ERODE_V) * dt * (COMP[k] ? .15 : 1), .02, H[k] - BED[k]);
           if (a > 0 && H[n] < H[k] + .25) {
             H[k] -= a; H[n] += a; D[n] = 1; if (M[n] !== 2) M[n] = M[k] || 1;
             dirty(k); dirty(n); eroded += a;
@@ -392,7 +393,7 @@ function giveTo(L, k, amount) {
   const mat = loadMat(L);
   L.v -= amount; L.g -= g;
   if (L.v < 1e-4) { L.v = 0; L.g = 0; }
-  H[k] += amount;
+  H[k] += amount; if (amount > .05) COMP[k] = 0;
   if (amount > .02 || M[k] === 0) M[k] = mat;
   D[k] = 1;
   dirty(k);
@@ -1403,6 +1404,8 @@ function drive(m, dt, inp) {
       }
     }
   }
+  // rolling over fill compacts it
+  for (const [cx, cz, r] of cs) cellsInCircle(cx, cz, r * .8, k => { COMP[k] = 1; });
   // wheels and tracks wear the grass off where they run
   const pts = s.tracks ? [[1.2, 1.6], [-1.2, 1.6], [1.2, -1.6], [-1.2, -1.6], [1.2, 0], [-1.2, 0]]
     : m.type === 'hauler' ? [[1.3, 3.1], [-1.3, 3.1], [1.3, -.8], [-1.3, -.8], [1.3, -2.9], [-1.3, -2.9]] : [[1.18, 1.3], [-1.18, 1.3], [1.18, -1.6], [-1.18, -1.6]];
