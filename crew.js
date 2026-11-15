@@ -11,7 +11,7 @@
 export function makeCrew(G) {
   const { clamp, angWrap } = G;
   const ROLES = ['dozer', 'excavator', 'hauler'];
-  let on = false, headT = 0, site = null, waitT = 0, coolT = 0, awayT = 0, gridT = 0;
+  let on = false, headT = 0, site = null, waitT = 0, coolT = 0, awayT = 0, gridT = 0, lastDone = null;
 
   // ------------------------------------------------------------ choosing where to cross
   // Walk across the water along a direction; returns the wet span, or null if there is no dry land within reach.
@@ -407,7 +407,8 @@ export function makeCrew(G) {
       const fx = Math.sin(player.yaw), fz = Math.cos(player.yaw), ford = Math.min(.6, G.SPEC[player.type].ford);
       let deep = 0; for (let d = 3; d <= 10; d += 1.5) deep = Math.max(deep, G.wAt(player.x + fx * d, player.z + fz * d));
       if ((deep > ford && Math.abs(player.v) < .8) || player.blocked === 'deep') waitT += dt * (player.blocked === 'deep' ? 2 : 1); else waitT = 0;
-      if (waitT > 1.5 && coolT <= 0) {
+      const nearDone = lastDone && Math.hypot(player.x - lastDone[0], player.z - lastDone[1]) < 30;   // just finished one here
+      if (waitT > 1.5 && coolT <= 0 && !nearDone) {
         waitT = 0; coolT = 6;
         site = siteAt(player);
         if (site) { const h = findHead(site); if (h === null) site = null; else { site.head = h; restart(); G.say('Crew: building a crossing'); } }
@@ -420,7 +421,7 @@ export function makeCrew(G) {
       if (site && headT <= 0) {
         headT = .5;
         const h = findHead(site);
-        if (h === null) { G.crossed(site); site = null; coolT = 10; restart(); }   // nothing too deep left: done
+        if (h === null) { G.crossed(site); lastDone = site.P; site = null; coolT = 10; restart(); }   // nothing too deep left: done
         else site.head = h;
       }
     }
@@ -436,7 +437,7 @@ export function makeCrew(G) {
   }
   function setOn(v) {
     on = !!v;
-    restart(); site = null; waitT = 0; coolT = 0;
+    restart(); site = null; waitT = 0; coolT = 0; lastDone = null;
     if (!on) for (const m of G.machines) m.ai = null;
   }
   return {
