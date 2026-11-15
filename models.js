@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { labelTexture } from './textures.js?v=4';
+import { labelTexture } from './textures.js?v=5';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const Y = V(0, 1, 0), Z = V(0, 0, 1);
@@ -45,7 +45,7 @@ export function machineMats(T, color) {
     track: g({ color: 0x3a3836, roughness: .7, metalness: .6 }),
     rubber: g({ color: 0x1b1b1c, roughness: .9, metalness: 0 }),
     chrome: new THREE.MeshStandardMaterial({ color: 0xdfe4ea, roughness: .1, metalness: 1 }),
-    glass: new THREE.MeshStandardMaterial({ color: 0x1a2731, roughness: .03, metalness: .9, transparent: true, opacity: .42, envMapIntensity: 1.6 }),
+    glass: new THREE.MeshStandardMaterial({ color: 0x1a2731, roughness: .03, metalness: .9, transparent: true, opacity: .42, envMapIntensity: 1.6, depthWrite: false }),
     interior: new THREE.MeshStandardMaterial({ color: 0x252525, roughness: .85 }),
     seat: new THREE.MeshStandardMaterial({ color: 0x3b3d40, roughness: .9 }),
     light: new THREE.MeshStandardMaterial({ color: 0xfffaf0, emissive: 0xfff3d6, emissiveIntensity: .7, roughness: .15 }),

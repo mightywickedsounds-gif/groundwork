@@ -150,3 +150,15 @@ Tested: all 11 gameplay checks pass; desktop and phone screenshots checked for o
 
 Screenshots were checked for the hole, the river, the trees, the horizon and pouring dirt. I can't listen to the sound or try it on a real phone from here.
 
+### Round 5: rivers in valleys, not canyons (owner feedback from a phone)
+
+- **No more canyons.** Rivers and creeks now sit in wide, gentle valleys: the land slopes down to a grassy floodplain about half a metre above the water, then a natural bank into the channel. Riverbeds are gravel and the banks just above the water are mud. (Before, the banks were 5-6 m walls.)
+- **The river shows from inside the cab.** The cab glass was marking itself as solid in the depth check, so anything see-through behind it (water, dust) was skipped. Fixed.
+- **Reeds and tall grass** line the water's edge.
+- **A little brighter** overall.
+- **Faster machines:** about 30% higher top speed and quicker acceleration (dozer 17 km/h, loader 28, excavator 11, hauler 40).
+- **More life in the background:** crickets in the grass, frogs at the marsh and along the water, a woodpecker now and then, crows, doves, and longer warbling songbirds, all placed around you in 3D.
+- The valley is shaped differently, so this starts a fresh valley again (save version 3; the older saves stay in the browser untouched).
+
+Tested: all 13 checks pass. The dam check now uses a wider dam and a little more time, because the wider valley takes longer to fill. Screenshots checked from above, from the bank and from inside the excavator cab.
+

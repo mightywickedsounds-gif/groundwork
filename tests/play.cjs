@@ -107,8 +107,8 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   const dm = await p.evaluate(() => {
     const at = (x, z) => GW.W[z * 256 + x];
     let up = 0; for (let x = 58; x <= 80; x++) up = Math.max(up, at(x, 168));
-    for (let z = 150; z <= 153; z++) for (let x = 50; x <= 90; x++) { const k = z * 256 + x; GW.H[k] = Math.max(GW.H[k], 14.5); GW.W[k] = 0; }
-    GW.step(900);
+    for (let z = 150; z <= 153; z++) for (let x = 36; x <= 104; x++) { const k = z * 256 + x; GW.H[k] = Math.max(GW.H[k], 14.5); GW.W[k] = 0; GW.dirty(k); }
+    GW.step(1500);
     let after = 0; for (let x = 58; x <= 80; x++) after = Math.max(after, at(x, 168));
     return { before: +up.toFixed(2), after: +after.toFixed(2) };
   });

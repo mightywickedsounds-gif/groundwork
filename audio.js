@@ -124,6 +124,36 @@ export function streamSample(c, secs = 4) {
   return toBuffer(c, normalize(loopify(y, sr), .8));
 }
 
+// crickets: many insects chirping out of step, high and quiet
+export function cricketSample(c, secs = 5) {
+  const sr = c.sampleRate, n = Math.floor(sr * secs) + Math.floor(sr * .06), R = rngS(41), y = new Float32Array(n);
+  for (let bug = 0; bug < 7; bug++) {
+    const f = 3900 + R() * 1400, period = .45 + R() * .5, amp = .25 + R() * .6;
+    for (let t = R() * period; t < secs; t += period * (.9 + R() * .2)) {
+      const pulses = 2 + (R() * 3 | 0);
+      for (let q = 0; q < pulses; q++) {
+        const s0 = Math.floor((t + q * .035) * sr), len = Math.floor(sr * .022);
+        for (let k = 0; k < len && s0 + k < n; k++) y[s0 + k] += Math.sin(2 * Math.PI * f * k / sr) * Math.sin(Math.PI * k / len) * amp * (.6 + .4 * Math.sin(2 * Math.PI * 180 * k / sr));
+      }
+    }
+  }
+  return toBuffer(c, normalize(loopify(y, sr), .6));
+}
+// frogs: low throaty croaks, each a quick train of pulses
+export function frogSample(c, secs = 7) {
+  const sr = c.sampleRate, n = Math.floor(sr * secs) + Math.floor(sr * .06), R = rngS(53), x = new Float32Array(n);
+  for (let t = R() * .5; t < secs; t += .25 + R() * 1.1) {
+    const f0 = 210 + R() * 160, pulses = 6 + (R() * 9 | 0), rate = 18 + R() * 14, amp = .3 + R() * .7;
+    for (let q = 0; q < pulses; q++) {
+      const s0 = Math.floor((t + q / rate) * sr), len = Math.floor(sr * .022);
+      let ph = 0;
+      for (let k = 0; k < len && s0 + k < n; k++) { ph += 2 * Math.PI * f0 / sr; x[s0 + k] += (Math.sin(ph) + .5 * Math.sin(ph * 2) + .3 * Math.sin(ph * 3)) * Math.sin(Math.PI * k / len) * amp; }
+    }
+  }
+  const y = new Float32Array(n); filt(x, biquad('bp', 500, .9, sr), 1, y); filt(x, biquad('lp', 300, .7, sr), .6, y);
+  return toBuffer(c, normalize(loopify(y, sr), .7));
+}
+
 export class Sound {
   constructor() { this.c = null; this.muted = false; this.voices = new Map(); this.t = 0; this.nextBird = 4; }
   get ready() { return !!this.c; }
@@ -140,6 +170,7 @@ export class Sound {
     this.crackle = crackleBuffer(c, 2, .004); this.crackleDense = crackleBuffer(c, 2, .02);
     this.clanks = [180, 210, 240, 165].map(f => clankBuffer(c, f));
     this.pourSoil = pourSample(c, false); this.pourGravel = pourSample(c, true); this.stream = streamSample(c);
+    this.crickets = cricketSample(c); this.frogs = frogSample(c);
     this.engBufs = {};
     this.ambient();
   }
@@ -320,9 +351,17 @@ export class Sound {
     const r1 = this.loop(this.stream), rh = this.filt('highpass', 150, .5); this.riverG = this.gain(0);
     r1.connect(rh).connect(this.riverG).connect(this.riverPan);
     const r2 = this.loop(this.stream, .73), rl = this.filt('lowpass', 900, .5); this.bubbleG = this.gain(0); r2.connect(rl).connect(this.bubbleG).connect(this.riverPan);
+    // insects all around you; frogs by the marsh and along the water
+    const cr = this.loop(this.crickets); this.cricketG = this.gain(.02); cr.connect(this.cricketG).connect(this.amb);
+    const cr2 = this.loop(this.crickets, .93); const cg2 = this.gain(.012); cr2.connect(cg2).connect(this.amb);
+    this.frogPan = this.panner(10); this.frogPan.connect(this.amb);
+    const fr = this.loop(this.frogs); this.frogG = this.gain(0); fr.connect(this.frogG).connect(this.frogPan);
+    this.riverFrogPan = this.panner(8); this.riverFrogPan.connect(this.amb);
+    const fr2 = this.loop(this.frogs, 1.12); this.riverFrogG = this.gain(0); fr2.connect(this.riverFrogG).connect(this.riverFrogPan);
+    this.nextWood = 12 + Math.random() * 20; this.nextCrow = 20 + Math.random() * 25; this.nextDove = 30 + Math.random() * 30;
   }
   // river: {x,y,z, amount 0..1}, wind 0..1
-  updateAmbient(dt, cam, river) {
+  updateAmbient(dt, cam, river, marsh) {
     if (!this.c) return;
     const t = this.c.currentTime;
     this.t += dt;
@@ -334,14 +373,53 @@ export class Sound {
       this.riverG.gain.setTargetAtTime(river.amount * .35, t, .3);
       this.bubbleG.gain.setTargetAtTime(river.amount * .25, t, .3);
     }
+    this.cricketG.gain.setTargetAtTime(.012 + (1 - gust) * .02, t, 1);
+    if (marsh) { this.setPos(this.frogPan, marsh.x, marsh.y, marsh.z); this.frogG.gain.setTargetAtTime(marsh.wet ? .35 : 0, t, 1); }
+    if (river) { this.setPos(this.riverFrogPan, river.x + 6, river.y, river.z - 4); this.riverFrogG.gain.setTargetAtTime(river.amount * .12, t, 1); }
     this.nextBird -= dt;
-    if (this.nextBird <= 0) { this.nextBird = 2 + Math.random() * 7; this.bird(cam); }
+    if (this.nextBird <= 0) { this.nextBird = 1.5 + Math.random() * 5; this.bird(cam); }
+    this.nextWood -= dt; if (this.nextWood <= 0) { this.nextWood = 18 + Math.random() * 30; this.woodpecker(cam); }
+    this.nextCrow -= dt; if (this.nextCrow <= 0) { this.nextCrow = 25 + Math.random() * 40; this.crow(cam); }
+    this.nextDove -= dt; if (this.nextDove <= 0) { this.nextDove = 30 + Math.random() * 45; this.dove(cam); }
+  }
+  around(cam, d0, d1, up = 6) {
+    const a = Math.random() * Math.PI * 2, d = d0 + Math.random() * (d1 - d0);
+    return this.at(cam.position.x + Math.cos(a) * d, cam.position.y + up + Math.random() * 8, cam.position.z + Math.sin(a) * d, 12);
+  }
+  woodpecker(cam) {
+    const c = this.c, t = c.currentTime + .05, p = this.around(cam, 30, 70), n = 12 + (Math.random() * 10 | 0), rate = 16 + Math.random() * 6;
+    for (let i = 0; i < n; i++) {
+      const s = c.createBufferSource(); s.buffer = this.white;
+      const bp = this.filt('bandpass', 1100 + Math.random() * 200, 4), g = this.gain(0), st = t + i / rate, a = .5 * (1 - i / n * .6);
+      g.gain.setValueAtTime(a, st); g.gain.exponentialRampToValueAtTime(.0001, st + .012);
+      s.connect(bp).connect(g).connect(p); s.start(st, Math.random()); s.stop(st + .02);
+    }
+  }
+  crow(cam) {
+    const c = this.c, t = c.currentTime + .05, p = this.around(cam, 40, 90, 12), caws = 2 + (Math.random() * 3 | 0);
+    for (let i = 0; i < caws; i++) {
+      const st = t + i * (.42 + Math.random() * .1), o = c.createOscillator(); o.type = 'sawtooth';
+      o.frequency.setValueAtTime(560, st); o.frequency.linearRampToValueAtTime(700, st + .06); o.frequency.linearRampToValueAtTime(480, st + .3);
+      const f1 = this.filt('bandpass', 1000, 2.5), f2 = this.filt('bandpass', 2300, 3), g = this.gain(0);
+      g.gain.setValueAtTime(0, st); g.gain.linearRampToValueAtTime(.18, st + .03); g.gain.setTargetAtTime(0, st + .2, .05);
+      o.connect(f1).connect(g); o.connect(f2).connect(g); g.connect(p); o.start(st); o.stop(st + .45);
+      this.burst(this.white, p, { gain: .08, attack: .02, decay: .2, type: 'bandpass', f: 1500, q: 1 });
+    }
+  }
+  dove(cam) {
+    const c = this.c, t = c.currentTime + .05, p = this.around(cam, 25, 60, 8);
+    [[0, 520, .35], [.45, 560, .5], [1.05, 470, .45], [1.6, 470, .45]].forEach(([d, f, len]) => {
+      const o = c.createOscillator(), g = this.gain(0), st = t + d;
+      o.frequency.setValueAtTime(f, st); o.frequency.linearRampToValueAtTime(f * .93, st + len);
+      g.gain.setValueAtTime(0, st); g.gain.linearRampToValueAtTime(.09, st + .08); g.gain.linearRampToValueAtTime(0, st + len);
+      o.connect(g).connect(p); o.start(st); o.stop(st + len + .05);
+    });
   }
   bird(cam) {
     const c = this.c, t = c.currentTime + .05;
     const a = Math.random() * Math.PI * 2, d = 25 + Math.random() * 50;
     const p = this.at(cam.position.x + Math.cos(a) * d, cam.position.y + 6 + Math.random() * 8, cam.position.z + Math.sin(a) * d, 10);
-    const kind = Math.random(), notes = 2 + (Math.random() * 5 | 0), base = 2600 + Math.random() * 1800;
+    const kind = Math.random(), notes = kind > .8 ? 10 + (Math.random() * 10 | 0) : 2 + (Math.random() * 5 | 0), base = 2600 + Math.random() * 1800;
     for (let i = 0; i < notes; i++) {
       const o = c.createOscillator(), g = this.gain(0), st = t + i * (kind < .5 ? .09 : .16), len = kind < .5 ? .06 : .12;
       const f0 = base * (kind < .5 ? 1 + (i % 2) * .18 : 1 + Math.random() * .25);
