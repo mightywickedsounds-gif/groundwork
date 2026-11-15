@@ -230,8 +230,16 @@ export class Sound {
     // backup beeper
     v.bp = c.createOscillator(); v.bp.type = 'square'; v.bp.frequency.value = 1180; const bpf = this.filt('bandpass', 1180, 3); v.bpG = this.gain(0); v.bp.connect(bpf).connect(v.bpG).connect(v.pan);
     for (const o of [v.tb, v.hy, v.bp]) o.start();
+    v.all = [v.sI, v.sL, v.tb, v.hy, v.bp, hn, dS, dG, pS, pG];
     this.voices.set(id, v);
     return v;
+  }
+  // a machine leaves (equipment driving off): silence and free its voice
+  dropMachine(id) {
+    const v = this.voices.get(id); if (!v) return;
+    this.voices.delete(id);
+    try { v.pan.disconnect(); v.hyG.disconnect(); } catch (e) { }
+    for (const o of v.all || []) try { o.stop(); } catch (e) { }
   }
   // s: {x,y,z, rpm (0..1), load (0..1), hyd (0..1), hydLoad, dig (m³/s), gravel (0..1), pour (m³/s), track (m/s, 0 if wheeled), reverse, active}
   updateMachine(id, s, dt) {

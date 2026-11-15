@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { labelTexture } from './textures.js?v=6';
+import { labelTexture } from './textures.js?v=7';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const Y = V(0, 1, 0), Z = V(0, 0, 1);
@@ -52,6 +52,8 @@ export function machineMats(T, color) {
     tail: new THREE.MeshStandardMaterial({ color: 0x8a1010, emissive: 0x7a0808, emissiveIntensity: .5, roughness: .2 }),
     beacon: new THREE.MeshStandardMaterial({ color: 0xffa31a, emissive: 0xff8800, emissiveIntensity: .15, transparent: true, opacity: .9, roughness: .2 }),
     stripe: new THREE.MeshStandardMaterial({ map: T.stripes, roughness: .5 }),
+    asphalt: new THREE.MeshStandardMaterial({ color: 0x1d1c1b, roughness: .8 }),
+    drum: g({ color: 0xe9e6df, roughness: .45, metalness: .2 }),
   };
 }
 
@@ -656,4 +658,144 @@ export function buildWorker(i = 0) {
   }
   g.traverse(o => { if (o.isMesh) o.castShadow = true; });
   return g;
+}
+
+// ---------------------------------------------------------------- road and bridge equipment (brought in by the crew)
+// single-drum road roller: steel drum at the front (steers by bending in the middle), tyres and cab at the back
+export function buildRoller(m, M) {
+  const g = new THREE.Group();
+  rbox(g, 1.5, .7, 2.4, M.paint, 0, 1.25, -1.0, .12);
+  rbox(g, 1.9, .5, .6, M.paint, 0, 1.0, -2.2, .1);
+  for (const s of [-1, 1]) rbox(g, .14, .1, .05, M.tail, s * .7, 1.2, -2.52, .02);
+  m.wheels = [];
+  for (const s of [-1, 1]) m.wheels.push(wheel(g, .78, .62, M, s * .95, .78, -1.3));
+  m.cabG = buildCab(g, 1.4, 1.35, 1.3, 0, 1.6, -.7, M);
+  m.cab = new THREE.Object3D(); m.cab.position.set(0, 2.8, -.65); g.add(m.cab);
+  cylY(g, .06, .06, .7, M.frame, .55, 2.25, -1.9); m.exhaust = new THREE.Object3D(); m.exhaust.position.set(.55, 2.6, -1.9); g.add(m.exhaust);
+  m.beacons = [beacon(g, 0, 3.12, -.9, M)];
+  const front = new THREE.Group(); front.position.set(0, 0, .35); g.add(front); m.front = front;
+  cylY(g, .18, .18, .5, M.steel, 0, .95, .35);
+  rbox(front, .9, .45, 1.0, M.frame, 0, 1.0, .5);
+  for (const s of [-1, 1]) rbox(front, .14, 1.35, 1.9, M.paint, s * 1.18, .95, 1.55, .04);
+  rbox(front, 2.5, .14, 1.9, M.paint, 0, 1.65, 1.55, .04);
+  const drum = new THREE.Group(); drum.position.set(0, .78, 1.55); front.add(drum); m.drum = drum;
+  const dm = new THREE.Mesh(new THREE.CylinderGeometry(.78, .78, 2.1, 28).rotateZ(Math.PI / 2), M.steel); dm.castShadow = true; drum.add(dm);
+  for (let i = 0; i < 6; i++) { const r = rbox(drum, 2.12, .03, .04, M.frame, 0, .78, 0, .005); r.position.set(0, Math.cos(i / 6 * 6.283) * .78, Math.sin(i / 6 * 6.283) * .78); r.rotation.x = i / 6 * 6.283; }
+  label(g, 'GW R12', .9, .22, .76, 1.3, -1.0, Math.PI / 2); label(g, 'GW R12', .9, .22, -.76, 1.3, -1.0, -Math.PI / 2);
+  m.rams = [];
+  Object.assign(m, { group: g });
+}
+// asphalt paver: tracks, a hopper in front, a conveyor through the middle and a wide screed trailing behind
+export function buildPaver(m, M) {
+  const g = new THREE.Group();
+  m.tracks = [buildTrack(g, 1.05, 2.9, .32, .45, M), buildTrack(g, -1.05, 2.9, .32, .45, M)];
+  rbox(g, 1.7, .6, 3.4, M.paint, 0, 1.0, -.1, .08);
+  rbox(g, 2.3, .8, 1.3, M.paint, 0, 1.55, -.9, .1);
+  // hopper with folding wings
+  rbox(g, 2.2, .1, 1.5, M.frame, 0, .95, 1.95, .02);
+  for (const s of [-1, 1]) { const w = rbox(g, .08, .7, 1.5, M.paint, s * 1.1, 1.3, 1.95, .02); w.rotation.z = s * .5; }
+  rbox(g, 2.2, .7, .08, M.paint, 0, 1.25, 2.7, .02);
+  m.hopperLoad = new THREE.Mesh(heapGeo(1.8, .5, 1.3, 11), M.asphalt); m.hopperLoad.position.set(0, 1.0, 1.95); g.add(m.hopperLoad);
+  // operator platform with canopy
+  rbox(g, 2.0, .1, 1.0, M.frame, 0, 2.0, -1.9, .02);
+  rbox(g, .5, .5, .45, M.seat, .5, 2.3, -2.0, .05); rbox(g, .5, .5, .45, M.seat, -.5, 2.3, -2.0, .05);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) rbox(g, .06, 1.4, .06, M.frame, sx * .95, 2.7, -1.9 + sz * .45, .01);
+  rbox(g, 2.2, .08, 1.2, M.paint, 0, 3.42, -1.9, .03);
+  m.cabG = new THREE.Group(); m.cabG.position.set(.5, 2.05, -1.9); g.add(m.cabG);
+  m.cab = new THREE.Object3D(); m.cab.position.set(.5, 3.2, -1.95); g.add(m.cab);
+  cylY(g, .06, .06, .9, M.frame, -.7, 2.4, -.5); m.exhaust = new THREE.Object3D(); m.exhaust.position.set(-.7, 2.85, -.5); g.add(m.exhaust);
+  m.beacons = [beacon(g, 0, 3.5, -1.9, M)];
+  // the screed: a wide heated plate that irons the asphalt flat
+  const screed = new THREE.Group(); screed.position.set(0, .35, -2.75); g.add(screed); m.screed = screed;
+  rbox(screed, 3.6, .45, .7, M.paint, 0, .2, 0, .04);
+  rbox(screed, 3.7, .08, .8, M.frame, 0, -.02, 0, .01);
+  for (const s of [-1, 1]) rbox(screed, .06, .5, .8, M.frame, s * 1.86, .25, 0, .01);
+  rbox(screed, 3.4, .08, .3, M.frame, 0, .5, -.45, .01);
+  for (const s of [-1, 1]) beam(g, V(s * .8, .9, -1.8), V(s * 1.2, .55, -2.6), .1, .12, M.frame);
+  label(g, 'GW P8', .8, .22, 1.16, 1.6, -.9, Math.PI / 2); label(g, 'GW P8', .8, .22, -1.16, 1.6, -.9, -Math.PI / 2);
+  m.rams = [];
+  Object.assign(m, { group: g });
+}
+// concrete mixer truck: three axles, a turning drum and a chute at the back
+export function buildMixer(m, M) {
+  const g = new THREE.Group();
+  rbox(g, 1.2, .4, 7.2, M.frame, 0, 1.05, -.4);
+  m.wheels = [];
+  for (const s of [-1, 1]) { m.wheels.push(wheel(g, .55, .4, M, s * 1.05, .55, 2.4)); for (const z of [-1.6, -2.9]) m.wheels.push(wheel(g, .55, .55, M, s * 1.0, .55, z)); }
+  rbox(g, 2.3, 1.4, 1.7, M.paint, 0, 1.95, 2.55, .12);
+  rbox(g, 2.1, .7, .05, M.frame, 0, 1.6, 3.42, .02);
+  m.cabG = buildCab(g, 2.0, 1.15, 1.3, 0, 2.55, 2.45, M);
+  m.cab = new THREE.Object3D(); m.cab.position.set(.45, 3.25, 2.5); g.add(m.cab);
+  for (const s of [-1, 1]) { rbox(g, .2, .12, .05, M.light, s * .8, 1.5, 3.44, .02); rbox(g, .14, .1, .05, M.tail, s * .9, 1.0, -4.0, .02); }
+  cylY(g, .07, .07, 1.2, M.frame, -1.0, 3.1, 1.6); m.exhaust = new THREE.Object3D(); m.exhaust.position.set(-1.0, 3.7, 1.6); g.add(m.exhaust);
+  m.beacons = [beacon(g, 0, 3.9, 2.4, M)];
+  // the drum: a fat spindle on a tilt, with spiral fins painted on
+  const pts = []; for (let i = 0; i <= 16; i++) { const t = i / 16; pts.push(new THREE.Vector2(.25 + Math.sin(Math.PI * Math.pow(t, .8)) * 1.0 + (1 - t) * .2, t * 5.2 - 2.6)); }
+  const drumG = new THREE.LatheGeometry(pts, 28).rotateX(Math.PI / 2);
+  const drum = new THREE.Group(); drum.position.set(0, 2.65, -.9); drum.rotation.x = -.22; g.add(drum);
+  const dm = new THREE.Mesh(drumG, M.drum); dm.castShadow = true; drum.add(dm); m.drum = dm;
+  for (let i = 0; i < 3; i++) { const f = new THREE.Mesh(new THREE.TorusGeometry(1.12, .05, 6, 28, Math.PI * 1.2), M.paint); f.position.z = -1.4 + i * 1.3; f.rotation.y = .25; dm.add(f); }
+  rbox(g, 1.3, 1.3, .3, M.frame, 0, 2.1, 1.25, .04);
+  const chute = new THREE.Group(); chute.position.set(0, 2.1, -3.7); g.add(chute); m.chute = chute;
+  rbox(chute, .45, .08, 1.6, M.steel, 0, 0, -.8, .01); for (const s of [-1, 1]) rbox(chute, .05, .2, 1.6, M.steel, s * .22, .08, -.8, .01);
+  chute.rotation.x = .5;
+  ladder(g, .8, 1.2, 3.2, -3.4, M);
+  label(g, 'GW READYMIX', 1.6, .3, 1.16, 1.25, -.6, Math.PI / 2); label(g, 'GW READYMIX', 1.6, .3, -1.16, 1.25, -.6, -Math.PI / 2);
+  m.rams = [];
+  Object.assign(m, { group: g });
+}
+// mobile crane: four axles, outriggers, a turning upper with its own cab, telescopic boom and a hook on a cable
+export function buildCrane(m, M) {
+  const g = new THREE.Group();
+  rbox(g, 2.3, .8, 9.0, M.paint, 0, 1.35, 0, .1);
+  m.wheels = [];
+  for (const s of [-1, 1]) for (const z of [3.2, 1.9, -1.9, -3.2]) m.wheels.push(wheel(g, .62, .5, M, s * 1.12, .62, z));
+  rbox(g, 1.2, 1.3, 1.6, M.paint, -.55, 2.4, 3.8, .1);
+  buildCab(g, 1.1, 1.0, 1.3, -.55, 2.0, 3.9, M);
+  m.outr = [];
+  for (const s of [-1, 1]) for (const z of [3.0, -3.3]) { const o = new THREE.Group(); o.position.set(s * 1.15, 1.2, z); g.add(o); rbox(o, 1.6, .25, .3, M.frame, s * .8, 0, 0, .03); const leg = rbox(o, .2, .9, .2, M.frame, s * 1.55, -.5, 0, .02); rbox(o, .6, .08, .6, M.steel, s * 1.55, -.95, 0, .01); o.leg = leg; m.outr.push(o); }
+  const house = new THREE.Group(); house.position.set(0, 1.8, -1.2); g.add(house); m.house = house;
+  cylY(house, 1.1, 1.1, .3, M.frame, 0, 0, 0, 24);
+  rbox(house, 2.2, 1.0, 3.2, M.paint, 0, .7, -.9, .1);
+  rbox(house, 2.3, 1.0, 1.1, M.frame, 0, .8, -2.6, .1);   // counterweight
+  m.cabG = buildCab(house, .9, 1.2, 1.3, -.8, .3, .9, M);
+  m.cab = new THREE.Object3D(); m.cab.position.set(-.8, 1.5, .95); house.add(m.cab);
+  // telescopic boom: three sections; the tip is 12.6 m from the pivot retracted and 32.6 m fully out
+  const boom = new THREE.Group(); boom.position.set(.3, 1.4, -.6); house.add(boom); m.boom = boom;
+  rbox(boom, .8, .8, 8.5, M.paint, 0, 0, 3.75, .06);
+  const b2 = new THREE.Group(); b2.position.set(0, 0, 1); boom.add(b2); m.boom2 = b2;
+  rbox(b2, .64, .64, 10.5, M.paint, 0, 0, 5.25, .05);
+  const b3 = new THREE.Group(); b3.position.set(0, 0, 1); b2.add(b3); m.boom3 = b3;
+  rbox(b3, .5, .5, 10.5, M.paint, 0, 0, 5.25, .05);
+  const tip = new THREE.Object3D(); tip.position.set(0, .1, 10.6); b3.add(tip); m.tip = tip;
+  cylX(b3, .3, .5, M.frame, 0, .1, 10.5, 16);
+  m.rams = [new Ram(house, V(.3, .3, .9), house, V(.3, -.3, 2.6), boom, .14, M)];
+  // hook block and cable (in world space, placed every frame)
+  m.hook = new THREE.Group(); const hb = rbox(m.hook, .4, .5, .3, M.stripe, 0, 0, 0, .05); hb.castShadow = true;
+  const hk = new THREE.Mesh(new THREE.TorusGeometry(.14, .04, 6, 12, Math.PI * 1.4), M.steel); hk.position.y = -.4; m.hook.add(hk);
+  m.cable = new THREE.Mesh(new THREE.CylinderGeometry(.02, .02, 1, 4).translate(0, -.5, 0), M.frame);
+  m.exhaust = new THREE.Object3D(); m.exhaust.position.set(.9, 1.6, -2.0); house.add(m.exhaust);
+  m.beacons = [beacon(g, -.55, 3.1, 3.4, M)];
+  label(g, 'GW C60', 1.0, .26, 1.16, 1.4, .5, Math.PI / 2); label(g, 'GW C60', 1.0, .26, -1.16, 1.4, .5, -Math.PI / 2);
+  Object.assign(m, { group: g });
+}
+// utility truck: crew cab and a flatbed with a paint tank and a post driver (markings, posts, signs, lights, seeding)
+export function buildTruck(m, M) {
+  const g = new THREE.Group();
+  rbox(g, 1.1, .35, 6.0, M.frame, 0, .85, -.4);
+  m.wheels = [];
+  for (const s of [-1, 1]) { m.wheels.push(wheel(g, .5, .38, M, s * .98, .5, 1.9)); m.wheels.push(wheel(g, .5, .5, M, s * .95, .5, -2.1)); }
+  rbox(g, 2.2, 1.1, 1.5, M.paint, 0, 1.6, 2.4, .14);
+  m.cabG = buildCab(g, 2.0, 1.0, 1.6, 0, 1.95, 1.6, M);
+  m.cab = new THREE.Object3D(); m.cab.position.set(.45, 2.6, 1.65); g.add(m.cab);
+  rbox(g, 2.3, .12, 3.6, M.frame, 0, 1.1, -1.7, .02);
+  for (const s of [-1, 1]) rbox(g, .05, .35, 3.6, M.steel, s * 1.12, 1.33, -1.7, .01);
+  cylZ(g, .5, 1.4, M.drum, 0, 1.75, -1.1, 16);
+  rbox(g, .4, 1.2, .4, M.stripe, .6, 1.8, -2.9, .03);
+  rbox(g, 1.6, .1, .25, M.light, 0, 3.05, 1.7, .03);
+  for (const s of [-1, 1]) { rbox(g, .2, .12, .05, M.light, s * .8, 1.3, 3.16, .02); rbox(g, .14, .1, .05, M.tail, s * .95, .9, -3.42, .02); }
+  m.exhaust = new THREE.Object3D(); m.exhaust.position.set(-.9, .7, -3.3); g.add(m.exhaust);
+  m.beacons = [beacon(g, -.7, 3.0, 1.5, M), beacon(g, .7, 3.0, 1.5, M)];
+  m.rams = [];
+  Object.assign(m, { group: g });
 }
