@@ -14,9 +14,12 @@ A browser digging game, hosted on GitHub Pages from `main` (root): https://might
   - Saving: localStorage `groundwork.save.v1`, every 5 s and on pagehide. Never reset or wipe a save except through the menu's confirmed "Start a new valley".
   - `window.GW.step(n, input)` runs the game without drawing; tests use it.
 - `models.js`: machine builders (`buildDozer/Loader/Excavator/Hauler` keep the tool positions the gameplay uses: blade edge z 2.75, loader arm pivot and bucket tip, excavator boom 4.6 + stick 3.3, hauler bed hinge (0,1.62,-4.3)), `buildTrack` (instanced shoes), `Ram` (hydraulic rams), `machineMats` (per-machine grime shader, `U.uGround/uGrime`), trees/rocks/grass geometry.
+- `crew.js`: the crew (Menu → Crew, `groundwork.crew`). `makeCrew(G)` gets what it needs from game.js; each worker returns the same control object the player makes (`m.ai`), and `update()` in game.js drives every machine with `m.ctl` (player input, `m.ai` or `ZERO`). Sites are lines across a river (`s` along, `o` across); dozer/excavator/hauler roles with a lock so only one uses the line. The player's machine has no AI; toasts from machines go through `say(m, msg)` (player's machine only).
+- Dirt: `H0` is the ground before digging (rebuilt from the seed on load); `SWELL` bulks never-dug soil; `dropCircle` tips a cone; the terrain shader gets `aDig` (H0, spoil depth) for soil layers. Erosion in `waterStep` only touches cells where `|H - H0| > .05` and not gravel.
+- Trees: fallen trees stay (`st` 2, saved in `logs`), `pushLogs` shoves them; `treeFade` dithers trees in the line of sight (`aFade`, own materials, not the far forest's).
 - `textures.js`: procedural textures (`makeTextures(quality)`); `audio.js`: `Sound` (per-machine voices via `machine(id,cfg)`/`updateMachine`, one-shots, ambient). Sound values are guarded against NaN; keep that.
 - Graphics quality `groundwork.quality` (high/medium/low, `QS` in game.js). Tree count is capped by truncating the generation list (keeps old saves' `gone` indices valid); never add random draws to world generation, it would move trees/rocks in existing saves.
-- `tests/play.cjs`: Playwright gameplay checks (`node tests/play.cjs [outdir]`). Run them after any gameplay change.
+- `tests/play.cjs`: Playwright gameplay checks (`node tests/play.cjs [outdir]`). Run them after any gameplay change. If jsDelivr is unreachable, `npm install three@0.160.0` somewhere and set `THREE_DIR` to its `node_modules/three`.
 
 It's an original game in the construction-sandbox genre: don't copy any existing game's name, art, levels or look.
 

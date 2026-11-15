@@ -6,14 +6,15 @@ Play it here (once GitHub Pages is on, see below): https://mightywickedsounds-gi
 
 ## How it plays
 
-- **The ground is real.** The valley is a 160 x 160 m grid of heights. Whatever you dig or pile stays. Dirt piled steeper than it can stand slides down; wet riverbanks slump sooner.
+- **The ground is real.** The valley is a 256 x 256 m grid of heights. Whatever you dig or pile stays. Dirt piled steeper than it can stand slides down; wet riverbanks slump sooner.
 - **Water flows.** A river comes in on the west side and leaves on the east. It runs downhill over whatever you shape: cut a channel and it follows; dam it and a lake fills up behind the dam.
 - **Four machines:**
   - **Dozer:** the blade cuts high ground and drops it in low spots. Back up to leave the pile behind.
   - **Loader:** lower the bucket and drive into dirt to fill it, raise it over the truck and dump.
   - **Excavator:** swing, reach, dig, dump (into the truck if it's under the bucket).
   - **Hauler:** carries 12 m³ and tips its bed to dump behind it.
-  - Machines knock trees over.
+  - Machines knock trees over. Fallen trees stay where they land as logs; push them out of the way.
+- **The crew (Menu → Crew):** three workers take the dozer, excavator and hauler and build a crossing over the nearest river, then the south creek. The excavator digs a borrow pit and loads the hauler, the hauler backs up to the water and tips, and the dozer pushes it out and grades the top. You get the loader. Switch to any of their machines to take it over; the others keep working, and the worker climbs back in when you leave. Turn the crew off and they stop and get out.
 - **Jobs that pay:**
   - **Level the pad:** make the marked area flat at the see-through plane.
   - **Dig the pond:** dig down to the plane.
@@ -46,6 +47,7 @@ On GitHub, open this repository's **Settings, then Pages**. Under "Build and dep
 - `models.js`: the 3D models (machines with track chains, tyres, hydraulic rams and cabs; trees, boulders, grass)
 - `textures.js`: all textures, drawn by code when the game starts (no image files)
 - `audio.js`: all sounds, synthesized live (no sound files)
+- `crew.js`: the crew's brains (who does what to build a river crossing)
 - `tests/play.cjs`: automatic gameplay checks (see below)
 
 ## Testing
@@ -57,6 +59,10 @@ On GitHub, open this repository's **Settings, then Pages**. Under "Build and dep
 - the loader fills and dumps into the hauler;
 - the hauler empties its bed;
 - the excavator digs and dumps;
+- a full bucket dumps as a heap about a metre tall;
+- fallen trees stay as logs and can be pushed;
+- the crew gets in, drives off, keeps working when you take one machine over, starts filling the river within five minutes, and gets out when turned off;
+- fast water washes loose dirt downstream, but the untouched riverbanks don't erode;
 - a tall pile crumbles until it can stand;
 - a finished job pays and a new one appears;
 - the valley is identical after a reload;
@@ -161,4 +167,34 @@ Screenshots were checked for the hole, the river, the trees, the horizon and pou
 - The valley is shaped differently, so this starts a fresh valley again (save version 3; the older saves stay in the browser untouched).
 
 Tested: all 13 checks pass. The dam check now uses a wider dam and a little more time, because the wider valley takes longer to fill. Screenshots checked from above, from the bank and from inside the excavator cab.
+
+### Round 6: a crew, water that fights back, honest dirt, logs instead of vanishing trees
+
+**The crew (new, Menu → Crew: on/off).**
+- Three workers in hard hats and hi-vis vests drive the dozer, excavator and hauler. Turning the crew on hands you the loader.
+- They work as a team to build a crossing over the nearest river: the excavator digs a pit and fills the hauler; the hauler turns round once, then backs up to the water's edge, tips, and drives back; the dozer pushes the dirt out into the river and grades the top about a metre above the old water level. When the river is crossed they move on to the south creek, and after that they park in the yard.
+- Take over any of their machines by switching to it. That worker sits out; the other two keep going. Switch away and the worker gets back in and carries on from wherever you left the machine.
+- Crew off: they stop and get out of the cabs. Their progress is saved.
+- Crew machines show yellow on the minimap.
+- In the automatic tests, a crew built across the main river in about 10-13 minutes of game time.
+
+**Water.**
+- Fast water now washes away loose dirt that people have moved (not untouched ground or gravel) and drops it downstream where the water slows. A dam that gets overtopped, or a narrow gap, wears away; a heap dumped in the current gets carried off. The original riverbanks are never eroded (tested).
+- Dammed water can now rise further before the river's source "gives up", so it backs up behind dams properly and spills round the ends of a crossing over the floodplain.
+
+**Digging and dumping in proportion.**
+- Dumped loads land as a heap about as tall as loose soil stands (a 3 m³ loader bucket makes a pile about a metre tall), then slump if they're too steep. Before, a load was spread in a thin layer, which is why big scoops seemed to vanish.
+- Dug-up ground bulks up 20%, like real soil, so a pile is a bit bigger than the hole it came from. Dirt that has already been dug once doesn't bulk again.
+- The loads shown in the bucket, blade and bed now match what's really in them.
+- A full dozer blade now shoves the heap in front of it along, instead of the dozer driving up over it.
+
+**Trees.**
+- Knocked-down trees stay as logs lying on the ground (no more shrinking away). Machines push them aside; push near one end and the log swings round. Logs are saved.
+- Trees and logs between the camera and your machine thin out, so you can see what you're doing in the forest.
+
+**Minimap** is bigger (240 px on computers, 150 px on phones) and drawn at full detail.
+
+**Graphics: digging.** The ground remembers how it was before you dug. Cut walls show soil layers: dark topsoil, brown subsoil, orange clay further down with a pale sandy band; dumped spoil is lighter and lumpier with clods. Cut faces are slightly rougher.
+
+**Tests:** 13 old checks plus 9 new ones (see Testing). The test browser can't reach jsDelivr from here, so the test can load three.js from a local copy (`THREE_DIR=...`); the game itself still uses jsDelivr. I couldn't play it with a real graphics card or on a phone; screenshots were checked for the piles, pit walls, workers in cabs and the minimap.
 

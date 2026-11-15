@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { labelTexture } from './textures.js?v=5';
+import { labelTexture } from './textures.js?v=6';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const Y = V(0, 1, 0), Z = V(0, 0, 1);
@@ -619,5 +619,41 @@ export function heapGeo(w, h, d, seed = 1) {
   }
   g.computeVertexNormals();
   const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, p.getX(i) * .6, p.getZ(i) * .6);
+  return g;
+}
+
+// ---------------------------------------------------------------- a crew member sitting in a cab (seat at the cab's origin)
+const WORKER_MATS = {
+  vest: new THREE.MeshStandardMaterial({ color: 0xd8f03a, emissive: 0x3a4a00, emissiveIntensity: .35, roughness: .7 }),
+  band: new THREE.MeshStandardMaterial({ color: 0xe8e8e0, roughness: .3, metalness: .4 }),
+  shirt: new THREE.MeshStandardMaterial({ color: 0x2b3a55, roughness: .9 }),
+  pants: new THREE.MeshStandardMaterial({ color: 0x33302c, roughness: .95 }),
+  skin: new THREE.MeshStandardMaterial({ color: 0xc08a68, roughness: .7 }),
+  boot: new THREE.MeshStandardMaterial({ color: 0x2a1d14, roughness: .8 }),
+};
+const HAT_COLS = [0xf2f2ec, 0xf6c21c, 0xe8792a];
+function limb(p, a, b, r, mat) {
+  const d = b.clone().sub(a), m = new THREE.Mesh(new THREE.CylinderGeometry(r, r * .9, d.length(), 7), mat);
+  m.position.copy(a).add(b).multiplyScalar(.5); m.quaternion.setFromUnitVectors(Y, d.normalize()); m.castShadow = true; p.add(m); return m;
+}
+export function buildWorker(i = 0) {
+  const g = new THREE.Group(), W = WORKER_MATS;
+  rbox(g, .4, .52, .26, W.shirt, 0, .9, -.22, .08);                      // body
+  rbox(g, .43, .4, .28, W.vest, 0, .95, -.22, .07);                      // hi-vis vest
+  for (const y of [.86, 1.0]) rbox(g, .44, .035, .29, W.band, 0, y, -.22, .01);
+  rbox(g, .4, .14, .3, W.pants, 0, .66, -.2, .05);                       // hips
+  const head = new THREE.Mesh(new THREE.SphereGeometry(.105, 12, 10), W.skin); head.scale.set(1, 1.12, 1.05); head.position.set(0, 1.29, -.2); g.add(head);
+  const hm = new THREE.MeshStandardMaterial({ color: HAT_COLS[i % 3], roughness: .35 });
+  const hat = new THREE.Mesh(new THREE.SphereGeometry(.13, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), hm); hat.position.set(0, 1.33, -.2); hat.castShadow = true; g.add(hat);
+  const brim = new THREE.Mesh(new THREE.CylinderGeometry(.165, .165, .02, 16), hm); brim.position.set(0, 1.335, -.17); brim.scale.set(1, 1, 1.1); g.add(brim);
+  for (const s of [-1, 1]) {
+    limb(g, V(s * .11, .66, -.18), V(s * .12, .66, .22), .075, W.pants);   // thighs
+    limb(g, V(s * .12, .66, .22), V(s * .13, .2, .3), .062, W.pants);     // shins
+    rbox(g, .11, .1, .24, W.boot, s * .13, .16, .36, .03);
+    limb(g, V(s * .23, 1.1, -.22), V(s * .27, .86, -.06), .055, W.vest);   // upper arms
+    limb(g, V(s * .27, .86, -.06), V(s * .34, .8, .14), .045, W.shirt);   // forearms
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(.045, 8, 6), W.skin); hand.position.set(s * .35, .8, .16); g.add(hand);
+  }
+  g.traverse(o => { if (o.isMesh) o.castShadow = true; });
   return g;
 }
