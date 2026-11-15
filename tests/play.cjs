@@ -186,16 +186,38 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   });
   check('the crew follows the player', fol.dozer < 32 && fol.hauler < 45, JSON.stringify(fol));
 
-  // stop at the river and the crew builds a crossing there
-  const build = await p.evaluate(() => {
-    const L = GW.machines[1]; L.x = 118; L.z = 142; L.yaw = Math.PI; L.v = 0;
+  // stop at the south creek and the crew plans a causeway with culverts and gets the earthwork going
+  const cw = await p.evaluate(() => {
+    const L = GW.machines[1]; L.x = 92; L.z = 178; L.yaw = -Math.PI / 2; L.v = 0;
     GW.step(150, { throttle: .6 }); GW.step(90);
-    const S = GW.crew.site; if (!S) return { site: false };
-    const fill = () => { let v = 0; for (let s = -S.cw; s <= S.cw; s++) for (let o = -2; o <= 2; o++) { const [x, z] = GW.crew.pt(S, s, o); v += GW.H[Math.round(z) * 256 + Math.round(x)]; } return v; };
-    const v0 = fill(); GW.step(30 * 60 * 5); return { site: true, added: +(fill() - v0).toFixed(1), head: +S.head.toFixed(1) };
+    const P = GW.crew.site; if (!P) return { site: false };
+    GW.step(30 * 60 * 5);
+    return { site: true, kind: P.kind, stage: P.stages[P.si], si: P.si, culverts: GW.CULVERTS.length };
   });
-  check('stopping at the river sets the crew building a crossing', build.site, JSON.stringify(build));
-  check('in five minutes the crew has started filling the river', build.added > 15, JSON.stringify(build));
+  check('stopping at a creek sets the crew building a causeway', cw.site && cw.kind === 'causeway', JSON.stringify(cw));
+  check('within five minutes the culverts are in and the fill is done', cw.si >= 2 && cw.culverts > 0, JSON.stringify(cw));
+  // the rest of the road, stage by stage (fast-forwarded), leaves a paved road over the creek
+  const road = await p.evaluate(() => {
+    const P = GW.crew.site; let n = 0; while (GW.crew.site === P && n++ < 20) { GW.crew.finishStage(); GW.step(2); }
+    const [x, z] = GW.crew.pt(P, 0, 0); const k = Math.round(z) * 256 + Math.round(x);
+    return { done: !!P.done, top: +(GW.H[k] - P.lvl).toFixed(2), water: +GW.W[k].toFixed(2), meshes: P.grp.children.length };
+  });
+  check('the finished causeway is a paved road above the water', road.done && road.top > .8 && road.water < .05 && road.meshes > 5, JSON.stringify(road));
+  // the main river is too big for a causeway: the crew builds a bridge, and you can drive across it
+  const br = await p.evaluate(() => {
+    const L = GW.machines[1]; L.x = 121; L.z = 140; L.yaw = Math.PI; L.v = 0;
+    GW.step(150, { throttle: .6 }); GW.step(90);
+    const P = GW.crew.site; if (!P || P.kind !== 'bridge') return { kind: P && P.kind };
+    let n = 0; while (GW.crew.site === P && n++ < 20) { GW.crew.finishStage(); GW.step(2); }
+    let deck = 0; for (let k = 0; k < GW.DECK.length; k++) if (GW.DECK[k] > 0) deck++;
+    // drive the hauler across from the near approach
+    const h = GW.machines.find(m => m.type === 'hauler'); GW.select(GW.machines.indexOf(h));
+    const [x0, z0] = GW.crew.pt(P, P.sL - 8, 0); h.x = x0; h.z = z0; h.yaw = Math.atan2(P.u[0], P.u[1]); h.v = 0;
+    for (let i = 0; i < 400; i++) { const s = GW.crew.sOf(P, h.x, h.z), o = (h.x - P.P[0]) * P.p[0] + (h.z - P.P[1]) * P.p[1]; GW.step(1, { throttle: .5, steer: Math.max(-1, Math.min(1, o * .3)) }); if (s > P.sR + 6) break; }
+    return { kind: P.kind, done: !!P.done, deck, items: P.items.length, girder: P.girder, far: +(GW.crew.sOf(P, h.x, h.z) - P.sR).toFixed(1) };
+  });
+  check('the main river gets a bridge with piers, girders and a deck', br.kind === 'bridge' && br.done && br.deck > 50 && br.items >= 6, JSON.stringify(br));
+  check('a hauler can drive across the finished bridge', br.far > 3, JSON.stringify(br));
 
   const off = await p.evaluate(() => { GW.setCrew(false); GW.step(5); return { ai: GW.machines.filter(m => m.ai).length, workers: GW.machines.filter((m, i) => i !== GW.active && m.worker.visible).length }; });
   check('turning the crew off empties the cabs', off.ai === 0 && off.workers === 0, JSON.stringify(off));
@@ -214,6 +236,14 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
 
   const bad = await p.evaluate(() => window.__badSound ? [...window.__badSound] : []);
   check('no broken numbers reach the sound', bad.length === 0, JSON.stringify(bad));
+
+  // worlds: save a named copy and find it in the list
+  p.on('dialog', d => d.type() === 'prompt' ? d.accept('Test world') : d.accept());
+  await p.evaluate(() => { document.getElementById('menu').style.display = 'flex'; });
+  await p.click('#mWorlds'); await p.click('#wSave'); await p.waitForTimeout(600);
+  const wl = await p.$$eval('.wName', e => e.map(x => x.textContent));
+  check('a world can be saved under a name', wl.includes('Test world'), JSON.stringify(wl));
+  await p.click('#wBack'); await p.evaluate(() => { document.getElementById('menu').style.display = 'none'; });
 
   // persistence
   const snap = await p.evaluate(() => { GW.save(); const m = GW.machines[0]; m.goalI = GW.goal.i; let s = 0; for (let k = 0; k < GW.H.length; k += 7) s += GW.H[k]; return { x: m.x, z: m.z, sum: s, money: GW.stats.money, gone: GW.trees.filter(t => t.st > 0).length }; });

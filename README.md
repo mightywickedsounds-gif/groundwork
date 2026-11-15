@@ -14,7 +14,10 @@ Play it here (once GitHub Pages is on, see below): https://mightywickedsounds-gi
   - **Excavator:** swing, reach, dig, dump (into the truck if it's under the bucket).
   - **Hauler:** carries 12 m³ and tips its bed to dump behind it.
   - Machines knock trees over. Fallen trees stay where they land as logs; push them out of the way.
-- **The crew (Menu → Crew):** three workers take the dozer, excavator and hauler and follow you around the valley, finding their own way round deep water and steep ground. Stop at water too deep to drive through and they pick the narrowest spot nearby and build a crossing: the excavator digs a pit and loads the hauler, the hauler backs up to the water and tips, the dozer pushes it out and grades the top. When it's done ("CROSSING READY") they fall in behind you again; drive off and they drop the job and follow. You get the loader. Switch to any of their machines to take it over; the others keep working. Turn the crew off and they stop and get out.
+- **The crew (Menu → Crew):** four workers take the dozer, two excavators and the hauler and follow you around the valley, finding their own way round deep water and steep ground. Stop at water too deep to drive through and they build a real crossing there, bringing in a crane, roller, asphalt paver, concrete mixer and utility truck as each stage needs them:
+  - **A creek** gets a causeway: culvert pipes (the creek keeps flowing through them), earth fill, rock armour, geotextile and crushed-stone subbase, base course, asphalt or concrete paving, guardrails, line markings and road studs, and the banks are hydroseeded.
+  - **A big river** gets a bridge: an approach ramp, then the crane sets concrete abutments, piers, bearings and steel or concrete girders; the deck is poured over rebar; the far approach is built; then barriers, road layers, asphalt, markings, lamp posts and signs.
+  - The crew picks asphalt or concrete, steel or concrete girders, and how many culverts and piers. The yellow line under the money shows the current stage and percent. You get the loader; switch to any of their machines to take it over. Turn the crew off and they stop and get out.
 - **Jobs that pay:**
   - **Level the pad:** make the marked area flat at the see-through plane.
   - **Dig the pond:** dig down to the plane.
@@ -61,8 +64,10 @@ On GitHub, open this repository's **Settings, then Pages**. Under "Build and dep
 - the hauler empties its bed;
 - the excavator digs and dumps;
 - a full bucket dumps as a heap about a metre tall;
+- a world can be saved under a name;
+- the crew builds a causeway at a creek (culverts in and fill done within five minutes; the finished road is paved and above the water) and a bridge at the river (piers, girders and a deck, and a hauler can drive across it);
 - fallen trees stay as logs and can be pushed;
-- the crew gets in, follows you (checked over 50 s), keeps working when you take one machine over, starts building when you stop at the river and has begun filling it within five minutes, and gets out when turned off;
+- the crew gets in, follows you (checked over 50 s), keeps working when you take one machine over, and gets out when turned off;
 - fast water washes loose dirt downstream, but the untouched riverbanks don't erode;
 - a tall pile crumbles until it can stand;
 - a finished job pays and a new one appears;
@@ -210,4 +215,19 @@ Tested: all 13 checks pass. The dam check now uses a wider dam and a little more
 - Ground that tracks or wheels have rolled over is compacted and washes away about seven times slower than loose dumped dirt, like real compacted fill. Without this, water flowing round the end of a half-built causeway kept washing the approach away.
 - Bugs found while testing: two parts of the crew code had the same name, so the machines stood still during a job; the dozer could wedge itself against your machine; the crossing line could run along the bank instead of across. All fixed.
 - In the test runs, with you parked at the river, the crew built a crossing in about 8-9 minutes of game time, and when you drove 70 m away they caught up within a minute.
+
+### Round 8: a real construction crew, and worlds (owner: too slow, not smart enough, wants full roads and bridges, and a way to start fresh)
+
+**Worlds (Menu → Worlds).** Save the valley under a name, load a saved one, delete one, or start a completely fresh valley with "New world". Refreshing the page still brings you back to the valley you were in. Before loading or starting fresh, the current valley is kept as "Autosave", so nothing is lost by accident.
+
+**A bigger, quicker crew.** A fourth worker with a second excavator, so the hauler is loaded from both sides. The crew's excavators have bigger buckets and quicker operators. The dozer works the outer lanes while the hauler uses the middle, instead of waiting its turn. The earthwork advances with every truck load and dozer push, and the crew shapes the embankment between loads, so it can't stall or slide backwards any more.
+
+**Full construction.** Stop at a river or creek and the crew decides what to build there:
+- **Causeway (creeks):** crane sets corrugated steel culvert pipes with concrete headwalls (water really flows through them); earth fill; riprap rock armour; geotextile fabric and crushed-stone subbase; aggregate base course, both rolled by a roller; paving (asphalt from a paver followed by the roller, or concrete from a paver fed by a mixer truck, with joints); W-beam guardrail on galvanised posts; thermoplastic line markings and reflective studs; hydroseeding turns the bare banks back to grass.
+- **Bridge (big rivers):** approach ramp; a mobile crane with a three-stage telescopic boom lifts in concrete abutments, precast pier columns and caps, elastomeric bearings and steel plate or prestressed concrete girders, one at a time; formwork and rebar, then the mixer pours the deck; the dozer crosses and builds the far approach; concrete barriers; road layers on the approaches; asphalt over the whole length; markings, lamp posts and signs. The deck is a real surface: machines drive across it over the water.
+- 31 materials in all (listed in `construct.js`). New machines: roller, asphalt paver, concrete mixer truck, mobile crane, utility truck. They drive in when their stage starts and leave when they're no longer needed.
+
+**Timing in the test runs (game minutes):** a creek causeway had its fill done by about minute 4 and reached its last stage at about minute 13. The river bridge reached paving at about minute 17 (ramp about 3 minutes, crane work about 2, deck pour about 1.5). Two stalls were found and fixed along the way (equipment arriving on top of each other; the utility truck circling its start point).
+
+**Smaller fixes:** concrete parts are plain concrete instead of a blotchy texture; rock armour sits on the slope; a dozer with its blade down shoves heaps instead of climbing them.
 

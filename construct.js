@@ -76,7 +76,7 @@ export function makeWorks(G) {
     post: () => cutMat({ color: 0x9aa1a6, roughness: .4, metalness: .8 }, 'post'),
     stud: () => cutMat({ color: 0xffd36a, emissive: 0x5a3c00, emissiveIntensity: .7, roughness: .3 }, 'stud'),
   };
-  const conc = new THREE.MeshStandardMaterial({ map: tex(T.macro, 1), color: 0xbdbab1, roughness: .85 });
+  const conc = new THREE.MeshStandardMaterial({ color: 0x9d9a93, roughness: .88 });
   const steelGirder = new THREE.MeshStandardMaterial({ color: 0x6e4a36, roughness: .55, metalness: .6 });   // weathering steel
   const pipeMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a4, roughness: .35, metalness: .85 });
   const darkMat = new THREE.MeshStandardMaterial({ color: 0x1a1b1c, roughness: .8 });
