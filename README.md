@@ -187,6 +187,7 @@ Tested: all 13 checks pass. The dam check now uses a wider dam and a little more
 - Dug-up ground bulks up 20%, like real soil, so a pile is a bit bigger than the hole it came from. Dirt that has already been dug once doesn't bulk again.
 - The loads shown in the bucket, blade and bed now match what's really in them.
 - A full dozer blade now shoves the heap in front of it along, instead of the dozer driving up over it.
+- **Bug fixed:** when the loader dumped on the ground, its dirt was being dropped where the hauler was parked instead of under the bucket. It now lands under the bucket.
 
 **Trees.**
 - Knocked-down trees stay as logs lying on the ground (no more shrinking away). Machines push them aside; push near one end and the log swings round. Logs are saved.
@@ -196,5 +197,5 @@ Tested: all 13 checks pass. The dam check now uses a wider dam and a little more
 
 **Graphics: digging.** The ground remembers how it was before you dug. Cut walls show soil layers: dark topsoil, brown subsoil, orange clay further down with a pale sandy band; dumped spoil is lighter and lumpier with clods. Cut faces are slightly rougher.
 
-**Tests:** 13 old checks plus 9 new ones (see Testing). The test browser can't reach jsDelivr from here, so the test can load three.js from a local copy (`THREE_DIR=...`); the game itself still uses jsDelivr. I couldn't play it with a real graphics card or on a phone; screenshots were checked for the piles, pit walls, workers in cabs and the minimap.
+**Tests:** 13 old checks plus 10 new ones (see Testing). The new pile check is what caught the loader bug. The test browser can't reach jsDelivr from here, so the test can load three.js from a local copy (`THREE_DIR=...`); the game itself still uses jsDelivr. I couldn't play it with a real graphics card or on a phone; screenshots were checked for the piles, pit walls, workers in cabs and the minimap.
 

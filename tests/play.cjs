@@ -110,6 +110,10 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   });
   check('a machine will not drive into water deeper than it can ford', fd.deepest <= fd.ford + .15, JSON.stringify(fd));
 
+  // the natural rivers don't wash their own banks away
+  const er0 = await p.evaluate(() => GW.eroded);
+  check('untouched river banks do not erode', er0 < .3, JSON.stringify({ eroded: +er0.toFixed(2) }));
+
   // a dam backs the creek up
   const dm = await p.evaluate(() => {
     const at = (x, z) => GW.W[z * 256 + x];
@@ -128,10 +132,6 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
     return { paid: GW.stats.money - m0, next: GW.GOALS[GW.goal.i] && GW.GOALS[GW.goal.i].id };
   });
   check('reaching the gravel pit with the hauler completes the first goal', gl.paid === 800 && gl.next === 'haul', JSON.stringify(gl));
-
-  // the natural rivers don't wash their own banks away
-  const er0 = await p.evaluate(() => GW.eroded);
-  check('untouched river banks do not erode', er0 < .3, JSON.stringify({ eroded: +er0.toFixed(2) }));
 
   // a dumped load lands as a real heap, not a thin layer
   const pile = await p.evaluate(() => {
@@ -165,7 +165,7 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   const cr = await p.evaluate(() => {
     const ms = GW.machines; const h = ms[3]; h.x = 135; h.z = 174; h.yaw = Math.PI; h.load.v = 0; h.tipping = false; h.tip = 0;
     ms[0].x = 113; ms[0].z = 172; ms[0].yaw = Math.PI; ms[2].x = 127.5; ms[2].z = 173; ms[1].x = 120; ms[1].z = 180;
-    GW.setCrew(true);
+    GW.setCrew(true); GW.step(1);
     const playerType = ms[GW.active].type;
     const inCab = ms.filter(m => m.ai).map(m => m.type);
     const d0 = [ms[0].x, ms[0].z];

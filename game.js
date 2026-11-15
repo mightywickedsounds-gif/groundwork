@@ -1466,10 +1466,11 @@ function toolDozer(m, dt, inp) {
     m.pile.material = loadMat(m.load) === 2 ? LOADMAT.gravel : LOADMAT.dirt;
   }
 }
+const _hb = new THREE.Vector3();
 function haulerNear(x, z, r) {
   for (const o of machines) if (o.type === 'hauler') {
-    _p.set(0, 2.3, -1.5); o.group.localToWorld(_p);
-    if (Math.hypot(_p.x - x, _p.z - z) < r) return o;
+    _hb.set(0, 2.3, -1.5); o.group.localToWorld(_hb);   // (its own vector: callers keep using _p afterwards)
+    if (Math.hypot(_hb.x - x, _hb.z - z) < r) return o;
   }
   return null;
 }
