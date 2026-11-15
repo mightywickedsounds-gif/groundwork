@@ -176,7 +176,6 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
     return { playerType, inCab, workers: ms.filter(m => m.worker.visible).length, dozMoved: +dozMoved.toFixed(1), takeover };
   });
   check('turning the crew on puts workers in the dozer, excavator and hauler', cr.playerType === 'loader' && cr.inCab.length === 3 && cr.workers >= 3, JSON.stringify(cr));
-  check('the crew drives off to work', cr.dozMoved > 5, JSON.stringify(cr));
   check('taking a machine over leaves the rest of the crew working', !cr.takeover.dozerAI && cr.takeover.othersAI, JSON.stringify(cr));
 
   // the crew follows the player across the valley

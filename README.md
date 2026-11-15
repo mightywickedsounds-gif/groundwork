@@ -61,7 +61,7 @@ On GitHub, open this repository's **Settings, then Pages**. Under "Build and dep
 - the excavator digs and dumps;
 - a full bucket dumps as a heap about a metre tall;
 - fallen trees stay as logs and can be pushed;
-- the crew gets in, follows you, keeps working when you take one machine over, starts building when you stop at the river and has begun filling it within five minutes, and gets out when turned off;
+- the crew gets in, follows you (checked over 50 s), keeps working when you take one machine over, starts building when you stop at the river and has begun filling it within five minutes, and gets out when turned off;
 - fast water washes loose dirt downstream, but the untouched riverbanks don't erode;
 - a tall pile crumbles until it can stand;
 - a finished job pays and a new one appears;
@@ -204,5 +204,9 @@ Tested: all 13 checks pass. The dam check now uses a wider dam and a little more
 - The crew no longer works on fixed spots. They drive behind you in a loose convoy (dozer and excavator either side, hauler at the back) wherever you go, planning their own route across the valley on a 2 m grid: round water deeper than each machine can ford and up slopes it can climb. Once a crossing is built, their routes use it.
 - Stop at a river or creek too deep to drive through (or have your machine refuse to go in) and after a moment they announce "CREW: BUILDING A CROSSING". They aim straight across the water near you, pick the narrowest line that keeps clear of your machine, and build it with the same team job as before. "CROSSING READY" when it's shallow enough to drive across; then they follow you again.
 - Drive more than about 90 m away from a crossing they're building and they drop it and come with you. The dirt they've already moved stays, so stopping there again later picks up where they left off.
-- Bug found while testing: two parts of the crew code had the same name, so the machines stood still during a job; fixed.
+- The crossing they're building shows as a yellow line on the minimap. After "CROSSING READY" they won't start another one until you've moved on.
+- A dozer with its blade down now shoves a heap in front of it instead of stopping because the heap looks like a slope it can't climb (this affects your dozer too).
+- Ground that tracks or wheels have rolled over is compacted and washes away about seven times slower than loose dumped dirt, like real compacted fill. Without this, water flowing round the end of a half-built causeway kept washing the approach away.
+- Bugs found while testing: two parts of the crew code had the same name, so the machines stood still during a job; the dozer could wedge itself against your machine; the crossing line could run along the bank instead of across. All fixed.
+- In the test runs, with you parked at the river, the crew built a crossing in about 8-9 minutes of game time, and when you drove 70 m away they caught up within a minute.
 
