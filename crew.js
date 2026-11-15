@@ -43,13 +43,13 @@ export function makeCrew(G) {
     let best = null;
     for (const da of [0, -.2, .2, -.4, .4]) {
       const ux = Math.cos(da) * fx + Math.sin(da) * fz, uz = -Math.sin(da) * fx + Math.cos(da) * fz;
-      for (const off of [0, -6, 6, -11, 11, -16, 16]) {
+      for (const off of [0, -6, 6, -10, 10, -14, 14, -19, 19]) {
         const x = pm.x + uz * off, z = pm.z - ux * off, sp = span(x, z, ux, uz);
         if (!sp || sp[0] > 14 || sp[1] - sp[0] < 2) continue;
         // the approach behind the line must be dry land
         let wet = false; for (let d = -30; d < sp[0] - 1; d += 2) if (G.wAt(x + ux * d, z + uz * d) > .2) wet = true;
         if (wet) continue;
-        const width = sp[1] - sp[0], near = Math.abs(off) < 4.5 ? 12 : 0;   // keep the line off the player's machine
+        const width = sp[1] - sp[0], near = Math.abs(off) < 9 ? 12 : 0;   // keep the line off the player's machine
         const score = width + near + Math.abs(off) * .2 + Math.abs(da) * 4;
         if (!best || score < best.score) best = { score, x, z, ux, uz, sp };
       }
@@ -120,7 +120,7 @@ export function makeCrew(G) {
   // a stuck machine (pushing against something) backs off for a moment and tries again
   function unstick(m, st, c, dt) {
     if (st.rec > 0) { st.rec -= dt; c.throttle = -st.recDir * .7; c.steer = st.recDir * .8; c.tool = 0; return true; }
-    if (Math.abs(c.throttle) > .1 && Math.abs(m.v) < .12) st.stall += dt; else st.stall = Math.max(0, st.stall - dt * 2);
+    if ((Math.abs(c.throttle) > .1 && Math.abs(m.v) < .12) || m.blocked === 'machine') st.stall += dt; else st.stall = Math.max(0, st.stall - dt * 2);
     if (st.stall > 2.5) { st.stall = 0; st.rec = 1.6; st.recDir = Math.sign(c.throttle) || 1; }
     return false;
   }
@@ -144,6 +144,8 @@ export function makeCrew(G) {
         bladeTo(.35);
         const free = S.lock === m || (!S.lock && !(G.time() - (S.waitAt || -9) < .5));   // a loaded hauler goes first
         const [x, z] = free ? pt(S, start, lane) : pt(S, start - 2, -7.5);
+        const s0 = sOf(S, m.x, m.z), o0 = oOf(S, m.x, m.z);
+        if (free && facing(m, S) < .5 && s0 > start + 1 && Math.abs(o0 - lane) < 3) { follow(m, c, S, lane, -1, .8, true); break; }   // back straight down the lane
         if (travel(m, st, c, x, z, free ? 1.8 : 2.5, .7)) {
           if (free && lock(S, m)) st.state = 'turn'; else c.throttle = 0;
         }
