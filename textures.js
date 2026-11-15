@@ -202,6 +202,60 @@ export function labelTexture(text) {
   return t;
 }
 
+// Foliage atlas (transparent background):
+//   left half, top:    a spruce branch seen from above (twig along x, trunk end at the left)
+//   left half, bottom: a second, denser branch
+//   right, 256 wide x full height: a whole spruce seen from the side (for the crossed cards at the core)
+//   far right top / bottom: two leaf clumps for broadleaf trees
+function foliage(S) {
+  const W = S * 2, Hh = S, sc = S / 512, [c, g] = canvas(W, Hh), r = rng(97);
+  g.clearRect(0, 0, W, Hh);
+  const green = (k, a = 1) => `rgba(${(22 + k * 46) | 0},${(40 + k * 58) | 0},${(18 + k * 30) | 0},${a})`;
+  function branch(y0, h, dense) {
+    const L = 500 * sc;
+    for (let pass = 0; pass < 2; pass++) for (let t = 0; t < 1; t += .0035 / (dense ? 1.3 : 1)) {
+      const x = 6 * sc + t * L, w = h * .48 * Math.sin(Math.PI * Math.pow(t, .7)) * (1 - t * .25);
+      for (const s of [-1, 1]) {
+        if (r() < .25) continue;
+        const ang = s * (.55 + r() * .7), len = (.25 + r() * .75) * w;
+        g.strokeStyle = green(pass ? .35 + r() * .65 : r() * .3, .95); g.lineWidth = (1.1 + r() * 1.2) * sc;
+        g.beginPath(); g.moveTo(x, y0); g.lineTo(x + Math.cos(ang) * len * .35 + len * .25, y0 + Math.sin(ang) * len); g.stroke();
+      }
+    }
+    for (let k = 0; k < 9; k++) {   // side shoots
+      const t = .12 + k * .09, x = 6 * sc + t * L, s = k % 2 ? 1 : -1, len = h * .38 * (1 - t * .6);
+      for (let q = 0; q < 1; q += .04) {
+        const px = x + q * len * .8, py = y0 + s * q * len;
+        g.strokeStyle = green(.2 + r() * .7, .9); g.lineWidth = 1.2 * sc;
+        g.beginPath(); g.moveTo(px, py); g.lineTo(px + (r() - .3) * 14 * sc, py + (r() - .5) * 16 * sc); g.stroke();
+      }
+    }
+    g.strokeStyle = 'rgba(70,52,36,1)'; g.lineWidth = 3 * sc; g.beginPath(); g.moveTo(4 * sc, y0); g.lineTo(L, y0); g.stroke();
+  }
+  branch(Hh * .25, Hh * .5, false);
+  branch(Hh * .75, Hh * .5, true);
+  // whole spruce from the side
+  const sx = S, cx = sx + 128 * sc, top = 8 * sc, bot = Hh - 6 * sc;
+  for (let i = 0; i < 2600; i++) {
+    const t = Math.pow(r(), .8), y = top + t * (bot - top - 40 * sc), half = (8 + t * 112) * sc * (.75 + r() * .3);
+    const s = r() < .5 ? -1 : 1, x0 = cx + s * r() * half * .2, len = half * (.4 + r() * .6);
+    g.strokeStyle = green(.15 + r() * .75, .95); g.lineWidth = (1 + r() * 1.4) * sc;
+    g.beginPath(); g.moveTo(x0, y); g.lineTo(x0 + s * len, y + len * (.18 + r() * .25)); g.stroke();
+  }
+  g.strokeStyle = 'rgba(70,52,36,1)'; g.lineWidth = 4 * sc; g.beginPath(); g.moveTo(cx, top + 20 * sc); g.lineTo(cx, bot); g.stroke();
+  // leaf clumps
+  for (const [ox, oy, seedk] of [[S * 1.5, 0, 0], [S * 1.5, Hh / 2, 1]]) {
+    const ccx = ox + 128 * sc, ccy = oy + 128 * sc;
+    for (let i = 0; i < 520; i++) {
+      const a = r() * 6.283, d = Math.pow(r(), .6) * 112 * sc, x = ccx + Math.cos(a) * d, y = ccy + Math.sin(a) * d * .9;
+      const k = .2 + r() * .8 + seedk * .1, lw = (7 + r() * 7) * sc, lh = lw * .55;
+      g.fillStyle = `rgba(${(40 + k * 60) | 0},${(70 + k * 70) | 0},${(25 + k * 30) | 0},1)`;
+      g.beginPath(); g.ellipse(x, y, lw, lh, r() * 3.14, 0, 6.283); g.fill();
+    }
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return t;
+}
 export function makeTextures(quality) {
   const S = quality === 'low' ? 256 : 512;
   const [gc, gg] = grass(S), [dc, dg] = dirt(S), [rc, rg] = gravel(S);
@@ -211,7 +265,7 @@ export function makeTextures(quality) {
     macro: grey(256, 4, 91, 5),
     rock: canvasTex(rock(256)[0]), bark: canvasTex(bark(128)[0]), needles: canvasTex(needles(256)[0]),
     water: normalTex(256, 8, 101, 9),
-    clouds: clouds(512), puff: puff(64), stripes: stripes(),
+    clouds: clouds(512), puff: puff(64), stripes: stripes(), foliage: foliage(quality === 'low' ? 256 : 512),
   };
   return T;
 }

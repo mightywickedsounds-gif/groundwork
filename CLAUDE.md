@@ -4,7 +4,9 @@ A browser digging game, hosted on GitHub Pages from `main` (root): https://might
 
 - `index.html`: page, HUD, menus, touch controls. Has a CSP meta; add any new host there.
 - `game.js`: the whole game, an ES module. three.js 0.160 from jsDelivr via the import map. No build step.
-  - Height grid `H` (160x160 m, 1 m cells) with `BED` dig floor and `M` material (0 grass, 1 dirt, 2 gravel, `D` disturbed).
+  - World v2 (round 4): 256x256 m, `RIVERS` (control points with bed levels, `riverAt` also beyond the map), `SPRINGS`, marsh berm, `GRAVEL`/`YARD`/`CAMP`/`MARSH`, `GOALS` (cross/haul/dam/camp/marsh) + side jobs, `SPEC[].ford` (machines refuse water deeper than this), minimap. Save key `groundwork.save.v2` (v1 left untouched). Sparse sim: `waterActive` 16 m tiles (`scanWater`), `tileLoose` for `relax`; always call `dirty(k)` after changing `H`.
+  - Drawing: terrain in 32 m chunks (`tchunks`, `updateTerrainChunks`), detail 2 (0.5 m, Catmull-Rom `hSmooth` + soil `lump`) near the camera, skirts hide seams; water per chunk; card trees (`spruceGeo`/`leafyGeo`, foliage atlas in textures.js); sounds are generated samples (`engineSample`, `pourSample`, `streamSample` in audio.js).
+  - Height grid `H` (1 m cells) with `BED` dig floor and `M` material (0 grass, 1 dirt, 2 gravel, `D` disturbed).
   - Dirt sliding: `relax` (talus .92 dry, .62 wet).
   - Water: virtual-pipes `waterStep`, spring on the west edge (`SPRING_Q`), drain on the east edge.
   - Machines: `SPEC`/`BUILD`/`TOOL` for dozer, loader, excavator, hauler. Loads are `{v, g}` (volume, gravel volume).

@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { labelTexture } from './textures.js?v=2';
+import { labelTexture } from './textures.js?v=4';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const Y = V(0, 1, 0), Z = V(0, 0, 1);
@@ -301,8 +301,7 @@ export function buildDozer(m, M, L) {
     beam(blade, V(s * 1.62, .45, .05), V(s * 1.62, .42, -2.62), .16, .22, M.frame);
     rbox(blade, .22, .36, .26, M.frame, s * 1.62, .45, .02, .04);
   }
-  const pile = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 2), L.dirt);
-  { const pa = pile.geometry.attributes.position; for (let i = 0; i < pa.count; i++) { const k = 1 + .18 * Math.sin(pa.getX(i) * 5.1 + pa.getZ(i) * 3.3) * Math.cos(pa.getY(i) * 4.7); pa.setXYZ(i, pa.getX(i) * k, pa.getY(i) * k, pa.getZ(i) * k); } pile.geometry.computeVertexNormals(); }
+  const pile = new THREE.Mesh(heapGeo(2.0, 1.0, 1.2, 3), L.dirt);
   pile.castShadow = true; pile.receiveShadow = true; blade.add(pile);
   m.rams = [-1, 1].map(s => new Ram(g, V(s * .62, 1.82, 1.6), g, V(s * .62, 1.05, -.02), blade, .075, M));
   Object.assign(m, { group: g, blade3: blade, pile });
@@ -350,7 +349,7 @@ export function buildLoader(m, M, L) {
   rbox(bucket, 2.9, .05, .2, M.steel, 0, -.45, .96, .01);
   for (let i = 0; i < 7; i++) rbox(bucket, .08, .05, .2, M.steel, -1.2 + i * .4, -.45, 1.12, .01);
   rbox(bucket, .5, .3, .15, M.frame, 0, .45, -.02, .03);
-  const bl = new THREE.Mesh(moundGeo(2.6, .7, .85), L.dirt); bl.position.set(0, -.42, .45); bl.castShadow = true; bucket.add(bl);
+  const bl = new THREE.Mesh(heapGeo(2.65, .75, .9, 5), L.dirt); bl.position.set(0, -.42, .45); bl.castShadow = true; bucket.add(bl);
   m.rams = [
     ...[-1, 1].map(s => new Ram(g, V(s * .62, 1.1, .5), front, V(s * .82, -.14, 1.2), arms, .085, M)),
     new Ram(g, V(0, 1.62, .45), front, V(0, .85, 1.18), arms, .08, M),
@@ -393,7 +392,7 @@ export function buildExcavator(m, M, L) {
   for (const s of [-1, 1]) { const sp = profileSolid(arc, .04, M.paint); sp.position.x = s * .55; bucket.add(sp); }
   for (let i = 0; i < 5; i++) { const t = rbox(bucket, .08, .06, .2, M.steel, -.4 + i * .2, -.1, 1.1, .01); t.rotation.x = .6; }
   rbox(bucket, .3, .2, .25, M.frame, 0, .25, -.05, .03);
-  const bl = new THREE.Mesh(moundGeo(.95, .45, .75), L.dirt); bl.position.set(0, .05, .5); bl.rotation.x = Math.PI; bl.castShadow = true; bucket.add(bl);
+  const bl = new THREE.Mesh(heapGeo(.95, .45, .8, 7), L.dirt); bl.position.set(0, .05, .5); bl.rotation.x = Math.PI; bl.castShadow = true; bucket.add(bl);
   m.rams = [
     ...[-1, 1].map(s => new Ram(g, V(-.25 + s * .3, .42, 1.55), house, V(s * .3, .1, 1.9), boom, .1, M)),
     new Ram(g, V(0, 1.1, 2.0), boom, V(0, .62, -.5), stick, .085, M),
@@ -421,7 +420,7 @@ export function buildHauler(m, M, L) {
   rbox(bed, 2.85, 1.6, .14, M.paint, 0, .8, 5.6, .04);
   rbox(bed, 2.85, .1, .16, M.stripe, 0, 1.55, 5.68, .02);
   rbox(bed, 2.55, .12, .6, M.paint, 0, .18, -.2, .02).rotation.x = .5;
-  const bl = new THREE.Mesh(moundGeo(2.5, 1, 5.3), L.dirt); bl.position.set(0, .07, 2.75); bl.castShadow = true; bed.add(bl);
+  const bl = new THREE.Mesh(heapGeo(2.55, 1.15, 5.4, 9), L.dirt); bl.position.set(0, .07, 2.75); bl.castShadow = true; bed.add(bl);
   label(bed, 'GW 30', .9, .26, 1.47, .75, 3.0, Math.PI / 2 - .12); label(bed, 'GW 30', .9, .26, -1.47, .75, 3.0, -Math.PI / 2 + .12);
   const front = new THREE.Group(); front.position.set(0, 0, 1.35); g.add(front); m.front = front;
   cylY(g, .24, .24, .7, M.steel, 0, 1.25, 1.35);
@@ -528,4 +527,97 @@ export function farTreeGeo() {
   const c1 = new THREE.ConeGeometry(2.6, 6, 7).translate(0, 5, 0); colorize(c1, () => [.11, .2, .09]);
   const c2 = new THREE.ConeGeometry(1.9, 5, 7).translate(0, 8, 0); colorize(c2, () => [.13, .23, .1]);
   return mergeGeometries([prep(t), prep(c1), prep(c2)]);
+}
+
+// ---------------------------------------------------------------- trees made of textured cards (branches, leaf clumps)
+function cardBuilder() {
+  const pos = [], nor = [], uv = [], col = [], idx = [];
+  return {
+    quad(ps, uvs, ns, cs) {
+      const b = pos.length / 3;
+      for (let q = 0; q < 4; q++) { pos.push(...ps[q]); uv.push(...uvs[q]); nor.push(...ns[q]); col.push(cs[q], cs[q], cs[q] * .95); }
+      idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
+    },
+    geo() {
+      const g = new THREE.BufferGeometry(); g.setIndex(idx);
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+      g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      g.computeBoundingSphere(); return g;
+    },
+  };
+}
+const nrm = (x, y, z) => { const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; };
+function seeded(seed) { let s = (seed * 9301 + 49297) % 2147483647 || 1; return () => { s = (s * 16807) % 2147483647; return s / 2147483647; }; }
+// Atlas: branch A u 0-.5 v .5-1, branch B u 0-.5 v 0-.5, whole spruce u .5-.75, leaf clumps u .75-1 (v .5-1 and 0-.5)
+export function spruceGeo(seed, h = 13) {
+  const R = seeded(seed), B = cardBuilder();
+  const cw = h * .48;
+  for (let k = 0; k < 3; k++) {
+    const a = k * Math.PI / 3 + R() * .3, dx = Math.cos(a) * cw / 2, dz = Math.sin(a) * cw / 2;
+    B.quad([[-dx, h * .03, -dz], [dx, h * .03, dz], [dx, h, dz], [-dx, h, -dz]], [[.5, 0], [.75, 0], [.75, 1], [.5, 1]],
+      [nrm(-dx, .4, -dz), nrm(dx, .4, dz), nrm(dx, .9, dz), nrm(-dx, .9, -dz)], [.5, .5, 1, 1]);
+  }
+  const levels = 12;
+  for (let l = 0; l < levels; l++) {
+    const t = l / (levels - 1), y = h * (.13 + t * .8), len = h * .34 * Math.pow(1 - t, .85) + .4, nb = 5 + (R() * 2 | 0);
+    for (let b = 0; b < nb; b++) {
+      const a = b / nb * 6.283 + l * 1.3 + R() * .5, dx = Math.cos(a), dz = Math.sin(a), droop = .22 + R() * .22 + (1 - t) * .15;
+      const ex = dx * len * Math.cos(droop), ey = y - len * Math.sin(droop), ez = dz * len * Math.cos(droop);
+      const sx = -dz, sz = dx, wb = len * .1, we = len * .34, curl = len * .06;
+      const dense = R() < .5, v0 = dense ? 0 : .5, v1 = dense ? .5 : 1;
+      const cb = .45 + t * .25, ce = Math.min(1, cb + .35);
+      B.quad([[dx * .08 - sx * wb, y, dz * .08 - sz * wb], [ex - sx * we, ey + curl, ez - sz * we], [ex + sx * we, ey + curl, ez + sz * we], [dx * .08 + sx * wb, y, dz * .08 + sz * wb]],
+        [[0, v0], [.5, v0], [.5, v1], [0, v1]],
+        [nrm(dx - sx * .3, .8, dz - sz * .3), nrm(dx - sx * .4, .6, dz - sz * .4), nrm(dx + sx * .4, .6, dz + sz * .4), nrm(dx + sx * .3, .8, dz + sz * .3)], [cb, ce, ce, cb]);
+    }
+  }
+  const trunk = new THREE.CylinderGeometry(.08 * h / 10, .3 * h / 10, h * .96, 8, 1).translate(0, h * .48, 0);
+  return { fol: B.geo(), trunk };
+}
+export function leafyGeo(seed, h = 11) {
+  const R = seeded(seed + 50), B = cardBuilder();
+  const cy = h * .66, rx = h * .3, ry = h * .24;
+  for (let i = 0; i < 44; i++) {
+    let px, py, pz; do { px = R() * 2 - 1; py = R() * 2 - 1; pz = R() * 2 - 1; } while (px * px + py * py + pz * pz > 1);
+    const c = [px * rx, cy + py * ry, pz * rx], out = nrm(px + (R() - .5) * .8, py + .3 + (R() - .5) * .8, pz + (R() - .5) * .8);
+    let ux = -out[2], uz = out[0]; const ul = Math.hypot(ux, uz) || 1; ux /= ul; uz /= ul;
+    const vx = out[1] * uz, vy = out[2] * ux - out[0] * uz, vz = -out[1] * ux;
+    const s = h * .2 * (.8 + R() * .5) / 2, lo = R() < .5 ? .5 : 0;
+    const P = (a, b) => [c[0] + ux * a * s + vx * b * s, c[1] + vy * b * s, c[2] + uz * a * s + vz * b * s];
+    const shade = .55 + (py + 1) * .25;
+    const nn = p => nrm(p[0], p[1] - cy + ry * .3, p[2]);
+    const ps = [P(-1, -1), P(1, -1), P(1, 1), P(-1, 1)];
+    B.quad(ps, [[.75, lo], [1, lo], [1, lo + .5], [.75, lo + .5]], ps.map(nn), [shade * .85, shade * .85, shade * 1.1, shade * 1.1]);
+  }
+  const parts = [new THREE.CylinderGeometry(.14, .3, h * .62, 8, 1).translate(0, h * .31, 0)];
+  for (let i = 0; i < 4; i++) {
+    const a = i / 4 * 6.283 + R(), len = h * .3, br = new THREE.CylinderGeometry(.05, .11, len, 6, 1).translate(0, len / 2, 0);
+    br.rotateZ(.75); br.rotateY(a); br.translate(0, h * .5, 0); parts.push(br);
+  }
+  return { fol: B.geo(), trunk: mergeGeometries(parts.map(p => p.toNonIndexed())) };
+}
+// distant trees: two crossed pictures of a whole spruce
+export function farCardGeo() {
+  const B = cardBuilder(), h = 14, w = 7;
+  for (let k = 0; k < 2; k++) {
+    const a = k * Math.PI / 2, dx = Math.cos(a) * w / 2, dz = Math.sin(a) * w / 2;
+    B.quad([[-dx, 0, -dz], [dx, 0, dz], [dx, h, dz], [-dx, h, -dz]], [[.5, 0], [.75, 0], [.75, 1], [.5, 1]], [[0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0]], [.75, .75, 1, 1]);
+  }
+  return B.geo();
+}
+// a lumpy heap of dirt or gravel (for buckets, the bed and in front of the blade); sits on y = 0
+export function heapGeo(w, h, d, seed = 1) {
+  const g = new THREE.PlaneGeometry(w, d, 16, 16).rotateX(-Math.PI / 2), p = g.attributes.position, R = seeded(seed);
+  const bumps = Array.from({ length: 8 }, () => [(R() - .5) * w * .7, (R() - .5) * d * .7, .12 + R() * .2]);
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), z = p.getZ(i), fx = x / (w / 2), fz = z / (d / 2);
+    const base = Math.max(0, 1 - fx * fx) * Math.max(0, 1 - fz * fz);
+    let y = h * Math.pow(base, .55);
+    for (const [bx, bz, bh] of bumps) y += h * bh * Math.exp(-((x - bx) ** 2 + (z - bz) ** 2) / (w * w * .02)) * Math.sqrt(base);
+    y += h * .06 * Math.sin(x * 11.1 + seed) * Math.cos(z * 9.3 - seed) * Math.sqrt(base);
+    p.setY(i, y);
+  }
+  g.computeVertexNormals();
+  const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, p.getX(i) * .6, p.getZ(i) * .6);
+  return g;
 }

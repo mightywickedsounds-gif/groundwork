@@ -1,6 +1,6 @@
 # Groundwork
 
-A digging game you play in the browser. Drive a dozer, loader, excavator and dump truck around a forested valley, cut and pile real ground, reroute the river and finish paid jobs. **Nothing ever resets:** every hole, pile and channel stays where you left it, even after you close the page.
+A digging game you play in the browser. Drive a dozer, loader, excavator and dump truck around an open forested valley cut by a river and creeks: build crossings, dam creeks, drain a marsh, haul gravel and reshape the ground. **Nothing ever resets:** every hole, pile and channel stays where you left it, even after you close the page.
 
 Play it here (once GitHub Pages is on, see below): https://mightywickedsounds-gif.github.io/groundwork/
 
@@ -103,4 +103,50 @@ The big text panels and paragraphs of hints are gone. What's left on screen:
 - **Phone:** round icon buttons instead of word buttons.
 
 Tested: all 11 gameplay checks pass; desktop and phone screenshots checked for overlaps.
+
+### Round 4: an open world of rivers to cross, smooth ground, realistic trees and sound
+
+**The world is now open and about water.**
+- **A bigger valley** (256 x 256 m): a deep river runs through the middle, a creek comes down from the north and another from the south, and there's a marsh in a hollow.
+- **The yard** is south of the river. The gravel pit and the logging camp are across water.
+- **Fording depth:** each machine has a realistic limit for how deep it can drive through water (dozer 1.0 m, excavator 1.2 m, loader 0.55 m, hauler 0.65 m). It stops at the bank rather than drown its engine.
+- **To get across**, you build a crossing: push dirt or gravel into the river until it's shallow enough. Block it completely and the water backs up behind your dam.
+- **Goals,** marked with a yellow beam and shown top right:
+  1. Cross the river (get the hauler to the gravel pit).
+  2. Haul gravel home.
+  3. Dam the south creek.
+  4. Reach the logging camp with the loader.
+  5. Drain the marsh.
+  After that, side jobs keep coming.
+- **Minimap** in the corner (M hides it).
+- The water and loose-dirt simulation now only works where something is happening, so the bigger world doesn't slow things down.
+
+**Ground that looks like ground.**
+- Near the camera the terrain is drawn at half-metre detail with smooth curves through the dig grid. Holes come out as rounded hollows and piles as rounded mounds, instead of square steps.
+- Bare dirt and gravel get small natural lumps.
+- Piles now spread diagonally too, so they come out round instead of diamond-shaped.
+
+**Dirt and particles.**
+- The loads in the bucket, bed and in front of the blade are lumpy textured heaps, not boxes.
+- Dumping pours out a stream of fine soil grains and small clods that fall and land.
+
+**Trees and distance.**
+- Spruces are built from layers of drooping needle branches around a core; leafy trees from leaf clumps on real limbs.
+- You can see much further: thinner haze, forest all the way out, and mountain ridges on the horizon.
+- Sharper, longer-reaching shadows on High.
+
+**Sound.** I couldn't download real recordings (the free libraries were blocked from here), so the synthesized sounds were rebuilt from scratch:
+- Each engine is now generated as an actual recording when the game starts: every cylinder firing is a slightly different pressure pulse ringing the exhaust pipe, with diesel knock on top, as an idle loop and a working-hard loop that blend and speed up with the engine.
+- Pouring soil and gravel are thousands of tiny grain impacts.
+- The river is a babbling-stream texture.
+- The hydraulic pump's pitch follows the engine.
+
+**Note:** this is a new, bigger world, so it starts fresh. The first valley's save is left untouched in the browser, not deleted.
+
+**Tested:** 13 automatic checks pass. New ones:
+- Machines refuse water deeper than they can ford. This caught a real bug: at full speed the hauler couldn't stop before the bank.
+- A dam backs a creek up.
+- Reaching the gravel pit completes the first goal.
+
+Screenshots were checked for the hole, the river, the trees, the horizon and pouring dirt. I can't listen to the sound or try it on a real phone from here.
 

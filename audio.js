@@ -1,4 +1,5 @@
-// Groundwork sound: everything is synthesized live with the Web Audio API (no sound files).
+// Groundwork sound: everything is made in the browser with the Web Audio API (no sound files). Engines, pouring dirt
+// and the river are built as recordings in memory when sound starts, then played in loops at the right speed.
 // Each machine has its own diesel engine (firing pulses, clatter, turbo, exhaust), hydraulics, track clank, backup beeper
 // and digging noise, placed in 3D where the machine is. Plus one-shots (dumps, tree falls, clangs, splashes) and the
 // valley around you (wind, leaves, the river, birds).
@@ -44,6 +45,85 @@ function softClip(amount = 2.2) {
   return curve;
 }
 
+// ---------------------------------------------------------------- sample synthesis (done once, when sound starts)
+// Real engines are not clean tones: every cylinder firing is a slightly different pressure pulse that rings the exhaust
+// pipe, with a sharp diesel knock on top and plenty of irregularity. These functions build such recordings in memory.
+function rngS(seed) { let a = seed | 0; return () => { a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function biquad(type, f, Q, sr) {
+  const w = 2 * Math.PI * f / sr, cs = Math.cos(w), sn = Math.sin(w), al = sn / (2 * Q);
+  let b0, b1, b2, a0 = 1 + al, a1 = -2 * cs, a2 = 1 - al;
+  if (type === 'bp') { b0 = al; b1 = 0; b2 = -al; }
+  else if (type === 'lp') { b0 = (1 - cs) / 2; b1 = 1 - cs; b2 = (1 - cs) / 2; }
+  else { b0 = (1 + cs) / 2; b1 = -(1 + cs); b2 = (1 + cs) / 2; }
+  return [b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0];
+}
+function filt(x, co, gain = 1, out = null) {
+  const [b0, b1, b2, a1, a2] = co, y = out || new Float32Array(x.length);
+  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  for (let i = 0; i < x.length; i++) { const v = b0 * x[i] + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2; x2 = x1; x1 = x[i]; y2 = y1; y1 = v; y[i] += v * gain; }
+  return y;
+}
+// make the end of a buffer flow seamlessly into its start
+function loopify(d, sr, fade = .06) {
+  const n = Math.floor(sr * fade), L = d.length - n, out = d.slice(0, L);
+  for (let i = 0; i < n; i++) { const t = i / n; out[i] = d[i] * t + d[L + i] * (1 - t); }
+  return out;
+}
+function normalize(d, peak = .9) { let m = 0; for (const v of d) m = Math.max(m, Math.abs(v)); if (m > 0) for (let i = 0; i < d.length; i++) d[i] *= peak / m; return d; }
+function toBuffer(c, d) { const b = c.createBuffer(1, d.length, c.sampleRate); b.getChannelData(0).set(d); return b; }
+const gauss = R => (R() + R() + R() - 1.5) * .816;
+
+// a diesel engine at rpm0: 'load' 0 = idling smoothly, 1 = pulling hard (harsher pulses, more knock and roar)
+export function engineSample(c, { rpm0 = 1200, cyl = 6, res = [80, 200, 410], seed = 1, load = 0, secs = 2.4 }) {
+  const sr = c.sampleRate, R = rngS(seed * 31 + (load ? 7 : 0)), cycle = 120 / rpm0, fire = cycle / cyl;
+  const n = Math.floor(Math.round(secs / cycle) * cycle * sr) + Math.floor(sr * .06);
+  const ex = new Float32Array(n), nb = new Float32Array(n), kn = new Float32Array(n);
+  const bias = Array.from({ length: cyl }, () => .78 + R() * .44);
+  const pw = Math.floor(fire * sr * (load ? .3 : .38)), nbw = Math.floor(sr * .006), knw = Math.floor(sr * .0007);
+  for (let i = 0, t = 0; t < n / sr; i++, t = i * fire + gauss(R) * fire * (load ? .05 : .035)) {
+    const s0 = Math.floor(Math.max(0, t) * sr), a = bias[i % cyl] * (1 + gauss(R) * (load ? .28 : .18));
+    for (let k = 0; k < pw && s0 + k < n; k++) ex[s0 + k] += a * Math.sin(Math.PI * k / pw) ** (load ? 1.5 : 2);
+    for (let k = 0; k < nbw && s0 + k < n; k++) nb[s0 + k] += a * (R() * 2 - 1) * Math.exp(-k / (sr * .0016));
+    const kd = s0 + Math.floor(pw * .15);
+    for (let k = 0; k < knw && kd + k < n; k++) kn[kd + k] += a * (R() * 2 - 1) * (1 - k / knw);
+  }
+  const y = new Float32Array(n);
+  res.forEach((f, q) => filt(ex, biquad('bp', f * (1 + (R() - .5) * .04), [3.5, 5, 4][q], sr), [1, .55, .3][q] * (1 + load * .3), y));
+  filt(ex, biquad('lp', 70, .7, sr), 1.4, y);
+  filt(nb, biquad('bp', 900 + load * 500, .8, sr), .55 + load * .5, y);
+  filt(kn, biquad('hp', 2400, .7, sr), .22 + load * .25, y);
+  let br = 0; for (let i = 0; i < n; i++) { br = (br + .02 * (R() * 2 - 1)) / 1.02; y[i] += br * (1.2 + load * 1.6); }
+  for (let i = 0; i < n; i++) y[i] = Math.tanh(y[i] * (1.2 + load * .8));
+  return toBuffer(c, normalize(loopify(y, sr), .85));
+}
+// soil or gravel pouring: thousands of tiny impacts, plus the low rumble of the mass landing
+export function pourSample(c, gravel, secs = 3) {
+  const sr = c.sampleRate, n = Math.floor(sr * secs) + Math.floor(sr * .06), R = rngS(gravel ? 11 : 5), x = new Float32Array(n);
+  const rate = gravel ? 1400 : 2600;
+  for (let t = 0; t < secs + .06; t += -Math.log(1 - R()) / rate) {
+    const s0 = Math.floor(t * sr), a = Math.pow(R(), 2.2), len = Math.floor(sr * (gravel ? .004 + R() * .006 : .002 + R() * .004));
+    const f = gravel ? 2500 + R() * 3500 : 0;
+    for (let k = 0; k < len && s0 + k < n; k++) x[s0 + k] += a * (gravel ? Math.sin(2 * Math.PI * f * k / sr) : (R() * 2 - 1)) * Math.exp(-k / (len * .3));
+  }
+  const y = new Float32Array(n);
+  if (gravel) { filt(x, biquad('bp', 3200, .7, sr), 1, y); filt(x, biquad('lp', 600, .7, sr), .8, y); }
+  else { filt(x, biquad('lp', 1400, .6, sr), 1, y); filt(x, biquad('lp', 250, .7, sr), 1.5, y); }
+  let br = 0; for (let i = 0; i < n; i++) { br = (br + .02 * (R() * 2 - 1)) / 1.02; y[i] += br * 1.4; }
+  return toBuffer(c, normalize(loopify(y, sr), .8));
+}
+// a babbling stream: a bed of rushing water with countless small bubbles popping on top
+export function streamSample(c, secs = 4) {
+  const sr = c.sampleRate, n = Math.floor(sr * secs) + Math.floor(sr * .06), R = rngS(77), y = new Float32Array(n), w = new Float32Array(n);
+  for (let i = 0; i < n; i++) w[i] = R() * 2 - 1;
+  filt(w, biquad('bp', 700, .5, sr), .5, y); filt(w, biquad('bp', 2200, .7, sr), .25, y);
+  for (let t = 0; t < secs; t += -Math.log(1 - R()) / 90) {
+    const s0 = Math.floor(t * sr), len = Math.floor(sr * (.01 + R() * .03)), f0 = 350 + R() * 900, a = .15 + R() * .5;
+    let ph = 0;
+    for (let k = 0; k < len && s0 + k < n; k++) { const f = f0 * (1 + 1.6 * k / len); ph += 2 * Math.PI * f / sr; y[s0 + k] += Math.sin(ph) * a * Math.sin(Math.PI * k / len); }
+  }
+  return toBuffer(c, normalize(loopify(y, sr), .8));
+}
+
 export class Sound {
   constructor() { this.c = null; this.muted = false; this.voices = new Map(); this.t = 0; this.nextBird = 4; }
   get ready() { return !!this.c; }
@@ -59,7 +139,8 @@ export class Sound {
     this.white = noiseBuffer(c, 2, 'white'); this.brown = noiseBuffer(c, 3, 'brown'); this.pink = noiseBuffer(c, 3, 'pink');
     this.crackle = crackleBuffer(c, 2, .004); this.crackleDense = crackleBuffer(c, 2, .02);
     this.clanks = [180, 210, 240, 165].map(f => clankBuffer(c, f));
-    this.wave = dieselWave(c);
+    this.pourSoil = pourSample(c, false); this.pourGravel = pourSample(c, true); this.stream = streamSample(c);
+    this.engBufs = {};
     this.ambient();
   }
   setMuted(m) { this.muted = m; if (this.master) this.master.gain.setTargetAtTime(m ? 0 : .9, this.c.currentTime, .05); }
@@ -90,39 +171,34 @@ export class Sound {
   // ------------------------------------------------ a machine's voice
   machine(id, cfg) {
     if (!this.c || this.voices.has(id)) return this.voices.get(id);
-    const c = this.c, v = { cfg, rpm: cfg.idle, boost: 0, clankPhase: 0, beep: false };
+    const c = this.c, v = { cfg, rpm: cfg.idle, boost: 0, clankPhase: 0 };
+    const key = cfg.cyl + ':' + cfg.tone;
+    if (!this.engBufs[key]) {
+      const res = [cfg.tone * .34, cfg.tone * .86, cfg.tone * 1.72], seed = Math.round(cfg.tone);
+      this.engBufs[key] = [engineSample(c, { res, seed, cyl: cfg.cyl, load: 0 }), engineSample(c, { res, seed, cyl: cfg.cyl, load: 1 })];
+    }
+    const [bi, bl] = this.engBufs[key];
     v.pan = this.panner(9); v.pan.connect(this.bus);
     v.out = this.gain(0); v.out.connect(v.pan);
-    // combustion: two slightly detuned pulse trains plus a sub rumble, driven into a soft clipper and a lowpass
-    v.o1 = c.createOscillator(); v.o1.setPeriodicWave(this.wave);
-    v.o2 = c.createOscillator(); v.o2.setPeriodicWave(this.wave); v.o2.detune.value = 9;
-    v.sub = c.createOscillator(); v.sub.type = 'triangle';
-    const mix = this.gain(.45), subG = this.gain(.5);
-    v.o1.connect(mix); v.o2.connect(mix); v.sub.connect(subG).connect(mix);
-    const sh = c.createWaveShaper(); sh.curve = softClip(2.4); sh.oversample = '2x';
-    v.lp = this.filt('lowpass', 400, .9);
-    const body = this.filt('peaking', 140, 1.2); body.gain.value = 5;
-    mix.connect(sh).connect(v.lp).connect(body).connect(v.out);
-    // injector/valve clatter: noise opened and shut by the firing pulses
-    const nz = this.loop(this.white), bp = this.filt('bandpass', 1500, .9);
-    v.gate = this.gain(.5); const mod = this.gain(.5); v.o1.connect(mod).connect(v.gate.gain);
-    v.clat = this.gain(.05); nz.connect(bp).connect(v.gate).connect(v.clat).connect(v.out);
+    v.lp = this.filt('lowpass', 1200, .7); v.lp.connect(v.out);
+    const src = buf => { const s = c.createBufferSource(); s.buffer = buf; s.loop = true; s.start(0, Math.random() * buf.duration); return s; };
+    v.sI = src(bi); v.gI = this.gain(1); v.sI.connect(v.gI).connect(v.lp);
+    v.sL = src(bl); v.gL = this.gain(0); v.sL.connect(v.gL).connect(v.lp);
     // turbo whistle
     v.tb = c.createOscillator(); v.tb.type = 'sine'; v.tbG = this.gain(0); v.tb.connect(v.tbG).connect(v.out);
-    // exhaust breath
-    const ex = this.loop(this.brown); v.exLp = this.filt('lowpass', 140, .5); v.exG = this.gain(.2); ex.connect(v.exLp).connect(v.exG).connect(v.out);
-    // hydraulics: pump whine + fluid hiss (not scaled by engine level)
-    v.hy = c.createOscillator(); v.hy.type = 'sawtooth'; v.hyBp = this.filt('bandpass', 900, 5); v.hyG = this.gain(0);
-    const hn = this.loop(this.white), hbp = this.filt('bandpass', 3200, 1.5), hnG = this.gain(.25);
+    // hydraulic pump (its pitch follows the engine) and the hiss of oil through the valves
+    v.hy = c.createOscillator(); v.hy.type = 'sawtooth'; v.hyBp = this.filt('bandpass', 900, 3); v.hyG = this.gain(0);
+    const hn = this.loop(this.white), hbp = this.filt('bandpass', 3500, 1.2), hnG = this.gain(.3);
     v.hy.connect(v.hyBp).connect(v.hyG); hn.connect(hbp).connect(hnG).connect(v.hyG); v.hyG.connect(v.pan);
-    // digging / scraping: brown noise thump + gravel crackle
-    const dn = this.loop(this.brown), dbp = this.filt('bandpass', 380, .6); v.digG = this.gain(0); dn.connect(dbp).connect(v.digG).connect(v.pan);
-    const dc = this.loop(this.crackleDense, .8), dhp = this.filt('highpass', 900); v.gravG = this.gain(0); dc.connect(dhp).connect(v.gravG).connect(v.pan);
-    // pouring (hauler bed / bucket stream)
-    const pn = this.loop(this.pink), plp = this.filt('lowpass', 700); v.pourG = this.gain(0); pn.connect(plp).connect(v.pourG).connect(v.pan);
+    // digging and pouring: the grain-by-grain recordings
+    const dS = src(this.pourSoil), dG = src(this.pourGravel);
+    v.digG = this.gain(0); v.gravG = this.gain(0); v.pourG = this.gain(0); v.pourGG = this.gain(0);
+    const dlp = this.filt('lowpass', 1100, .6);
+    dS.connect(dlp).connect(v.digG).connect(v.pan); dG.connect(v.gravG).connect(v.pan);
+    const pS = src(this.pourSoil), pG = src(this.pourGravel); pS.connect(v.pourG).connect(v.pan); pG.connect(v.pourGG).connect(v.pan);
     // backup beeper
     v.bp = c.createOscillator(); v.bp.type = 'square'; v.bp.frequency.value = 1180; const bpf = this.filt('bandpass', 1180, 3); v.bpG = this.gain(0); v.bp.connect(bpf).connect(v.bpG).connect(v.pan);
-    for (const o of [v.o1, v.o2, v.sub, v.tb, v.hy, v.bp]) o.start();
+    for (const o of [v.tb, v.hy, v.bp]) o.start();
     this.voices.set(id, v);
     return v;
   }
@@ -132,26 +208,25 @@ export class Sound {
     for (const key in s) if (typeof s[key] === 'number' && !Number.isFinite(s[key])) { (window.__badSound ||= new Set()).add(key); s[key] = 0; }
     const c = this.c, t = c.currentTime, cfg = v.cfg, T = (p, x, k = .08) => { if (Number.isFinite(x)) p.setTargetAtTime(x, t, k); };
     const target = cfg.idle + (cfg.max - cfg.idle) * s.rpm;
-    v.rpm += (target - v.rpm) * Math.min(1, dt * (target > v.rpm ? 2.6 : 1.6));
-    v.boost += (s.load * s.rpm - v.boost) * Math.min(1, dt * 1.5);
-    const f = v.rpm / 60 * cfg.cyl / 2;
-    T(v.o1.frequency, f, .03); T(v.o2.frequency, f, .03); T(v.sub.frequency, f / cfg.cyl * 1.0, .03);
-    T(v.lp.frequency, cfg.tone + s.load * 1300 + (v.rpm - cfg.idle) / (cfg.max - cfg.idle) * 700);
-    T(v.tb.frequency, 1700 + v.boost * 4800, .2); T(v.tbG.gain, .004 + v.boost * .018, .2);
-    T(v.exG.gain, .1 + s.load * .4); T(v.exLp.frequency, 110 + s.load * 260);
-    T(v.clat.gain, .03 + (v.rpm - cfg.idle) / (cfg.max - cfg.idle) * .06);
-    const lvl = cfg.vol * (s.active ? 1 : .55) * (.5 + s.load * .5);
-    T(v.out.gain, lvl, .1);
-    T(v.hy.frequency, 120 + s.hyd * 110 + s.hydLoad * 90); T(v.hyBp.frequency, 700 + s.hyd * 900 + s.hydLoad * 500);
-    T(v.hyG.gain, (s.hyd * .05 + s.hydLoad * .05) * cfg.vol, .06);
-    T(v.digG.gain, Math.min(.7, s.dig * .25) * (1 - s.gravel * .5), .05);
-    T(v.gravG.gain, Math.min(.5, s.dig * .25 + s.pour * .1) * s.gravel, .05);
-    T(v.pourG.gain, Math.min(.5, s.pour * .12), .1);
-    // backup beeper: half a second on, half off
+    v.rpm += (target - v.rpm) * Math.min(1, dt * (target > v.rpm ? 2.4 : 1.5));
+    v.boost += (s.load * s.rpm - v.boost) * Math.min(1, dt * 1.4);
+    const rf = (v.rpm - cfg.idle) / (cfg.max - cfg.idle), rate = v.rpm / 1200;
+    T(v.sI.playbackRate, rate, .05); T(v.sL.playbackRate, rate, .05);
+    const lvl = cfg.vol * (s.active ? 1 : .55);
+    const ld = Math.min(1, s.load * 1.15);
+    T(v.gI.gain, (1 - ld) * (.75 + rf * .3)); T(v.gL.gain, ld * (.85 + rf * .3));
+    T(v.lp.frequency, 700 + rf * 1600 + s.load * 2600);
+    T(v.out.gain, lvl * (.55 + s.load * .35 + rf * .25), .1);
+    T(v.tb.frequency, 1800 + v.boost * 5200, .25); T(v.tbG.gain, (.002 + v.boost * .012) * cfg.vol, .25);
+    T(v.hy.frequency, v.rpm / 60 * 9 * (1 - s.hydLoad * .08)); T(v.hyBp.frequency, 600 + s.hyd * 700 + s.hydLoad * 500);
+    T(v.hyG.gain, (s.hyd * .045 + s.hydLoad * .04) * cfg.vol * 2, .06);
+    const dig = Math.min(1, s.dig * .35);
+    T(v.digG.gain, dig * (1 - s.gravel) * .9, .05); T(v.gravG.gain, dig * s.gravel * .7, .05);
+    const pr = Math.min(1, s.pour * .2);
+    T(v.pourG.gain, pr * (1 - s.gravel) * .9, .08); T(v.pourGG.gain, pr * s.gravel * .7, .08);
     const on = s.reverse && (Math.floor(t * 2) % 2 === 0);
     T(v.bpG.gain, on ? .07 : 0, .006);
     this.setPos(v.pan, s.x, s.y, s.z);
-    // track clank: one clank per shoe that rolls round the sprocket
     if (s.track > .05) {
       v.clankPhase += s.track * dt / .27;
       let n = 0;
@@ -173,17 +248,23 @@ export class Sound {
     s.connect(fl).connect(g).connect(dest); s.start(t, Math.random()); s.stop(t + (dur || attack + decay * 2.5));
     return fl;
   }
+  slice(buf, dest, gain, dur, rate = 1) {
+    const c = this.c, t = c.currentTime, src = c.createBufferSource(), g = this.gain(0);
+    src.buffer = buf; src.playbackRate.value = rate;
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(gain, t + .03); g.gain.setTargetAtTime(0, t + dur * .6, dur * .25);
+    src.connect(g).connect(dest); src.start(t, Math.random() * (buf.duration - dur - .1)); src.stop(t + dur + .3);
+  }
   dump(x, y, z, vol, gravel) {
     if (!this.c) return;
-    const p = this.at(x, y, z, 10), k = Math.min(1, .3 + vol * .25);
-    this.burst(this.brown, p, { gain: .9 * k, attack: .04, decay: .5 + vol * .2, f: 260 });
-    this.burst(gravel ? this.crackleDense : this.pink, p, { gain: (gravel ? .7 : .35) * k, attack: .03, decay: .4 + vol * .15, type: gravel ? 'highpass' : 'lowpass', f: gravel ? 1200 : 900 });
+    const p = this.at(x, y, z, 10), k = Math.min(1, .35 + vol * .22), dur = .5 + Math.min(1.2, vol * .3);
+    this.slice(gravel ? this.pourGravel : this.pourSoil, p, .9 * k, dur, .9 + Math.random() * .2);
+    this.burst(this.brown, p, { gain: .8 * k, attack: .03, decay: .35 + vol * .1, f: 180 });
   }
   scoop(x, y, z, gravel) {
     if (!this.c) return;
     const p = this.at(x, y, z, 8);
-    this.burst(this.brown, p, { gain: .6, attack: .02, decay: .35, f: 420, type: 'bandpass', q: .8 });
-    if (gravel) this.burst(this.crackleDense, p, { gain: .5, attack: .01, decay: .3, type: 'highpass', f: 1500 });
+    this.slice(gravel ? this.pourGravel : this.pourSoil, p, .7, .45, .8);
+    this.burst(this.brown, p, { gain: .5, attack: .02, decay: .3, f: 300 });
   }
   clang(x, y, z, f0 = 140, amp = .4) {
     if (!this.c) return;
@@ -236,9 +317,9 @@ export class Sound {
     const w = this.loop(this.brown, .9), wl = this.filt('lowpass', 380, .4); this.windG = this.gain(.05); w.connect(wl).connect(this.windG).connect(this.amb);
     const lv = this.loop(this.white), lb = this.filt('bandpass', 3800, .6); this.leafG = this.gain(.008); lv.connect(lb).connect(this.leafG).connect(this.amb);
     this.riverPan = this.panner(14); this.riverPan.connect(this.amb);
-    const r1 = this.loop(this.white), rl = this.filt('lowpass', 2200, .5), rh = this.filt('highpass', 250, .5); this.riverG = this.gain(0);
-    r1.connect(rl).connect(rh).connect(this.riverG).connect(this.riverPan);
-    const r2 = this.loop(this.crackle, .6), rb = this.filt('bandpass', 900, 1.2); this.bubbleG = this.gain(0); r2.connect(rb).connect(this.bubbleG).connect(this.riverPan);
+    const r1 = this.loop(this.stream), rh = this.filt('highpass', 150, .5); this.riverG = this.gain(0);
+    r1.connect(rh).connect(this.riverG).connect(this.riverPan);
+    const r2 = this.loop(this.stream, .73), rl = this.filt('lowpass', 900, .5); this.bubbleG = this.gain(0); r2.connect(rl).connect(this.bubbleG).connect(this.riverPan);
   }
   // river: {x,y,z, amount 0..1}, wind 0..1
   updateAmbient(dt, cam, river) {
@@ -250,7 +331,7 @@ export class Sound {
     this.leafG.gain.setTargetAtTime(.004 + gust * .012, t, .5);
     if (river) {
       this.setPos(this.riverPan, river.x, river.y, river.z);
-      this.riverG.gain.setTargetAtTime(river.amount * .16, t, .3);
+      this.riverG.gain.setTargetAtTime(river.amount * .35, t, .3);
       this.bubbleG.gain.setTargetAtTime(river.amount * .25, t, .3);
     }
     this.nextBird -= dt;

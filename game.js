@@ -3,12 +3,12 @@
 // browser so nothing ever resets.
 import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
-import { makeTextures } from './textures.js?v=2';
-import * as MOD from './models.js?v=2';
-import { Sound } from './audio.js?v=2';
+import { makeTextures } from './textures.js?v=4';
+import * as MOD from './models.js?v=4';
+import { Sound } from './audio.js?v=4';
 
-const N = 160, NN = N * N;           // 160 x 160 cells, 1 m each
-const SAVE_KEY = 'groundwork.save.v1';
+const N = 256, NN = N * N;           // 256 x 256 cells, 1 m each
+const SAVE_KEY = 'groundwork.save.v2';   // v1 (the first, smaller valley) is left untouched in the browser
 const SPRING_Q = 4;                  // m³ of river water entering per second
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -36,21 +36,56 @@ function makeNoise(seed) {
 }
 
 // ---------------------------------------------------------------- world state
+// The valley is a 256 x 256 m grid of 1 m cells. A river runs west to east through the middle, two creeks feed it
+// (one from the north, one from the south) and a marsh sits in a hollow. The yard is south of the river; the gravel
+// pit and the logging camp are across water.
 const H = new Float32Array(NN);      // ground height
 const W = new Float32Array(NN);      // water depth
 const BED = new Float32Array(NN);    // can't dig below this
 const M = new Uint8Array(NN);        // top material: 0 grass, 1 dirt, 2 gravel
 const D = new Uint8Array(NN);        // 1 = disturbed (no grass)
 const TINT = new Float32Array(NN);   // colour variation
-const RD = new Float32Array(NN);     // distance to the original river line
+const RD = new Float32Array(NN);     // distance to the nearest original river or creek line
 const FL = new Float32Array(NN), FR = new Float32Array(NN), FU = new Float32Array(NN), FD = new Float32Array(NN);
-const SPRING = [];
-const GRAVEL = { x: 36, z: 42, r: 16, h: 8 };
-const YARD = { x0: 68, x1: 98, z0: 122, z1: 144 };
-const riverZ = x => N * .55 + Math.sin(x / 23) * 12 + Math.sin(x / 9 + 1) * 3;
-const bedLevel = x => 7 + (N - x) * .02;
+const SPRINGS = [];                  // {cells, q, cap}
+const GRAVEL = { x: 92, z: 62, r: 19, h: 9 };
+const YARD = { x0: 108, x1: 140, z0: 166, z1: 188 };
+const CAMP = { x: 212, z: 42 };
+const MARSH = { x: 214, z: 166, r: 16 };
 const inYard = (x, z, m = 0) => x > YARD.x0 - m && x < YARD.x1 + m && z > YARD.z0 - m && z < YARD.z1 + m;
 let seed = 1 + Math.floor(Math.random() * 1e6);
+
+// rivers: control points [x, z, bed level]; hw = half width of the water, bank = how far the valley sides reach
+const RIVERS = [
+  { name: 'river', hw: 5.5, bank: 15, depth: 1.8, q: 6, pts: [[-12, 100, 9.2], [30, 92, 8.9], [62, 110, 8.6], [96, 128, 8.3], [130, 119, 8.0], [165, 100, 7.6], [200, 108, 7.2], [234, 124, 6.8], [268, 120, 6.4]] },
+  { name: 'north creek', hw: 3.2, bank: 9, depth: .9, q: 5, pts: [[152, -12, 10.4], [160, 24, 9.8], [146, 56, 9.2], [153, 84, 8.6], [141, 113, 7.9]] },
+  { name: 'south creek', hw: 3, bank: 9, depth: .85, q: 4.5, pts: [[72, 268, 10.2], [60, 232, 9.7], [76, 196, 9.2], [64, 158, 8.7], [86, 125, 8.3]] },
+];
+for (const r of RIVERS) {
+  const curve = new THREE.CatmullRomCurve3(r.pts.map(([x, z]) => new THREE.Vector3(x, 0, z)));
+  const n = Math.ceil(curve.getLength() * 2);
+  r.s = curve.getSpacedPoints(n).map((p, i) => {
+    const f = i / n * (r.pts.length - 1), a = Math.floor(f), b = Math.min(r.pts.length - 1, a + 1);
+    return [p.x, p.z, lerp(r.pts[a][2], r.pts[b][2], f - a)];
+  });
+  // straight on beyond the map's edge (used for the land around the valley)
+  const s = r.s, A = s[0], B = s[3], Y = s[s.length - 4], Z = s[s.length - 1];
+  r.ends = [[A, [A[0] - B[0], A[1] - B[1]], (A[2] - B[2]) / Math.hypot(A[0] - B[0], A[1] - B[1])], [Z, [Z[0] - Y[0], Z[1] - Y[1]], (Z[2] - Y[2]) / Math.hypot(Z[0] - Y[0], Z[1] - Y[1])]];
+}
+// nearest river point anywhere (inside or outside the map): {d, bed, r}
+function riverAt(x, z) {
+  let best = { d: 1e9, bed: 0, r: null };
+  for (const r of RIVERS) {
+    for (const p of r.s) { const dx = x - p[0], dz = z - p[1]; if (Math.abs(dx) > best.d || Math.abs(dz) > best.d) continue; const d = Math.hypot(dx, dz); if (d < best.d) best = { d, bed: p[2], r }; }
+    for (const [p, dir, slope] of r.ends) {
+      const l = Math.hypot(dir[0], dir[1]), ux = dir[0] / l, uz = dir[1] / l, t = (x - p[0]) * ux + (z - p[1]) * uz;
+      if (t <= 0) continue;
+      const d = Math.abs((x - p[0]) * uz - (z - p[1]) * ux);
+      if (d < best.d) best = { d, bed: p[2] + slope * t, r };
+    }
+  }
+  return best;
+}
 
 function hAt(x, z) {
   x = clamp(x, 0, N - 1.001); z = clamp(z, 0, N - 1.001);
@@ -61,27 +96,54 @@ function hAt(x, z) {
 const cellOf = (x, z) => clamp(Math.round(z), 0, N - 1) * N + clamp(Math.round(x), 0, N - 1);
 const wAt = (x, z) => W[cellOf(x, z)];
 
-let dMinI = 0, dMaxI = N - 1, dMinJ = 0, dMaxJ = N - 1;
+// what changed: per terrain chunk (for redrawing) and per 16 m tile (for the dirt-sliding check)
+const CH = 32, NCH = Math.ceil((N - 1) / CH), TILE = 16, NT = N / TILE;
+const chunkDirty = new Uint8Array(NCH * NCH).fill(1);
+const tileLoose = new Uint8Array(NT * NT).fill(1);
+let anyDirty = true, edgeDirty = true, dirtBox = null;
 function dirty(k) {
   const i = k % N, j = (k / N) | 0;
-  if (i < dMinI) dMinI = i; if (i > dMaxI) dMaxI = i; if (j < dMinJ) dMinJ = j; if (j > dMaxJ) dMaxJ = j;
+  for (const [di, dj] of [[-2, -2], [2, -2], [-2, 2], [2, 2]]) {
+    const ci = clamp(Math.floor((i + di) / CH), 0, NCH - 1), cj = clamp(Math.floor((j + dj) / CH), 0, NCH - 1);
+    chunkDirty[cj * NCH + ci] = 1;
+  }
+  tileLoose[((j / TILE) | 0) * NT + ((i / TILE) | 0)] = 1;
+  anyDirty = true;
+  if (i < 2 || j < 2 || i > N - 3 || j > N - 3) edgeDirty = true;
+  if (!dirtBox) dirtBox = [i, i, j, j]; else { dirtBox[0] = Math.min(dirtBox[0], i); dirtBox[1] = Math.max(dirtBox[1], i); dirtBox[2] = Math.min(dirtBox[2], j); dirtBox[3] = Math.max(dirtBox[3], j); }
 }
 
 // ---------------------------------------------------------------- generation
 let noiseFn = null;
+const MARSH_LEVEL = { v: 0 };
 function generate(sd, settle) {
   const nz = makeNoise(sd), rnd = mulberry32(sd * 7 + 3);
   noiseFn = nz;
   M.fill(0); D.fill(0); W.fill(0); FL.fill(0); FR.fill(0); FU.fill(0); FD.fill(0);
+  // where the rivers are: stamp each river point into the cells around it
+  const rbed = new Float32Array(NN), rid = new Int8Array(NN).fill(-1);
+  RD.fill(1e9);
+  RIVERS.forEach((r, ri) => {
+    for (const [px, pz, bed] of r.s) {
+      const R = r.bank + 2;
+      for (let j = Math.max(0, Math.floor(pz - R)); j <= Math.min(N - 1, Math.ceil(pz + R)); j++)
+        for (let i = Math.max(0, Math.floor(px - R)); i <= Math.min(N - 1, Math.ceil(px + R)); i++) {
+          const d = Math.hypot(i - px, j - pz), k = j * N + i;
+          if (d < RD[k]) { RD[k] = d; rbed[k] = bed; rid[k] = ri; }
+        }
+    }
+  });
+  for (let k = 0; k < NN; k++) if (RD[k] > 1e8) RD[k] = 60;
   for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-    const k = j * N + i;
-    let best = 1e9;
-    for (let dx = -14; dx <= 14; dx++) { const dz = j - riverZ(i + dx); const d = dx * dx + dz * dz; if (d < best) best = d; }
-    const d = Math.sqrt(best); RD[k] = d;
-    const amp = clamp(d / 28, .35, 1);
-    const g = 11.5 + (N - i) * .02 + nz(i / 45, j / 45, 4) * 7 * amp + nz(i / 11 + 50, j / 11, 2) * 1.1;
+    const k = j * N + i, d = RD[k];
+    const amp = clamp(d / 30, .3, 1);
+    let g = 13.5 + (N - i) * .012 + (N - j) * .004 + nz(i / 55, j / 55, 4) * 8 * amp + nz(i / 13 + 50, j / 13, 2) * 1.2;
+    if (rid[k] >= 0) {
+      const r = RIVERS[rid[k]], bed = rbed[k];
+      const t = clamp((d - r.hw * .45) / (r.bank - r.hw * .45), 0, 1);
+      g = Math.min(g, bed + Math.pow(t, 1.5) * (g - bed));
+    }
     let h = g;
-    if (d < 11) { const t = d / 11, bed = bedLevel(i); h = Math.min(g, bed + t * t * (g - bed)); }
     const base = h;
     const gd = Math.hypot(i - GRAVEL.x, j - GRAVEL.z);
     if (gd < GRAVEL.r) {
@@ -91,33 +153,58 @@ function generate(sd, settle) {
     H[k] = h; BED[k] = base - 5;
     TINT[k] = nz(i / 7 + 20, j / 7 + 20, 2) + nz(i * .9, j * .9, 1) * .35;
   }
-  // flatten the yard where the machines park
-  let s = 0, n = 0;
-  for (let j = YARD.z0; j <= YARD.z1; j++) for (let i = YARD.x0; i <= YARD.x1; i++) { s += H[j * N + i]; n++; }
-  const ym = s / n;
-  for (let j = YARD.z0 - 7; j <= YARD.z1 + 7; j++) for (let i = YARD.x0 - 7; i <= YARD.x1 + 7; i++) {
-    if (i < 0 || j < 0 || i >= N || j >= N) continue;
-    const k = j * N + i;
-    const e = Math.max(YARD.x0 - i, i - YARD.x1, YARD.z0 - j, j - YARD.z1, 0);
-    let t = clamp(1 - e / 7, 0, 1); t = t * t * (3 - 2 * t);
-    H[k] = lerp(H[k], ym, t); BED[k] = Math.min(BED[k], H[k] - 5);
-    if (e === 0) { M[k] = 1; D[k] = 1; }
-  }
-  // the river
+  // flatten the yard and the camp clearing
+  const flatten = (x0, x1, z0, z1, e0) => {
+    let s = 0, n = 0;
+    for (let j = z0; j <= z1; j++) for (let i = x0; i <= x1; i++) { s += H[j * N + i]; n++; }
+    const ym = s / n;
+    for (let j = z0 - e0; j <= z1 + e0; j++) for (let i = x0 - e0; i <= x1 + e0; i++) {
+      if (i < 0 || j < 0 || i >= N || j >= N) continue;
+      const k = j * N + i, e = Math.max(x0 - i, i - x1, z0 - j, j - z1, 0);
+      let t = clamp(1 - e / e0, 0, 1); t = t * t * (3 - 2 * t);
+      H[k] = lerp(H[k], ym, t); BED[k] = Math.min(BED[k], H[k] - 5);
+      if (e === 0) { M[k] = 1; D[k] = 1; }
+    }
+  };
+  flatten(YARD.x0, YARD.x1, YARD.z0, YARD.z1, 8);
+  flatten(CAMP.x - 9, CAMP.x + 9, CAMP.z - 7, CAMP.z + 7, 7);
+  // the marsh: a hollow with a low natural berm round it, so it always holds water until someone digs it out
+  { let s = 0; for (let a = 0; a < 64; a++) s += hAt(MARSH.x + Math.cos(a / 64 * 6.283) * (MARSH.r + 4), MARSH.z + Math.sin(a / 64 * 6.283) * (MARSH.r + 4));
+    const lvl = s / 64; MARSH_LEVEL.v = lvl;
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const md = Math.hypot(i - MARSH.x, j - MARSH.z), k = j * N + i; if (md > MARSH.r + 11) continue;
+      if (md < MARSH.r) H[k] = Math.min(H[k], lvl - .25 - 1.6 * (1 - (md / MARSH.r) ** 2) + nz(i / 5, j / 5, 2) * .3);
+      else H[k] = Math.max(H[k], lvl + .55 * Math.max(0, 1 - Math.abs(md - MARSH.r - 3) / 8));
+      BED[k] = Math.min(BED[k], H[k] - 5);
+    } }
+  // water in the rivers and the marsh
   for (let k = 0; k < NN; k++) {
-    if (RD[k] < 7) { const lvl = bedLevel(k % N) + 1.3; if (lvl > H[k]) W[k] = lvl - H[k]; }
+    if (rid[k] < 0) continue;
+    const r = RIVERS[rid[k]];
+    if (RD[k] < r.hw) { const lvl = rbed[k] + r.depth; if (lvl > H[k]) W[k] = lvl - H[k]; }
   }
-  SPRING.length = 0;
-  for (let j = 0; j < N; j++) { const k = j * N + 1; if (RD[k] < 3) SPRING.push(k); }
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const k = j * N + i; if (Math.hypot(i - MARSH.x, j - MARSH.z) < MARSH.r + 2 && H[k] < MARSH_LEVEL.v - .1) W[k] = MARSH_LEVEL.v - .1 - H[k]; }
+  // springs where each river enters the map, and a small one feeding the marsh
+  SPRINGS.length = 0;
+  const edgeCells = (r, test) => { const c = []; for (let k = 0; k < NN; k++) if (rid[k] === RIVERS.indexOf(r) && RD[k] < r.hw * .8 && test(k % N, (k / N) | 0)) c.push(k); return c; };
+  SPRINGS.push({ cells: edgeCells(RIVERS[0], (i) => i === 1), q: RIVERS[0].q, cap: 3.2 });
+  SPRINGS.push({ cells: edgeCells(RIVERS[1], (i, j) => j === 1), q: RIVERS[1].q, cap: 2.5 });
+  SPRINGS.push({ cells: edgeCells(RIVERS[2], (i, j) => j === N - 2), q: RIVERS[2].q, cap: 2.5 });
+  SPRINGS.push({ cells: [cellOf(MARSH.x, MARSH.z)], q: .12, cap: 2.2 });
   makeTrees(nz, rnd);
   makeRocks(sd);
   if (settle) {
-    for (let it = 0; it < 120; it++) relax(true);
-    for (let it = 0; it < 300; it++) waterStep(.06);
+    for (let it = 0; it < 140; it++) relaxAll(true);
+    waterActive.fill(1);
+    for (let it = 0; it < 360; it++) waterStep(.06);
   }
+  tileLoose.fill(0); chunkDirty.fill(1); anyDirty = true; edgeDirty = true;
 }
 
-// ---------------------------------------------------------------- dirt sliding
+// ---------------------------------------------------------------- dirt sliding (piles find their own slope)
+// Each cell gives some of its dirt to a lower neighbour (straight or diagonal) when the slope between them is steeper
+// than loose soil can stand. Wet soil gives way sooner. Only the 16 m tiles where something changed are checked.
+const SQ2 = Math.SQRT2;
 function slide(a, b, mv, gen) {
   mv = Math.min(mv, H[a] - BED[a]);
   if (mv < .003) return false;
@@ -135,52 +222,84 @@ function slide(a, b, mv, gen) {
   }
   return true;
 }
-function pair(a, b, gen) {
+function pair(a, b, gen, dist) {
   const d = H[a] - H[b];
-  const t = (W[a] > .05 || W[b] > .05) ? .62 : .92;   // steepest a pile can stand: wet soil less
-  if (d > t) return slide(a, b, (d - t) * .22, gen);
-  if (-d > t) return slide(b, a, (-d - t) * .22, gen);
+  const t = ((W[a] > .05 || W[b] > .05) ? .62 : .9) * dist;
+  if (d > t) return slide(a, b, (d - t) * (dist > 1 ? .12 : .2), gen);
+  if (-d > t) return slide(b, a, (-d - t) * (dist > 1 ? .12 : .2), gen);
   return false;
 }
-function relax(gen) {
-  let moved = false;
-  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-    const k = j * N + i;
-    if (i < N - 1 && pair(k, k + 1, gen)) moved = true;
-    if (j < N - 1 && pair(k, k + N, gen)) moved = true;
+function relaxCell(i, j, gen) {
+  const k = j * N + i; let m = false;
+  if (i < N - 1 && pair(k, k + 1, gen, 1)) m = true;
+  if (j < N - 1 && pair(k, k + N, gen, 1)) m = true;
+  if (i < N - 1 && j < N - 1 && pair(k, k + N + 1, gen, SQ2)) m = true;
+  if (i > 0 && j < N - 1 && pair(k, k + N - 1, gen, SQ2)) m = true;
+  return m;
+}
+function relaxAll(gen) { for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) relaxCell(i, j, gen); }
+function relax() {
+  for (let t = 0; t < NT * NT; t++) {
+    if (!tileLoose[t]) continue;
+    const ti = t % NT, tj = (t / NT) | 0;
+    let moved = false;
+    for (let j = Math.max(0, tj * TILE - 1); j < Math.min(N, tj * TILE + TILE + 1); j++)
+      for (let i = Math.max(0, ti * TILE - 1); i < Math.min(N, ti * TILE + TILE + 1); i++) if (relaxCell(i, j, false)) moved = true;
+    if (!moved) tileLoose[t] = 0;
   }
-  return moved;
 }
 
-// ---------------------------------------------------------------- water
+// ---------------------------------------------------------------- water ("virtual pipes": each cell pushes water to its neighbours)
+// Only tiles that hold water, or sit next to a tile that does, are simulated.
+const waterActive = new Uint8Array(NT * NT).fill(1);
+let waterScan = 0;
+function scanWater() {
+  const has = new Uint8Array(NT * NT);
+  for (let k = 0; k < NN; k++) if (W[k] > 0) has[((k / N / TILE) | 0) * NT + (((k % N) / TILE) | 0)] = 1;
+  waterActive.fill(0);
+  for (let tj = 0; tj < NT; tj++) for (let ti = 0; ti < NT; ti++) {
+    if (!has[tj * NT + ti]) continue;
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      const a = ti + di, b = tj + dj; if (a >= 0 && b >= 0 && a < NT && b < NT) waterActive[b * NT + a] = 1;
+    }
+  }
+}
 function waterStep(dt) {
   const K = dt * 9.81, damp = .996;
-  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-    const k = j * N + i, w = W[k];
-    if (w <= 0) { FL[k] = FR[k] = FU[k] = FD[k] = 0; continue; }
-    const h = H[k] + w;
-    let l = 0, r = 0, u = 0, d = 0;
-    if (i > 0) { l = FL[k] * damp + K * (h - H[k - 1] - W[k - 1]); if (l < 0) l = 0; }
-    if (i < N - 1) { r = FR[k] * damp + K * (h - H[k + 1] - W[k + 1]); if (r < 0) r = 0; }
-    if (j > 0) { u = FU[k] * damp + K * (h - H[k - N] - W[k - N]); if (u < 0) u = 0; }
-    if (j < N - 1) { d = FD[k] * damp + K * (h - H[k + N] - W[k + N]); if (d < 0) d = 0; }
-    const s = l + r + u + d;
-    if (s > 0) { const f = Math.min(1, w / (s * dt)); l *= f; r *= f; u *= f; d *= f; }
-    FL[k] = l; FR[k] = r; FU[k] = u; FD[k] = d;
+  for (let t = 0; t < NT * NT; t++) {
+    if (!waterActive[t]) continue;
+    const i0 = (t % NT) * TILE, j0 = ((t / NT) | 0) * TILE;
+    for (let j = j0; j < j0 + TILE; j++) for (let i = i0; i < i0 + TILE; i++) {
+      const k = j * N + i, w = W[k];
+      if (w <= 0) { FL[k] = FR[k] = FU[k] = FD[k] = 0; continue; }
+      const h = H[k] + w;
+      let l = 0, r = 0, u = 0, d = 0;
+      if (i > 0) { l = FL[k] * damp + K * (h - H[k - 1] - W[k - 1]); if (l < 0) l = 0; }
+      if (i < N - 1) { r = FR[k] * damp + K * (h - H[k + 1] - W[k + 1]); if (r < 0) r = 0; }
+      if (j > 0) { u = FU[k] * damp + K * (h - H[k - N] - W[k - N]); if (u < 0) u = 0; }
+      if (j < N - 1) { d = FD[k] * damp + K * (h - H[k + N] - W[k + N]); if (d < 0) d = 0; }
+      const s = l + r + u + d;
+      if (s > 0) { const f = Math.min(1, w / (s * dt)); l *= f; r *= f; u *= f; d *= f; }
+      FL[k] = l; FR[k] = r; FU[k] = u; FD[k] = d;
+    }
   }
-  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-    const k = j * N + i;
-    let inf = 0;
-    if (i > 0) inf += FR[k - 1];
-    if (i < N - 1) inf += FL[k + 1];
-    if (j > 0) inf += FD[k - N];
-    if (j < N - 1) inf += FU[k + N];
-    let w = W[k] + dt * (inf - FL[k] - FR[k] - FU[k] - FD[k]);
-    if (w < .0005) w = 0;
-    if (i >= N - 2) w *= Math.max(0, 1 - 4 * dt);   // the river leaves the valley here
-    W[k] = w;
+  for (let t = 0; t < NT * NT; t++) {
+    if (!waterActive[t]) continue;
+    const i0 = (t % NT) * TILE, j0 = ((t / NT) | 0) * TILE;
+    for (let j = j0; j < j0 + TILE; j++) for (let i = i0; i < i0 + TILE; i++) {
+      const k = j * N + i;
+      let inf = 0;
+      if (i > 0) inf += FR[k - 1];
+      if (i < N - 1) inf += FL[k + 1];
+      if (j > 0) inf += FD[k - N];
+      if (j < N - 1) inf += FU[k + N];
+      let w = W[k] + dt * (inf - FL[k] - FR[k] - FU[k] - FD[k]);
+      if (w < .0005) w = 0;
+      if (i >= N - 2) w *= Math.max(0, 1 - 4 * dt);   // the river leaves the valley here
+      W[k] = w;
+    }
   }
-  for (const k of SPRING) if (W[k] < 3) W[k] += SPRING_Q * dt / SPRING.length;
+  for (const s of SPRINGS) { const add = s.q * dt / s.cells.length; for (const k of s.cells) if (W[k] < s.cap) W[k] += add; }
 }
 
 // ---------------------------------------------------------------- trees
@@ -188,12 +307,12 @@ const trees = [];
 const treeGrid = new Int16Array(NN).fill(-1);
 function makeTrees(nz, rnd) {
   trees.length = 0; treeGrid.fill(-1);
-  for (let a = 0; a < 7000 && trees.length < 520; a++) {
+  for (let a = 0; a < 20000 && trees.length < 1500; a++) {
     const x = 2 + rnd() * (N - 4), z = 2 + rnd() * (N - 4);
     const k = cellOf(x, z);
-    if (RD[k] < 12.5 || M[k] === 2 || inYard(x, z, 9)) continue;
-    if (Math.hypot(x - GRAVEL.x, z - GRAVEL.z) < GRAVEL.r + 2) continue;
-    if (nz(x / 22 + 7, z / 22 + 3, 2) < -.04 && rnd() < .85) continue;
+    if (RD[k] < 10 || M[k] === 2 || inYard(x, z, 10)) continue;
+    if (Math.hypot(x - GRAVEL.x, z - GRAVEL.z) < GRAVEL.r + 3 || Math.hypot(x - CAMP.x, z - CAMP.z) < 14 || Math.hypot(x - MARSH.x, z - MARSH.z) < MARSH.r + 4) continue;
+    if (nz(x / 26 + 7, z / 26 + 3, 2) < -.02 && rnd() < .88) continue;
     const i = k % N, j = (k / N) | 0;
     let ok = true;
     for (let dj = -2; dj <= 2 && ok; dj++) for (let di = -2; di <= 2; di++) {
@@ -202,7 +321,7 @@ function makeTrees(nz, rnd) {
     }
     if (!ok) continue;
     treeGrid[k] = trees.length;
-    trees.push({ x, z, k, s: .75 + rnd() * .6, r: rnd() * 6.28, st: 0, a: 0, dx: 1, dz: 0, t: 0, g: 1, y: 0, dirty: true, hue: rnd() });
+    trees.push({ x, z, k, s: .75 + rnd() * .55, r: rnd() * 6.28, st: 0, a: 0, dx: 1, dz: 0, t: 0, g: 1, y: 0, dirty: true, hue: rnd() });
   }
 }
 function treeFall(t, fx, fz) {
@@ -294,9 +413,9 @@ const isTouch = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in wind
 let quality = localStorage.getItem('groundwork.quality');
 if (!['high', 'medium', 'low'].includes(quality)) quality = isTouch ? 'medium' : 'high';
 const QS = {
-  high: { shadow: 2048, grass: 20000, grassR: 44, dpr: 2, soft: true, near: 550, far: 2400 },
-  medium: { shadow: 1536, grass: 8000, grassR: 30, dpr: 1.5, soft: true, near: 280, far: 1300 },
-  low: { shadow: 1024, grass: 0, grassR: 0, dpr: 1, soft: false, near: 120, far: 600 },
+  high: { shadow: 4096, shadowR: 75, grass: 22000, grassR: 46, dpr: 2, soft: true, near: 900, far: 3200, detail: 2, detailR: 95 },
+  medium: { shadow: 2048, shadowR: 60, grass: 9000, grassR: 32, dpr: 1.5, soft: true, near: 450, far: 1800, detail: 2, detailR: 60 },
+  low: { shadow: 1024, shadowR: 45, grass: 0, grassR: 0, dpr: 1, soft: false, near: 160, far: 800, detail: 1, detailR: 0 },
 };
 const Q = QS[quality];
 const T = makeTextures(quality);
@@ -314,8 +433,8 @@ renderer.toneMappingExposure = .6;
 { const an = Math.min(8, renderer.capabilities.getMaxAnisotropy()); for (const k in T) if (T[k] && T[k].isTexture) T[k].anisotropy = an; }
 const scene = new THREE.Scene();
 const FOG = new THREE.Color(0xb7c4cf);
-scene.fog = new THREE.FogExp2(FOG, .0019);
-const camera = new THREE.PerspectiveCamera(55, 1, .1, 9000);
+scene.fog = new THREE.FogExp2(FOG, .00095);
+const camera = new THREE.PerspectiveCamera(55, 1, .1, 12000);
 const SUN_DIR = new THREE.Vector3(-.5, .56, .66).normalize();
 function makeSky(scale) {
   const s = new Sky(); s.scale.setScalar(scale);
@@ -323,7 +442,7 @@ function makeSky(scale) {
   u.turbidity.value = 4.5; u.rayleigh.value = 1.25; u.mieCoefficient.value = .0045; u.mieDirectionalG.value = .82; u.sunPosition.value.copy(SUN_DIR);
   return s;
 }
-const sky = makeSky(7000); sky.position.set(N / 2, 0, N / 2); scene.add(sky);
+const sky = makeSky(10000); sky.position.set(N / 2, 0, N / 2); scene.add(sky);
 {
   const pm = new THREE.PMREMGenerator(renderer), es = new THREE.Scene();
   es.add(makeSky(1000));
@@ -334,12 +453,12 @@ const sky = makeSky(7000); sky.position.set(N / 2, 0, N / 2); scene.add(sky);
 T.clouds.repeat.set(3, 3);
 const clouds = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000).rotateX(Math.PI / 2),
   new THREE.MeshBasicMaterial({ map: T.clouds, transparent: true, opacity: .75, depthWrite: false, fog: false, color: new THREE.Color(1.5, 1.5, 1.5) }));
-clouds.position.set(N / 2, 900, N / 2); clouds.renderOrder = -1; scene.add(clouds);
+clouds.position.set(N / 2, 1100, N / 2); clouds.renderOrder = -1; scene.add(clouds);
 const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x4d4030, .45);
 const sun = new THREE.DirectionalLight(0xfff0dc, 4.4);
 sun.castShadow = true;
 sun.shadow.mapSize.set(Q.shadow, Q.shadow);
-Object.assign(sun.shadow.camera, { left: -48, right: 48, top: 48, bottom: -48, near: 1, far: 420 });
+Object.assign(sun.shadow.camera, { left: -Q.shadowR, right: Q.shadowR, top: Q.shadowR, bottom: -Q.shadowR, near: 1, far: 500 });
 sun.shadow.bias = -.0004; sun.shadow.normalBias = .05;
 scene.add(hemi, sun, sun.target);
 
@@ -380,23 +499,6 @@ function terrainMaterial() {
   m.customProgramCacheKey = () => 'gw-terrain';
   return m;
 }
-const terrainMat = terrainMaterial();
-const index = new Uint32Array((N - 1) * (N - 1) * 6);
-{ let p = 0; for (let j = 0; j < N - 1; j++) for (let i = 0; i < N - 1; i++) { const a = j * N + i, b = a + 1, c = a + N, d = c + 1; index.set([a, c, b, b, c, d], p); p += 6; } }
-const idxAttr = new THREE.BufferAttribute(index, 1);
-const tPos = new Float32Array(NN * 3), tNor = new Float32Array(NN * 3), tAO = new Float32Array(NN * 3), tMat = new Float32Array(NN * 4);
-const wPos = new Float32Array(NN * 3), wDep = new Float32Array(NN), wFlow = new Float32Array(NN * 2);
-for (let k = 0; k < NN; k++) { tPos[k * 3] = wPos[k * 3] = k % N; tPos[k * 3 + 2] = wPos[k * 3 + 2] = (k / N) | 0; tNor[k * 3 + 1] = 1; }
-const tGeo = new THREE.BufferGeometry();
-tGeo.setIndex(idxAttr);
-tGeo.setAttribute('position', new THREE.BufferAttribute(tPos, 3).setUsage(THREE.DynamicDrawUsage));
-tGeo.setAttribute('normal', new THREE.BufferAttribute(tNor, 3).setUsage(THREE.DynamicDrawUsage));
-tGeo.setAttribute('color', new THREE.BufferAttribute(tAO, 3).setUsage(THREE.DynamicDrawUsage));
-tGeo.setAttribute('aMat', new THREE.BufferAttribute(tMat, 4).setUsage(THREE.DynamicDrawUsage));
-const terrain = new THREE.Mesh(tGeo, terrainMat);
-terrain.receiveShadow = true; terrain.castShadow = true; terrain.frustumCulled = false;
-scene.add(terrain);
-
 // ---------------------------------------------------------------- water (ripples that follow the current, reflections, foam)
 function waterMaterial() {
   return new THREE.ShaderMaterial({
@@ -453,30 +555,19 @@ function waterMaterial() {
       }`,
   });
 }
+const terrainMat = terrainMaterial();
 const waterMat = waterMaterial(); waterMat.uniforms.tN.value = T.water;
-const wGeo = new THREE.BufferGeometry();
-wGeo.setIndex(idxAttr);
-wGeo.setAttribute('position', new THREE.BufferAttribute(wPos, 3).setUsage(THREE.DynamicDrawUsage));
-wGeo.setAttribute('aW', new THREE.BufferAttribute(wDep, 1).setUsage(THREE.DynamicDrawUsage));
-wGeo.setAttribute('aFlow', new THREE.BufferAttribute(wFlow, 2).setUsage(THREE.DynamicDrawUsage));
-const water = new THREE.Mesh(wGeo, waterMat);
-water.frustumCulled = false; water.renderOrder = 2;
-scene.add(water);
 
-let ringDirty = true, grassDirty = true;
-function updateTerrain() {
-  if (dMaxI < dMinI) return false;
-  const i0 = Math.max(0, dMinI - 2), i1 = Math.min(N - 1, dMaxI + 2), j0 = Math.max(0, dMinJ - 2), j1 = Math.min(N - 1, dMaxJ + 2);
+// ---------------------------------------------------------------- how each cell looks (material mix, wetness, shading in hollows)
+const cMat = new Float32Array(NN * 4), cAO = new Float32Array(NN).fill(1);
+function cellLook(i0, i1, j0, j1) {
+  i0 = Math.max(0, i0); j0 = Math.max(0, j0); i1 = Math.min(N - 1, i1); j1 = Math.min(N - 1, j1);
   for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
     const k = j * N + i, h = H[k];
-    tPos[k * 3 + 1] = h;
     const hl = H[i > 0 ? k - 1 : k], hr = H[i < N - 1 ? k + 1 : k], hd = H[j > 0 ? k - N : k], hu = H[j < N - 1 ? k + N : k];
-    const nx = (hl - hr) * (i > 0 && i < N - 1 ? 1 : 2), nz = (hd - hu) * (j > 0 && j < N - 1 ? 1 : 2), l = Math.hypot(nx, 2, nz);
-    tNor[k * 3] = nx / l; tNor[k * 3 + 1] = 2 / l; tNor[k * 3 + 2] = nz / l;
     const lap = (hl + hr + hd + hu) * .25 - h;
     const h2 = (H[i > 1 ? k - 2 : k] + H[i < N - 2 ? k + 2 : k] + H[j > 1 ? k - 2 * N : k] + H[j < N - 2 ? k + 2 * N : k]) * .25 - h;
-    const ao = clamp(1 - Math.max(0, lap) * .45 - Math.max(0, h2) * .16 + Math.max(0, -lap) * .05, .5, 1.05);
-    tAO[k * 3] = tAO[k * 3 + 1] = tAO[k * 3 + 2] = ao;
+    cAO[k] = clamp(1 - Math.max(0, lap) * .4 - Math.max(0, h2) * .15 + Math.max(0, -lap) * .05, .52, 1.05);
     let g = 0, d = 0, r = 0;
     if (M[k] === 2) r = 1; else if (M[k] === 1 || D[k]) d = 1; else g = 1;
     const sl = Math.abs(hl - hr) + Math.abs(hd - hu);
@@ -486,40 +577,177 @@ function updateTerrain() {
     let wet = 0;
     if (w > .02) wet = clamp(.6 + w * .3, 0, 1);
     else if ((i > 0 && W[k - 1] > .02) || (i < N - 1 && W[k + 1] > .02) || (j > 0 && W[k - N] > .02) || (j < N - 1 && W[k + N] > .02)) wet = .45;
-    tMat[k * 4] = g; tMat[k * 4 + 1] = d; tMat[k * 4 + 2] = r; tMat[k * 4 + 3] = wet;
+    cMat[k * 4] = g; cMat[k * 4 + 1] = d; cMat[k * 4 + 2] = r; cMat[k * 4 + 3] = wet;
   }
-  for (const a of ['position', 'normal', 'color', 'aMat']) tGeo.attributes[a].needsUpdate = true;
-  if (i0 === 0 || j0 === 0 || i1 === N - 1 || j1 === N - 1) ringDirty = true;
-  if (grassAt && i1 > grassAt[0] - Q.grassR && i0 < grassAt[0] + Q.grassR && j1 > grassAt[1] - Q.grassR && j0 < grassAt[1] + Q.grassR) grassDirty = true;
-  dMinI = N; dMaxI = -1; dMinJ = N; dMaxJ = -1;
-  return true;
 }
-let wetTick = 0;
-function updateWater() {
-  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-    const k = j * N + i, w = W[k];
+const hc = (i, j) => H[clamp(j, 0, N - 1) * N + clamp(i, 0, N - 1)];
+const cr = (p0, p1, p2, p3, t) => .5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t * t * t);
+// the ground drawn as a smooth surface through the cell heights (so dug holes and piles come out rounded)
+function hSmooth(x, z) {
+  const i = Math.floor(x), j = Math.floor(z), fx = x - i, fz = z - j;
+  if (fx === 0 && fz === 0) return hc(i, j);
+  const row = q => fx === 0 ? hc(i, j + q) : cr(hc(i - 1, j + q), hc(i, j + q), hc(i + 1, j + q), hc(i + 2, j + q), fx);
+  if (fz === 0) return row(0);
+  return cr(row(-1), row(0), row(1), row(2), fz);
+}
+const ih = (i, j) => { let h = (Math.imul(i, 374761393) + Math.imul(j, 668265263)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296 - .5; };
+function vnoise(x, z) {
+  const i = Math.floor(x), j = Math.floor(z), fx = x - i, fz = z - j, u = fx * fx * (3 - 2 * fx), v = fz * fz * (3 - 2 * fz);
+  const a = ih(i, j), b = ih(i + 1, j), c = ih(i, j + 1), d = ih(i + 1, j + 1);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+const _mb = new Float32Array(4);
+function matAt(x, z) {
+  const i = clamp(Math.floor(x), 0, N - 2), j = clamp(Math.floor(z), 0, N - 2), fx = clamp(x - i, 0, 1), fz = clamp(z - j, 0, 1);
+  const k = j * N + i;
+  for (let c = 0; c < 4; c++) {
+    const a = cMat[k * 4 + c], b = cMat[(k + 1) * 4 + c], d = cMat[(k + N) * 4 + c], e = cMat[(k + N + 1) * 4 + c];
+    _mb[c] = a + (b - a) * fx + (d - a) * fz + (a - b - d + e) * fx * fz;
+  }
+  return _mb;
+}
+function aoAt(x, z) {
+  const i = clamp(Math.floor(x), 0, N - 2), j = clamp(Math.floor(z), 0, N - 2), fx = clamp(x - i, 0, 1), fz = clamp(z - j, 0, 1), k = j * N + i;
+  const a = cAO[k], b = cAO[k + 1], d = cAO[k + N], e = cAO[k + N + 1];
+  return a + (b - a) * fx + (d - a) * fz + (a - b - d + e) * fx * fz;
+}
+// lumps and clods on bare soil and gravel; grass stays smooth
+function lump(x, z, md, mr) {
+  if (md + mr < .02) return 0;
+  const n = vnoise(x * 1.7, z * 1.7) * .65 + vnoise(x * 4.3 + 7.1, z * 4.3 - 2.3) * .35;
+  return n * (md * .1 + mr * .13);
+}
+function hDraw(x, z, F) {
+  const m = matAt(x, z);
+  return (F === 1 ? hc(Math.round(x), Math.round(z)) : hSmooth(x, z)) + lump(x, z, m[1], m[2] * (1 - m[3] * .5));
+}
+
+// ---------------------------------------------------------------- terrain chunks: near the camera they are drawn at half a metre
+const tchunks = [];
+for (let cj = 0; cj < NCH; cj++) for (let ci = 0; ci < NCH; ci++) {
+  const c = { ci, cj, i0: ci * CH, j0: cj * CH, i1: Math.min(ci * CH + CH, N - 1), j1: Math.min(cj * CH + CH, N - 1), lod: 0, mesh: null, wmesh: null, wet: false };
+  tchunks.push(c);
+}
+function chunkGeo(c, F) {
+  const nx = (c.i1 - c.i0) * F + 1, nz = (c.j1 - c.j0) * F + 1, ng = nx * nz;
+  const border = [];
+  for (let a = 0; a < nx; a++) border.push(a);
+  for (let b = 1; b < nz; b++) border.push(b * nx + nx - 1);
+  for (let a = nx - 2; a >= 0; a--) border.push((nz - 1) * nx + a);
+  for (let b = nz - 2; b >= 0; b--) border.push(b * nx);
+  const nv = ng + border.length;
+  const idx = [];
+  for (let b = 0; b < nz - 1; b++) for (let a = 0; a < nx - 1; a++) { const p = b * nx + a, q = p + 1, r = p + nx, s = r + 1; idx.push(p, r, q, q, r, s); }
+  for (let e = 0; e < border.length; e++) {   // skirts hide the gaps where a detailed chunk meets a plain one
+    const a = border[e], b = border[(e + 1) % border.length], sa = ng + e, sb = ng + (e + 1) % border.length;
+    idx.push(a, sa, b, b, sa, sb, a, b, sa, b, sb, sa);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setIndex(idx);
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
+  g.setAttribute('aMat', new THREE.BufferAttribute(new Float32Array(nv * 4), 4));
+  g.userData = { nx, nz, ng, border, F };
+  return g;
+}
+function fillChunk(c) {
+  const g = c.mesh.geometry, { nx, nz, ng, border, F } = g.userData;
+  const P = g.attributes.position.array, Nr = g.attributes.normal.array, C = g.attributes.color.array, A = g.attributes.aMat.array;
+  const ex = nx + 2, hh = new Float32Array(ex * (nz + 2)), st = 1 / F;
+  for (let b = -1; b <= nz; b++) for (let a = -1; a <= nx; a++) hh[(b + 1) * ex + a + 1] = hDraw(c.i0 + a * st, c.j0 + b * st, F);
+  for (let b = 0; b < nz; b++) for (let a = 0; a < nx; a++) {
+    const v = b * nx + a, x = c.i0 + a * st, z = c.j0 + b * st, h = hh[(b + 1) * ex + a + 1];
+    P[v * 3] = x; P[v * 3 + 1] = h; P[v * 3 + 2] = z;
+    const dx = (hh[(b + 1) * ex + a] - hh[(b + 1) * ex + a + 2]) / (2 * st), dz = (hh[b * ex + a + 1] - hh[(b + 2) * ex + a + 1]) / (2 * st);
+    const l = Math.hypot(dx, 1, dz); Nr[v * 3] = dx / l; Nr[v * 3 + 1] = 1 / l; Nr[v * 3 + 2] = dz / l;
+    const ao = aoAt(x, z); C[v * 3] = C[v * 3 + 1] = C[v * 3 + 2] = ao;
+    const m = matAt(x, z); A[v * 4] = m[0]; A[v * 4 + 1] = m[1]; A[v * 4 + 2] = m[2]; A[v * 4 + 3] = m[3];
+  }
+  border.forEach((v, e) => {
+    const s = ng + e;
+    P[s * 3] = P[v * 3]; P[s * 3 + 1] = P[v * 3 + 1] - 1.2; P[s * 3 + 2] = P[v * 3 + 2];
+    Nr[s * 3] = Nr[v * 3]; Nr[s * 3 + 1] = Nr[v * 3 + 1]; Nr[s * 3 + 2] = Nr[v * 3 + 2];
+    C[s * 3] = C[s * 3 + 1] = C[s * 3 + 2] = C[v * 3] * .8;
+    for (let q = 0; q < 4; q++) A[s * 4 + q] = A[v * 4 + q];
+  });
+  for (const a of ['position', 'normal', 'color', 'aMat']) g.attributes[a].needsUpdate = true;
+  g.computeBoundingSphere();
+}
+function chunkWaterGeo(c) {
+  const nx = c.i1 - c.i0 + 1, nz = c.j1 - c.j0 + 1, idx = [];
+  for (let b = 0; b < nz - 1; b++) for (let a = 0; a < nx - 1; a++) { const p = b * nx + a, q = p + 1, r = p + nx, s = r + 1; idx.push(p, r, q, q, r, s); }
+  const g = new THREE.BufferGeometry(); g.setIndex(idx);
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nx * nz * 3), 3).setUsage(THREE.DynamicDrawUsage));
+  g.setAttribute('aW', new THREE.BufferAttribute(new Float32Array(nx * nz), 1).setUsage(THREE.DynamicDrawUsage));
+  g.setAttribute('aFlow', new THREE.BufferAttribute(new Float32Array(nx * nz * 2), 2).setUsage(THREE.DynamicDrawUsage));
+  g.userData = { nx, nz };
+  return g;
+}
+function fillWater(c) {
+  const g = c.wmesh.geometry, { nx, nz } = g.userData;
+  const P = g.attributes.position.array, Dp = g.attributes.aW.array, Fl = g.attributes.aFlow.array;
+  let wet = false;
+  for (let b = 0; b < nz; b++) for (let a = 0; a < nx; a++) {
+    const v = b * nx + a, i = c.i0 + a, j = c.j0 + b, k = j * N + i, w = W[k];
+    P[v * 3] = i; P[v * 3 + 2] = j;
     if (w > .012) {
-      wPos[k * 3 + 1] = H[k] + w; wDep[k] = w;
+      wet = true;
+      P[v * 3 + 1] = H[k] + w; Dp[v] = w;
       let vx = (FR[k] - FL[k] + (i > 0 ? FR[k - 1] : 0) - (i < N - 1 ? FL[k + 1] : 0)) * .5;
       let vz = (FD[k] - FU[k] + (j > 0 ? FD[k - N] : 0) - (j < N - 1 ? FU[k + N] : 0)) * .5;
       const dd = Math.max(w, .08); vx /= dd; vz /= dd;
       const sp = Math.hypot(vx, vz); if (sp > 2.5) { vx *= 2.5 / sp; vz *= 2.5 / sp; }
-      wFlow[k * 2] = vx; wFlow[k * 2 + 1] = vz;
+      Fl[v * 2] = vx; Fl[v * 2 + 1] = vz;
     } else {
       let lvl = -1e9;
       if (i > 0 && W[k - 1] > .012) lvl = Math.max(lvl, H[k - 1] + W[k - 1]);
       if (i < N - 1 && W[k + 1] > .012) lvl = Math.max(lvl, H[k + 1] + W[k + 1]);
       if (j > 0 && W[k - N] > .012) lvl = Math.max(lvl, H[k - N] + W[k - N]);
       if (j < N - 1 && W[k + N] > .012) lvl = Math.max(lvl, H[k + N] + W[k + N]);
-      if (lvl > -1e8) { wPos[k * 3 + 1] = lvl; wDep[k] = Math.max(-2, lvl - H[k]); }
-      else { wPos[k * 3 + 1] = H[k] - .3; wDep[k] = -1; }
-      wFlow[k * 2] = wFlow[k * 2 + 1] = 0;
+      if (lvl > -1e8) { P[v * 3 + 1] = lvl; Dp[v] = Math.max(-2, lvl - H[k]); } else { P[v * 3 + 1] = H[k] - .3; Dp[v] = -1; }
+      Fl[v * 2] = Fl[v * 2 + 1] = 0;
     }
   }
-  wGeo.attributes.position.needsUpdate = true; wGeo.attributes.aW.needsUpdate = true; wGeo.attributes.aFlow.needsUpdate = true;
-  // water darkens the bank, so recolour the whole ground now and then
-  if (++wetTick % 40 === 0) { dMinI = Math.min(dMinI, 0); dMaxI = N - 1; dMinJ = Math.min(dMinJ, 0); dMaxJ = N - 1; }
+  c.wet = wet; c.wmesh.visible = wet;
+  if (wet) { g.attributes.position.needsUpdate = true; g.attributes.aW.needsUpdate = true; g.attributes.aFlow.needsUpdate = true; }
 }
+const chunkTiles = c => { const t = []; for (let tj = Math.floor(c.j0 / TILE); tj <= Math.min(NT - 1, Math.floor(c.j1 / TILE)); tj++) for (let ti = Math.floor(c.i0 / TILE); ti <= Math.min(NT - 1, Math.floor(c.i1 / TILE)); ti++) t.push(tj * NT + ti); return t; };
+for (const c of tchunks) c.tiles = chunkTiles(c);
+let wetRecolor = 0;
+const _cv = new THREE.Vector3();
+// rebuild what changed (nearest first, a few chunks a frame) and refresh the water
+function updateTerrainChunks(dt, focus, all = false) {
+  wetRecolor -= dt;
+  if (wetRecolor <= 0) { wetRecolor = 3; for (const c of tchunks) if (c.wet) chunkDirty[c.cj * NCH + c.ci] = 1; }
+  const todo = [];
+  for (const c of tchunks) {
+    const cx = (c.i0 + c.i1) / 2, cz = (c.j0 + c.j1) / 2, d = Math.hypot(cx - focus.x, cz - focus.z);
+    const lod = Q.detail > 1 && d < Q.detailR ? 2 : 1;
+    if (lod !== c.lod || chunkDirty[c.cj * NCH + c.ci]) todo.push([d, c, lod]);
+  }
+  todo.sort((a, b) => a[0] - b[0]);
+  let budget = all ? 1e9 : 3.5;
+  for (const [, c, lod] of todo) {
+    if (budget <= 0) break;
+    budget -= lod === 2 ? 1 : .35;
+    cellLook(c.i0 - 2, c.i1 + 2, c.j0 - 2, c.j1 + 2);
+    if (lod !== c.lod || !c.mesh) {
+      if (c.mesh) { scene.remove(c.mesh); c.mesh.geometry.dispose(); }
+      c.mesh = new THREE.Mesh(chunkGeo(c, lod), terrainMat);
+      c.mesh.castShadow = true; c.mesh.receiveShadow = true;
+      scene.add(c.mesh); c.lod = lod;
+    }
+    fillChunk(c);
+    chunkDirty[c.cj * NCH + c.ci] = 0;
+  }
+  for (const c of tchunks) {
+    if (!c.wmesh) { c.wmesh = new THREE.Mesh(chunkWaterGeo(c), waterMat); c.wmesh.renderOrder = 2; c.wmesh.frustumCulled = false; scene.add(c.wmesh); fillWater(c); continue; }
+    if (all || c.tiles.some(t => waterActive[t])) fillWater(c);
+    else if (c.wet) { c.wet = false; c.wmesh.visible = false; }
+  }
+}
+let grassDirty = true;
 
 // ---------------------------------------------------------------- the land beyond the work site (out to the horizon)
 const EDGE = [];
@@ -527,7 +755,7 @@ for (let i = 0; i < N; i++) EDGE.push(i);
 for (let j = 0; j < N; j++) EDGE.push(j * N + N - 1);
 for (let i = N - 1; i >= 0; i--) EDGE.push((N - 1) * N + i);
 for (let j = N - 1; j >= 0; j--) EDGE.push(j * N);
-const RING_R = [0, 1.5, 4, 8, 14, 24, 40, 65, 100, 160, 250, 400, 650, 1000, 1600, 2600];
+const RING_R = [0, 1.5, 4, 8, 14, 24, 40, 65, 100, 160, 250, 400, 650, 1000, 1600, 2400, 3400, 4600];
 const RN = RING_R.length, RP = EDGE.length;
 const RDIR = EDGE.map(k => { const dx = k % N - (N - 1) / 2, dz = ((k / N) | 0) - (N - 1) / 2, l = Math.hypot(dx, dz); return [dx / l, dz / l]; });
 const rPos = new Float32Array(RP * RN * 3), rAO = new Float32Array(RP * RN * 3).fill(1), rMat = new Float32Array(RP * RN * 4);
@@ -541,29 +769,45 @@ rwGeo.setAttribute('position', new THREE.BufferAttribute(rwPos, 3)); rwGeo.setAt
 const ringLand = new THREE.Mesh(rGeo, terrainMat); ringLand.receiveShadow = true; ringLand.frustumCulled = false; scene.add(ringLand);
 const ringWater = new THREE.Mesh(rwGeo, waterMat); ringWater.frustumCulled = false; ringWater.renderOrder = 2; scene.add(ringWater);
 function farH(x, z, R) {
-  const d = Math.abs(z - riverZ(x)), amp = clamp(d / 28, .35, 1);
-  let h = 11.5 + (N - x) * .02 + noiseFn(x / 45, z / 45, 4) * 7 * amp + noiseFn(x / 11 + 50, z / 11, 2) * 1.1;
-  h += smooth(60, 800, R) * (16 + noiseFn(x / 230 + 9, z / 230 - 4, 4) * 70);
-  const wd = 11 + R * .04;
-  if (d < wd) { const bed = bedLevel(x); h = Math.min(h, bed + (d / wd) ** 2 * (h - bed)); }
+  const rv = riverAt(x, z), d = rv.d, amp = clamp(d / 30, .3, 1);
+  let h = 13.5 + (N - x) * .012 + (N - z) * .004 + noiseFn(x / 55, z / 55, 4) * 8 * amp + noiseFn(x / 13 + 50, z / 13, 2) * 1.2;
+  h += smooth(80, 900, R) * (16 + noiseFn(x / 230 + 9, z / 230 - 4, 4) * 60);
+  h += smooth(900, 3000, R) * (90 + noiseFn(x / 900 - 3, z / 900 + 5, 4) * 420);
+  if (rv.r) {
+    const wd = rv.r.bank + R * .05;
+    if (d < wd) { const t = clamp((d - rv.r.hw * .45) / (wd - rv.r.hw * .45), 0, 1); h = Math.min(h, rv.bed + Math.pow(t, 1.5) * (h - rv.bed)); }
+  }
   return h;
 }
-const ringH = (k, x, z, R) => R === 0 ? H[k] : lerp(H[k], farH(x, z, R), smooth(0, 30, R));
-function riverLevel(x, z) { return (x < 0 || x > N - 1) && Math.abs(z - riverZ(x)) < 8 ? bedLevel(x) + 1.3 : null; }
+let rFar = null, rLvl = null;
+function ringPrep() {
+  rFar = new Float32Array(RP * RN); rLvl = new Float32Array(RP * RN).fill(-1e9);
+  for (let e = 0; e < RP; e++) {
+    const k = EDGE[e], x0 = k % N, z0 = (k / N) | 0, [dx, dz] = RDIR[e];
+    for (let r = 1; r < RN; r++) {
+      const R = RING_R[r], x = x0 + dx * R, z = z0 + dz * R, v = e * RN + r;
+      rFar[v] = farH(x, z, R);
+      const rv = riverAt(x, z);
+      if (rv.r && rv.d < rv.r.hw && R < 1200) rLvl[v] = rv.bed + rv.r.depth;
+    }
+  }
+}
+const ringH = (k, x, z, R, v) => R === 0 ? H[k] : lerp(H[k], v !== undefined && rFar ? rFar[v] : farH(x, z, R), smooth(0, 30, R));
+let ringDirty = true;
 function updateRing() {
   ringDirty = false;
+  if (!rFar) ringPrep();
   for (let e = 0; e < RP; e++) {
     const k = EDGE[e], x0 = k % N, z0 = (k / N) | 0, [dx, dz] = RDIR[e];
     for (let r = 0; r < RN; r++) {
-      const v = e * RN + r, R = RING_R[r], x = x0 + dx * R, z = z0 + dz * R, h = ringH(k, x, z, R);
+      const v = e * RN + r, R = RING_R[r], x = x0 + dx * R, z = z0 + dz * R, h = ringH(k, x, z, R, v);
       rPos[v * 3] = rwPos[v * 3] = x; rPos[v * 3 + 1] = h; rPos[v * 3 + 2] = rwPos[v * 3 + 2] = z;
-      const lv = R === 0 ? (W[k] > .012 ? H[k] + W[k] : null) : riverLevel(x, z);
-      if (lv !== null && lv > h) { rwPos[v * 3 + 1] = lv; rwDep[v] = lv - h; rwFlow[v * 2] = .7; rwFlow[v * 2 + 1] = 0; }
+      const lv = R === 0 ? (W[k] > .012 ? H[k] + W[k] : null) : (rLvl[v] > -1e8 ? rLvl[v] : null);
+      if (lv !== null && lv > h) { rwPos[v * 3 + 1] = lv; rwDep[v] = lv - h; rwFlow[v * 2] = dx * .6; rwFlow[v * 2 + 1] = dz * .6; }
       else { rwPos[v * 3 + 1] = h - .3; rwDep[v] = -1; rwFlow[v * 2] = rwFlow[v * 2 + 1] = 0; }
-      rMat[v * 4] = 1; rMat[v * 4 + 1] = 0; rMat[v * 4 + 2] = 0; rMat[v * 4 + 3] = (lv !== null && lv > h) ? 1 : 0;
+      rMat[v * 4] = R > 1500 ? .3 : 1; rMat[v * 4 + 1] = 0; rMat[v * 4 + 2] = R > 1500 ? .7 : 0; rMat[v * 4 + 3] = (lv !== null && lv > h) ? 1 : 0;
     }
   }
-  // shore: dry points next to water take the water's level so the edge meets the bank
   for (let e = 0; e < RP; e++) for (let r = 0; r < RN; r++) {
     const v = e * RN + r; if (rwDep[v] > 0) continue;
     let lvl = -1e9;
@@ -571,27 +815,29 @@ function updateRing() {
     if (lvl > -1e8) { rwPos[v * 3 + 1] = lvl; rwDep[v] = Math.max(-2, lvl - rPos[v * 3 + 1]); rMat[v * 4 + 3] = .5; }
   }
   rGeo.computeVertexNormals();
-  for (const a of ['position', 'aMat']) rGeo.attributes[a].needsUpdate = true;
+  for (const a of ['position', 'aMat', 'normal']) rGeo.attributes[a].needsUpdate = true;
   for (const a of ['position', 'aW', 'aFlow']) rwGeo.attributes[a].needsUpdate = true;
-  rGeo.attributes.normal.needsUpdate = true;
+  rGeo.computeBoundingSphere(); rwGeo.computeBoundingSphere();
 }
 
 // ---------------------------------------------------------------- trees, rocks, grass
-const treeMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: T.needles, roughness: .92 });
-const TREE_GEOS = [MOD.pineGeo(1, 10.5), MOD.pineGeo(2, 12.5), MOD.pineGeo(3, 14), MOD.broadGeo(1, 9), MOD.broadGeo(2, 10.5)];
+const folMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: T.foliage, alphaTest: .42, side: THREE.DoubleSide, roughness: .88, alphaToCoverage: true });
+const barkTex = T.bark.clone(); barkTex.repeat.set(2, 5); barkTex.needsUpdate = true;
+const barkMat = new THREE.MeshStandardMaterial({ map: barkTex, roughness: .95, color: 0x8a7a68 });
+const TREE_GEOS = [MOD.spruceGeo(1, 12), MOD.spruceGeo(2, 14.5), MOD.spruceGeo(3, 16.5), MOD.leafyGeo(1, 10), MOD.leafyGeo(2, 12)];
 const treeVariant = t => t.hue < .27 ? 3 + (t.hue < .135 ? 0 : 1) : Math.min(2, Math.floor((t.hue - .27) / .73 * 3));
 let treeIMs = [];
 function buildTreeMeshes() {
-  for (const im of treeIMs) { scene.remove(im); im.dispose(); }
+  for (const p of treeIMs) for (const im of [p.fol, p.trunk]) { scene.remove(im); im.dispose(); }
   const counts = TREE_GEOS.map(() => 0);
   for (const t of trees) { t.v = treeVariant(t); t.slot = counts[t.v]++; }
   treeIMs = TREE_GEOS.map((g, v) => {
-    const im = new THREE.InstancedMesh(g, treeMat, Math.max(1, counts[v]));
-    im.count = counts[v]; im.castShadow = true; im.receiveShadow = true; im.frustumCulled = false; scene.add(im); return im;
+    const mk = (geo, mat) => { const im = new THREE.InstancedMesh(geo, mat, Math.max(1, counts[v])); im.count = counts[v]; im.castShadow = true; im.receiveShadow = true; im.frustumCulled = false; scene.add(im); return im; };
+    return { fol: mk(g.fol, folMat), trunk: mk(g.trunk, barkMat) };
   });
   const col = new THREE.Color();
-  for (const t of trees) { col.setRGB(.85 + t.hue * .3, .9 + t.hue * .2, .85 + t.hue * .2); treeIMs[t.v].setColorAt(t.slot, col); t.dirty = true; }
-  for (const im of treeIMs) if (im.instanceColor) im.instanceColor.needsUpdate = true;
+  for (const t of trees) { col.setRGB(.82 + t.hue * .3, .88 + t.hue * .2, .8 + t.hue * .2); treeIMs[t.v].fol.setColorAt(t.slot, col); t.dirty = true; }
+  for (const p of treeIMs) if (p.fol.instanceColor) p.fol.instanceColor.needsUpdate = true;
 }
 const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new THREE.Vector3(), _s = new THREE.Vector3(), _ax = new THREE.Vector3();
 let treeHeightTimer = 0;
@@ -603,9 +849,9 @@ function updateTrees(dt, terrainChanged) {
   for (const t of trees) {
     if (t.st === 1) {
       t.a = Math.min(1, t.a + dt * (.45 + t.a * 2.4));
-      if (t.a >= 1) { t.st = 2; t.t = 0; dust(t.x + t.dx * 6 * t.s, t.y + .5, t.z + t.dz * 6 * t.s, 14, [.42, .38, .3]); }
+      if (t.a >= 1) { t.st = 2; t.t = 0; dust(t.x + t.dx * 7 * t.s, t.y + .5, t.z + t.dz * 7 * t.s, 16, [.42, .38, .3]); }
       t.dirty = true;
-    } else if (t.st === 2) { t.t += dt; if (t.t > 6) { t.g -= dt * .7; if (t.g <= 0) { t.g = 0; t.st = 3; } t.dirty = true; } }
+    } else if (t.st === 2) { t.t += dt; if (t.t > 8) { t.g -= dt * .6; if (t.g <= 0) { t.g = 0; t.st = 3; } t.dirty = true; } }
     else if (t.st === 0 && refresh) { const y = hAt(t.x, t.z) - .15; if (Math.abs(y - t.y) > .01) { t.y = y; t.dirty = true; } }
     if (!t.dirty) continue;
     t.dirty = false; touched.add(t.v);
@@ -616,9 +862,9 @@ function updateTrees(dt, terrainChanged) {
       const sc = t.s * t.g;
       _m4.compose(_v.set(t.x, t.y, t.z), _q, _s.set(sc, sc, sc));
     }
-    treeIMs[t.v].setMatrixAt(t.slot, _m4);
+    treeIMs[t.v].fol.setMatrixAt(t.slot, _m4); treeIMs[t.v].trunk.setMatrixAt(t.slot, _m4);
   }
-  for (const v of touched) treeIMs[v].instanceMatrix.needsUpdate = true;
+  for (const v of touched) { treeIMs[v].fol.instanceMatrix.needsUpdate = true; treeIMs[v].trunk.instanceMatrix.needsUpdate = true; }
 }
 
 // boulders: lie about the valley and get shoved aside by the machines
@@ -713,30 +959,31 @@ function buildFarForest() {
   farForest = [];
   const r = mulberry32(seed * 3 + 7);
   const near = [[], [], [], [], []], far = [];
-  for (let a = 0; a < (Q.near + Q.far) * 4 && (near.flat().length < Q.near || far.length < Q.far); a++) {
+  let nn = 0;
+  for (let a = 0; a < (Q.near + Q.far) * 5 && (nn < Q.near || far.length < Q.far); a++) {
     const e = Math.floor(r() * RP), isNear = r() < Q.near / (Q.near + Q.far);
-    const R = isNear ? 3 + r() ** 1.3 * 70 : 70 + r() ** 1.7 * 1500;
-    const k = EDGE[e], [dx, dz] = RDIR[e], x = k % N + dx * R + (r() - .5) * 6, z = ((k / N) | 0) + dz * R + (r() - .5) * 6;
-    if (Math.abs(z - riverZ(x)) < 14 + R * .05 && (x < 0 || x > N - 1)) continue;
-    if (noiseFn(x / 70, z / 70, 2) < -.12 && r() < .75) continue;
-    const y = ringH(k, x, z, R) - .2, s = .8 + r() * .6, ry = r() * 6.28;
-    if (isNear) { if (near.flat().length >= Q.near) continue; near[r() < .27 ? 3 + (r() < .5 ? 0 : 1) : Math.floor(r() * 3)].push([x, y, z, s, ry]); }
-    else { if (far.length >= Q.far) continue; far.push([x, y, z, s * 1.4, ry]); }
+    const R = isNear ? 3 + r() ** 1.2 * 90 : 90 + r() ** 1.6 * 1300;
+    const k = EDGE[e], [dx, dz] = RDIR[e], x = k % N + dx * R + (r() - .5) * 8, z = ((k / N) | 0) + dz * R + (r() - .5) * 8;
+    const rv = riverAt(x, z); if (rv.r && rv.d < rv.r.bank * .8 + R * .03) continue;
+    if (noiseFn(x / 80, z / 80, 2) < -.1 && r() < .7) continue;
+    const y = ringH(k, x, z, R) - .2, s = .8 + r() * .5, ry = r() * 6.28;
+    if (isNear) { if (nn >= Q.near) continue; nn++; near[r() < .27 ? 3 + (r() < .5 ? 0 : 1) : Math.floor(r() * 3)].push([x, y, z, s, ry]); }
+    else { if (far.length >= Q.far) continue; far.push([x, y, z, s * 1.2, ry]); }
   }
-  const put = (geo, mat, list) => {
+  const put = (geo, mat, list, shadow) => {
     if (!list.length) return;
     const im = new THREE.InstancedMesh(geo, mat, list.length);
     list.forEach(([x, y, z, s, ry], i) => { _q.setFromAxisAngle(_ax.set(0, 1, 0), ry); _m4.compose(_v.set(x, y, z), _q, _s.set(s, s, s)); im.setMatrixAt(i, _m4); });
-    im.castShadow = false; im.receiveShadow = true; scene.add(im); farForest.push(im);
+    im.castShadow = shadow; im.receiveShadow = true; scene.add(im); farForest.push(im);
   };
-  near.forEach((l, v) => put(TREE_GEOS[v], treeMat, l));
-  put(MOD.farTreeGeo(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .95 }), far);
+  near.forEach((l, v) => { put(TREE_GEOS[v].fol, folMat, l, false); put(TREE_GEOS[v].trunk, barkMat, l, false); });
+  put(MOD.farCardGeo(), folMat, far, false);
 }
 
 // ---------------------------------------------------------------- dust, smoke and spray
-const PMAX = 1200;
+const PMAX = 3000;
 const pPos = new Float32Array(PMAX * 3), pVel = new Float32Array(PMAX * 3), pCol = new Float32Array(PMAX * 4), pSize = new Float32Array(PMAX);
-const pLife = new Float32Array(PMAX), pMax = new Float32Array(PMAX), pS0 = new Float32Array(PMAX), pS1 = new Float32Array(PMAX), pA0 = new Float32Array(PMAX), pG = new Float32Array(PMAX), pDrag = new Float32Array(PMAX);
+const pLand = new Uint8Array(PMAX), pLife = new Float32Array(PMAX), pMax = new Float32Array(PMAX), pS0 = new Float32Array(PMAX), pS1 = new Float32Array(PMAX), pA0 = new Float32Array(PMAX), pG = new Float32Array(PMAX), pDrag = new Float32Array(PMAX);
 const pGeo = new THREE.BufferGeometry();
 pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3).setUsage(THREE.DynamicDrawUsage));
 pGeo.setAttribute('aCol', new THREE.BufferAttribute(pCol, 4).setUsage(THREE.DynamicDrawUsage));
@@ -771,6 +1018,7 @@ const PK = {
   smoke: { life: [1.6, 2.6], s0: .3, s1: 2.4, a: .45, up: [1.4, 2.2], spread: .3, g: -.25, drag: .6 },
   splash: { life: [.5, .9], s0: .35, s1: .7, a: .7, up: [1.5, 3.2], spread: 1.8, g: 9, drag: .2 },
   leaf: { life: [1.5, 2.5], s0: .25, s1: .25, a: .9, up: [.2, 1.2], spread: 2.4, g: 1.2, drag: 1.5 },
+  grain: { life: [1.2, 2], s0: .11, s1: .09, a: 1, up: [-.5, .4], spread: .6, g: 9.8, drag: .15, land: true },
 };
 function spawn(kind, x, y, z, n, col, opts = {}) {
   const K = PK[kind], c = lin(col);
@@ -779,7 +1027,8 @@ function spawn(kind, x, y, z, n, col, opts = {}) {
     pPos[p * 3] = x + (Math.random() - .5) * (opts.jitter ?? .8); pPos[p * 3 + 1] = y + Math.random() * .3; pPos[p * 3 + 2] = z + (Math.random() - .5) * (opts.jitter ?? .8);
     pVel[p * 3] = (Math.random() - .5) * K.spread + (opts.vx || 0); pVel[p * 3 + 1] = lerp(K.up[0], K.up[1], Math.random()) * (opts.up ?? 1); pVel[p * 3 + 2] = (Math.random() - .5) * K.spread + (opts.vz || 0);
     pMax[p] = pLife[p] = lerp(K.life[0], K.life[1], Math.random());
-    pS0[p] = K.s0 * (opts.size ?? 1); pS1[p] = K.s1 * (opts.size ?? 1); pA0[p] = K.a * (opts.alpha ?? 1); pG[p] = K.g; pDrag[p] = K.drag;
+    pS0[p] = K.s0 * (opts.size ?? 1) * (K.land ? .6 + Math.random() * .9 : 1); pS1[p] = K.s1 * (opts.size ?? 1); pA0[p] = K.a * (opts.alpha ?? 1); pG[p] = K.g; pDrag[p] = K.drag; pLand[p] = K.land ? 1 : 0;
+    if (K.land) { const sh = .75 + Math.random() * .4; pCol[p * 4] = c[0] * sh; pCol[p * 4 + 1] = c[1] * sh; pCol[p * 4 + 2] = c[2] * sh; continue; }
     pCol[p * 4] = c[0]; pCol[p * 4 + 1] = c[1]; pCol[p * 4 + 2] = c[2];
   }
 }
@@ -793,6 +1042,11 @@ function updateParticles(dt) {
     const f = 1 - pLife[p] / pMax[p], dr = Math.exp(-pDrag[p] * dt);
     pVel[p * 3] = pVel[p * 3] * dr + wind * dt * .4; pVel[p * 3 + 1] = pVel[p * 3 + 1] * dr - pG[p] * dt; pVel[p * 3 + 2] = pVel[p * 3 + 2] * dr + wind * dt * .25;
     pPos[p * 3] += pVel[p * 3] * dt; pPos[p * 3 + 1] += pVel[p * 3 + 1] * dt; pPos[p * 3 + 2] += pVel[p * 3 + 2] * dt;
+    if (pLand[p]) {   // a grain of soil: falls, and is gone when it lands
+      pSize[p] = pS0[p]; pCol[p * 4 + 3] = 1;
+      if (pPos[p * 3 + 1] < hAt(pPos[p * 3], pPos[p * 3 + 2])) { pLife[p] = 0; if (Math.random() < .04) spawn('dust', pPos[p * 3], pPos[p * 3 + 1], pPos[p * 3 + 2], 1, [pCol[p * 4] ** .45, pCol[p * 4 + 1] ** .45, pCol[p * 4 + 2] ** .45], { alpha: .5, size: .7 }); }
+      continue;
+    }
     pSize[p] = lerp(pS0[p], pS1[p], Math.sqrt(f));
     pCol[p * 4 + 3] = pA0[p] * Math.min(1, f * 6) * (1 - f) * (1 - f * .3);
   }
@@ -801,13 +1055,16 @@ function updateParticles(dt) {
 
 // clods and stones that tumble out of buckets and beds (just for show: the ground has already been changed)
 const CMAX = 360;
-const chunkIM = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(.13, 0), new THREE.MeshStandardMaterial({ roughness: 1, flatShading: true }), CMAX);
+const clodGeo = (() => { const g = new THREE.IcosahedronGeometry(.11, 1), p = g.attributes.position; for (let i = 0; i < p.count; i++) { const k = .75 + .45 * Math.abs(Math.sin(p.getX(i) * 41 + p.getY(i) * 23 + p.getZ(i) * 17)); p.setXYZ(i, p.getX(i) * k, p.getY(i) * k * .8, p.getZ(i) * k); } g.computeVertexNormals(); return g; })();
+const chunkIM = new THREE.InstancedMesh(clodGeo, new THREE.MeshStandardMaterial({ roughness: 1, map: T.dirt }), CMAX);
 chunkIM.castShadow = true; chunkIM.frustumCulled = false; scene.add(chunkIM);
 const cPos = new Float32Array(CMAX * 3), cVel = new Float32Array(CMAX * 3), cLife = new Float32Array(CMAX), cRot = new Float32Array(CMAX * 2), cS = new Float32Array(CMAX);
 let cNext = 0, chunksLive = 0;
 { const col = new THREE.Color(); for (let i = 0; i < CMAX; i++) { chunkIM.setMatrixAt(i, _m4.makeScale(0, 0, 0)); chunkIM.setColorAt(i, col.setRGB(.4, .3, .2)); } }
 const CHUNK_DIRT = new THREE.Color(0x5e4029), CHUNK_GRAVEL = new THREE.Color(0x8c8880), _cc = new THREE.Color();
 function chunks(x, y, z, n, gravel, vx = 0, vz = 0, spread = 1) {
+  spawn('grain', x, y, z, n * 5, gravel ? [.55, .53, .5] : [.34, .24, .16], { jitter: spread, vx, vz });
+  n = Math.ceil(n * .5);
   for (let q = 0; q < n; q++) {
     const i = cNext; cNext = (cNext + 1) % CMAX;
     cPos[i * 3] = x + (Math.random() - .5) * spread; cPos[i * 3 + 1] = y + (Math.random() - .5) * .3; cPos[i * 3 + 2] = z + (Math.random() - .5) * spread;
@@ -844,13 +1101,13 @@ const LOADMAT = {
   gravel: new THREE.MeshStandardMaterial({ map: T.gravel, roughness: .95 }),
 };
 const SPEC = {
-  dozer: { name: 'Dozer', vmax: 3.6, acc: 2.5, turn: .85, tracks: true, len: 4.6, wid: 3.2, circ: [[1.2, 1.9], [-1.0, 1.7]], cap: 6, tool: 'Blade',
+  dozer: { name: 'Dozer', ford: 1.0, vmax: 3.6, acc: 2.5, turn: .85, tracks: true, len: 4.6, wid: 3.2, circ: [[1.2, 1.9], [-1.0, 1.7]], cap: 6, tool: 'Blade',
     hint: 'R/F blade up and down. Drive forward with the blade low to cut; over low ground it fills. Back up to leave the pile.' },
-  loader: { name: 'Loader', vmax: 6, acc: 3, wb: 2.9, len: 5.4, wid: 2.8, circ: [[1.6, 1.6], [-1.5, 1.6]], cap: 3, tool: 'Bucket',
+  loader: { name: 'Loader', ford: .55, vmax: 6, acc: 3, wb: 2.9, len: 5.4, wid: 2.8, circ: [[1.6, 1.6], [-1.5, 1.6]], cap: 3, tool: 'Bucket',
     hint: 'F lowers the bucket; drive into a pile to fill it. R raises it. Space dumps (into a hauler if one is under the bucket).' },
-  excavator: { name: 'Excavator', vmax: 2.2, acc: 1.8, turn: .6, tracks: true, len: 4.4, wid: 3.2, circ: [[0, 2.2]], cap: 1.5, tool: 'Bucket',
+  excavator: { name: 'Excavator', ford: 1.2, vmax: 2.2, acc: 1.8, turn: .6, tracks: true, len: 4.4, wid: 3.2, circ: [[0, 2.2]], cap: 1.5, tool: 'Bucket',
     hint: 'Q/E swing, R/F reach out and in. Space digs, Space again dumps (into a hauler if it is under the bucket).' },
-  hauler: { name: 'Hauler', vmax: 8.5, acc: 3, wb: 4.6, len: 8, wid: 3, circ: [[2.6, 1.6], [-.6, 1.6], [-3.2, 1.6]], cap: 12, tool: 'Bed',
+  hauler: { name: 'Hauler', ford: .65, vmax: 8.5, acc: 3, wb: 4.6, len: 8, wid: 3, circ: [[2.6, 1.6], [-.6, 1.6], [-3.2, 1.6]], cap: 12, tool: 'Bed',
     hint: 'Park next to the loader or excavator to get filled. Space tips the bed and dumps behind you; Space again lowers it.' },
 };
 const BUILD = { dozer: MOD.buildDozer, loader: MOD.buildLoader, excavator: MOD.buildExcavator, hauler: MOD.buildHauler };
@@ -872,10 +1129,10 @@ function makeMachine(type, x, z, yaw) {
 function resetMachines() {
   for (const m of machines) scene.remove(m.group);
   machines.length = 0;
-  makeMachine('dozer', 73, 129, Math.PI);
-  makeMachine('loader', 80, 129, Math.PI);
-  makeMachine('excavator', 87.5, 130, Math.PI);
-  makeMachine('hauler', 94.5, 131, Math.PI);
+  makeMachine('dozer', 113, 172, Math.PI);
+  makeMachine('loader', 120, 172, Math.PI);
+  makeMachine('excavator', 127.5, 173, Math.PI);
+  makeMachine('hauler', 135, 174, Math.PI);
 }
 
 const fwdX = y => Math.sin(y), fwdZ = y => Math.cos(y);
@@ -950,7 +1207,7 @@ function drive(m, dt, inp) {
   const grade = (hA - hB) / s.len;
   let lim = 1;
   if (grade > .35) lim = Math.max(0, 1 - (grade - .35) / .45);
-  lim *= Math.max(.15, 1 - wAt(m.x, m.z) / 1.8);
+  lim *= Math.max(.15, 1 - wAt(m.x, m.z) / (s.ford * 2.2));
   if (m.type === 'dozer') lim *= 1 - .35 * m.load.v / s.cap;
   if (m.type === 'hauler') lim *= 1 - .25 * m.load.v / s.cap;
   target *= lim;
@@ -963,6 +1220,17 @@ function drive(m, dt, inp) {
   let nx = clamp(m.x + fwdX(yaw) * m.v * dt, 3, N - 4), nz = clamp(m.z + fwdZ(yaw) * m.v * dt, 3, N - 4);
   const before = overlap(m, m.x, m.z, m.yaw), after = overlap(m, nx, nz, yaw);
   if (after > before + 1e-4) { m.v = 0; m.trackSpeed = 0; return; }
+  // too deep: the machine won't move its nose (or tail, backing up) into water deeper than it can ford
+  if (m.v !== 0) {
+    const sg = Math.sign(m.v), reach = L + .4;
+    const depthAt = (x, z, y) => wAt(x + Math.sin(y) * reach * sg, z + Math.cos(y) * reach * sg);
+    const dNew = depthAt(nx, nz, yaw);
+    if (dNew > s.ford && dNew > depthAt(m.x, m.z, m.yaw) - .005) {
+      m.v = 0; m.trackSpeed = 0;
+      if (simTime - (m.deepT || -9) > 3) { m.deepT = simTime; toast(`Too deep for the ${s.name.toLowerCase()}`); }
+      return;
+    }
+  }
   const dist = Math.hypot(nx - m.x, nz - m.z) * Math.sign(m.v), dyaw = angWrap(yaw - m.yaw);
   m.x = nx; m.z = nz; m.yaw = yaw;
   if (m.wheels) for (const w of m.wheels) w.rotation.x += dist / .88;
@@ -1043,9 +1311,9 @@ function toolDozer(m, dt, inp) {
   const v = m.load.v;
   m.pile.visible = v > .05;
   if (m.pile.visible) {
-    const sc = Math.cbrt(v) * .75;
-    m.pile.scale.set(sc * 1.7, sc * .8, sc);
-    m.pile.position.set(0, m.blade + sc * .45, .45 + sc * .7);
+    const sc = Math.cbrt(v / .9);
+    m.pile.scale.set(sc * 1.15, sc * .9, sc);
+    m.pile.position.set(0, m.blade, .5 + sc * .55);
     m.pile.material = loadMat(m.load) === 2 ? LOADMAT.gravel : LOADMAT.dirt;
   }
 }
@@ -1225,6 +1493,7 @@ function placeRect(w, d, near) {
     for (let z = z0; z <= z1 && ok; z++) for (let x = x0; x <= x1; x++) { const k = z * N + x; if (RD[k] < 14 || M[k] === 2 || inYard(x, z, 2)) { ok = false; break; } }
     if (!ok) continue;
     if (Math.hypot((x0 + x1) / 2 - GRAVEL.x, (z0 + z1) / 2 - GRAVEL.z) < GRAVEL.r + 8) continue;
+    if (Math.hypot((x0 + x1) / 2 - MARSH.x, (z0 + z1) / 2 - MARSH.z) < MARSH.r + 10 || Math.hypot((x0 + x1) / 2 - CAMP.x, (z0 + z1) / 2 - CAMP.z) < 16) continue;
     for (const o of jobs) if (x0 < o.x1 + 6 && x1 > o.x0 - 6 && z0 < o.z1 + 6 && z1 > o.z0 - 6) { ok = false; break; }
     if (ok) return { x0, z0, x1, z1 };
   }
@@ -1292,7 +1561,7 @@ function freshJobs() {
   for (const j of jobs) jobDispose(j);
   jobs = [];
   for (const type of ['level', 'stock', 'pond']) {
-    const r = placeRect(JOB[type].w, JOB[type].d, [83, 120]);
+    const r = placeRect(JOB[type].w, JOB[type].d, [124, 177]);
     if (r) { const j = makeJob(type, r); jobs.push(j); jobVis(j); }
   }
 }
@@ -1305,14 +1574,15 @@ function updateJobs(dt) {
     j.prog = jobProgress(j);
     jobVisRefresh(j);
     const need = j.type === 'stock' ? 1 : .9;
-    if (j.prog >= need) {
+    if (j.prog >= need && j !== goal.job) {
       const info = JOB[j.type];
       stats.money += info.reward; stats.done++;
       toast('Job complete', 3200, `+$${info.reward}`);
       snd.chime();
       jobDispose(j);
       jobs.splice(jobs.indexOf(j), 1);
-      const r = placeRect(info.w, info.d);
+      if (j === goal.job) continue;
+      const r = goal.i >= GOALS.length ? placeRect(info.w, info.d) : null;
       if (r) { const nj = makeJob(j.type, r); jobs.push(nj); jobVis(nj); }
       save();
     }
@@ -1322,13 +1592,117 @@ function updateJobs(dt) {
 const SHORT = { level: 'Level pad', pond: 'Dig pond', stock: 'Stockpile' };
 function renderJobs() {
   $('money').textContent = '$' + stats.money.toLocaleString();
-  const me = machines[active];
+  const G = GOALS[goal.i], me = machines[active];
+  if (G) {
+    $('objName').textContent = G.name;
+    const far = G.x !== undefined && me ? Math.hypot(G.x - me.x, G.z - me.z) : 0;
+    $('objPct').textContent = (G.id === 'cross' || G.id === 'camp') ? `${Math.round(far)} m` : Math.round(goal.prog * 100) + '%';
+    $('objBar').style.width = Math.round(goal.prog * 100) + '%';
+    return;
+  }
   let best = null, bd = 1e9;
   if (me) for (const j of jobs) { const d = Math.hypot((j.x0 + j.x1) / 2 - me.x, (j.z0 + j.z1) / 2 - me.z); if (d < bd) { bd = d; best = j; } }
   $('objName').textContent = best ? SHORT[best.type] : '';
   $('objPct').textContent = best ? Math.round(best.prog * 100) + '%' : '';
   $('objBar').style.width = best ? Math.round(best.prog * 100) + '%' : '0';
 }
+
+// ---------------------------------------------------------------- objectives (the open-world goals) and side jobs
+// Main goals, in order: cross the river to the gravel pit, bring gravel home, dam the south creek, reach the logging
+// camp with the loader, drain the marsh. Side jobs (level a pad, dig a pond, stockpile) keep coming after that.
+const GOALS = [
+  { id: 'cross', name: 'Cross the river', hint: 'Get the hauler to the gravel pit', x: GRAVEL.x + 6, z: GRAVEL.z + GRAVEL.r + 4, reward: 800 },
+  { id: 'haul', name: 'Haul gravel home', hint: 'Dump 30 m³ of gravel in the yard', reward: 700 },
+  { id: 'dam', name: 'Dam the creek', hint: 'Back the south creek up to 1.6 m deep at the marker', x: 72, z: 214, reward: 700 },
+  { id: 'camp', name: 'Reach the camp', hint: 'Drive the loader to the logging camp', x: CAMP.x, z: CAMP.z, reward: 900 },
+  { id: 'marsh', name: 'Drain the marsh', hint: 'Dig a channel so the marsh drains away', x: MARSH.x, z: MARSH.z, reward: 1000 },
+];
+const goal = { i: 0, prog: 0, hold: 0, marsh0: 0, job: null };
+const goalMarks = [];
+function marshVolume() { let v = 0; cellsInCircle(MARSH.x, MARSH.z, MARSH.r + 6, k => { v += W[k]; }); return v; }
+function goalSetup() {
+  for (const g of goalMarks) scene.remove(g);
+  goalMarks.length = 0;
+  const G = GOALS[goal.i]; if (!G) return;
+  if (G.id === 'haul' && !goal.job) {
+    const r = { x0: YARD.x0 + 2, z0: YARD.z1 - 9, x1: YARD.x0 + 10, z1: YARD.z1 - 2 };
+    goal.job = makeJob('stock', r); jobs.push(goal.job); jobVis(goal.job);
+  }
+  if (G.id === 'marsh' && !goal.marsh0) goal.marsh0 = marshVolume();
+  if (G.x !== undefined) {
+    const g = new THREE.Group();
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(.35, .35, 60, 10, 1, true), new THREE.MeshBasicMaterial({ color: 0xffc061, transparent: true, opacity: .22, depthWrite: false, side: THREE.DoubleSide }));
+    beam.position.y = 30; beam.renderOrder = 4; g.add(beam);
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(.06, .06, 3, 8), new THREE.MeshStandardMaterial({ color: 0xffc061, roughness: .5 }));
+    pole.position.y = 1.5; pole.castShadow = true; g.add(pole);
+    g.position.set(G.x, hAt(G.x, G.z), G.z); scene.add(g); goalMarks.push(g);
+  }
+}
+let goalTimer = 0;
+function updateGoal(dt) {
+  goalTimer -= dt; if (goalTimer > 0) return; goalTimer = .5;
+  const G = GOALS[goal.i];
+  for (const g of goalMarks) g.position.y = hAt(g.position.x, g.position.z);
+  if (!G) return;
+  const by = t => machines.find(m => m.type === t);
+  let done = false;
+  if (G.id === 'cross' || G.id === 'camp') {
+    const m = by(G.id === 'cross' ? 'hauler' : 'loader'), d = Math.hypot(m.x - G.x, m.z - G.z);
+    goal.prog = clamp(1 - (d - 8) / 150, 0, 1); done = d < 8;
+  } else if (G.id === 'haul') {
+    goal.prog = goal.job ? goal.job.prog : 0; done = goal.prog >= 1;
+  } else if (G.id === 'dam') {
+    const w = W[cellOf(G.x, G.z)]; goal.prog = clamp(w / 1.6, 0, 1);
+    goal.hold = w >= 1.6 ? goal.hold + .5 : 0; done = goal.hold >= 5;
+  } else if (G.id === 'marsh') {
+    const v = marshVolume(); goal.prog = clamp(1 - (v / Math.max(1, goal.marsh0) - .25) / .75, 0, 1); done = v < goal.marsh0 * .25;
+  }
+  if (done) {
+    stats.money += G.reward; stats.done++;
+    toast(G.name, 3600, `+$${G.reward}`); snd.chime();
+    if (goal.job) { if (jobs.includes(goal.job)) { jobDispose(goal.job); jobs.splice(jobs.indexOf(goal.job), 1); } goal.job = null; }
+    goal.i++; goal.prog = 0; goal.hold = 0; goal.marsh0 = 0;
+    goalSetup();
+    if (goal.i >= GOALS.length && !jobs.length) freshJobs();
+    save();
+  }
+}
+
+// ---------------------------------------------------------------- minimap (M to hide)
+const mapCv = $('minimap'), mapG = mapCv ? mapCv.getContext('2d') : null;
+const mapBase = document.createElement('canvas'); mapBase.width = mapBase.height = 128;
+let mapTimer = 0, mapBaseTimer = 0, mapOn = localStorage.getItem('groundwork.map') !== '0';
+function drawMapBase() {
+  const g = mapBase.getContext('2d'), img = g.createImageData(128, 128), d = img.data;
+  for (let y = 0; y < 128; y++) for (let x = 0; x < 128; x++) {
+    const k = (y * 2) * N + x * 2, o = (y * 128 + x) * 4, h = H[k];
+    const sh = clamp(.75 + (H[k] - H[Math.min(NN - 1, k + N + 1)]) * .35, .45, 1.15) * clamp(.75 + (h - 8) * .025, .7, 1.1);
+    let c = M[k] === 2 ? [150, 146, 136] : (M[k] === 1 || D[k]) ? [128, 98, 70] : [74, 98, 54];
+    if (treeGrid[k] >= 0 || treeGrid[k + 1] >= 0) c = [46, 66, 38];
+    if (W[k] > .05) c = W[k] > .8 ? [46, 82, 104] : [72, 112, 128];
+    d[o] = c[0] * sh; d[o + 1] = c[1] * sh; d[o + 2] = c[2] * sh; d[o + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+}
+function updateMap(dt) {
+  if (!mapG || !mapOn) return;
+  mapTimer -= dt; mapBaseTimer -= dt;
+  if (mapTimer > 0) return; mapTimer = .25;
+  if (mapBaseTimer <= 0) { mapBaseTimer = 2; drawMapBase(); }
+  const S = mapCv.width, f = S / N;
+  mapG.clearRect(0, 0, S, S);
+  mapG.drawImage(mapBase, 0, 0, S, S);
+  const G = GOALS[goal.i];
+  const diamond = (x, z, c, r) => { mapG.fillStyle = c; mapG.beginPath(); mapG.moveTo(x * f, z * f - r); mapG.lineTo(x * f + r, z * f); mapG.lineTo(x * f, z * f + r); mapG.lineTo(x * f - r, z * f); mapG.fill(); };
+  for (const j of jobs) diamond((j.x0 + j.x1) / 2, (j.z0 + j.z1) / 2, '#' + JOB[j.type].color.toString(16).padStart(6, '0'), 3);
+  if (G && G.x !== undefined) { diamond(G.x, G.z, '#ffc061', 5); }
+  machines.forEach((m, i) => {
+    mapG.save(); mapG.translate(m.x * f, m.z * f); mapG.rotate(-m.yaw + Math.PI);
+    mapG.fillStyle = i === active ? '#fff' : '#e8792a';
+    mapG.beginPath(); mapG.moveTo(0, -5); mapG.lineTo(3.5, 4); mapG.lineTo(-3.5, 4); mapG.fill(); mapG.restore();
+  });
+}
+function toggleMap() { mapOn = !mapOn; localStorage.setItem('groundwork.map', mapOn ? '1' : '0'); if (mapCv) mapCv.style.display = mapOn ? 'block' : 'none'; }
 
 // ---------------------------------------------------------------- input
 const keys = new Set();
@@ -1346,7 +1720,7 @@ addEventListener('keydown', e => {
   if (k === ' ') { e.preventDefault(); actPressed = true; }
   if (k === 'c') cabView = !cabView;
   if (k >= '1' && k <= '4') select(+k - 1);
-  if (k === 'm') toggleSound();
+  if (k === 'm') toggleMap();
   if (k === 'h' || k === '?') showHelp(true);
   if (k === 'escape') { const open = $('menu').style.display === 'flex' || $('help').style.display === 'flex'; showHelp(false); $('menu').style.display = open ? 'none' : 'flex'; }
   audioStart();
@@ -1505,7 +1879,7 @@ function save() {
   if (noSave || !machines.length) return;
   try {
     const data = {
-      v: 1, seed, t: Date.now(), active, stats,
+      v: 2, seed, t: Date.now(), active, stats, goal: { i: goal.i, marsh0: goal.marsh0 }, goalJob: goal.job ? jobs.indexOf(goal.job) : -1,
       H: b64(H), W: b64(W), M: b64(M), D: b64(D),
       gone: trees.map((t, i) => t.st > 0 ? i : -1).filter(i => i >= 0),
       rocks: rocks.map(r => [+r.x.toFixed(2), +r.z.toFixed(2), +r.rx.toFixed(2), +r.ry.toFixed(2)]),
@@ -1520,7 +1894,7 @@ function save() {
 function load() {
   let data = null;
   try { data = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch (e) { data = null; }
-  if (!data || data.v !== 1) return false;
+  if (!data || data.v !== 2) return false;
   try {
     seed = data.seed;
     generate(seed, false);
@@ -1535,6 +1909,8 @@ function load() {
     }
     Object.assign(stats, data.stats || {});
     for (const j of data.jobs || []) { const jj = { ...j, prog: 0 }; jobs.push(jj); jobVis(jj); }
+    if (data.goal) { goal.i = data.goal.i | 0; goal.marsh0 = data.goal.marsh0 || 0; }
+    if (data.goalJob >= 0 && jobs[data.goalJob]) goal.job = jobs[data.goalJob];
     active = clamp(data.active | 0, 0, machines.length - 1);
     return true;
   } catch (e) {
@@ -1656,7 +2032,7 @@ function updateSound(dt) {
 }
 
 // ---------------------------------------------------------------- main loop
-let last = performance.now(), waterAcc = 0, saveTimer = 5, relaxFlip = 0, ringTimer = 0;
+let last = performance.now(), waterAcc = 0, saveTimer = 5, relaxFlip = 0, ringTimer = 0, scanTimer = 0;
 const _bs = new THREE.Vector2();
 function update(dt) {
   simTime += dt;
@@ -1685,18 +2061,25 @@ function update(dt) {
   let steps = 0;
   while (waterAcc >= .04 && steps < 4) { waterStep(.04); waterAcc -= .04; steps++; }
   if (steps === 4) waterAcc = 0;
+  scanTimer -= dt;
+  if (scanTimer <= 0) { scanTimer = .5; scanWater(); }
   relaxFlip ^= 1;
-  if (relaxFlip) relax(false);
+  if (relaxFlip) relax();
 
-  updateWater();
-  const changed = updateTerrain();
+  const changed = anyDirty; anyDirty = false;
+  if (dirtBox && grassAt && dirtBox[1] > grassAt[0] - Q.grassR && dirtBox[0] < grassAt[0] + Q.grassR && dirtBox[3] > grassAt[1] - Q.grassR && dirtBox[2] < grassAt[1] + Q.grassR) grassDirty = true;
+  dirtBox = null;
+  updateTerrainChunks(dt, camera.position);
+  if (edgeDirty) { ringDirty = true; edgeDirty = false; }
   ringTimer -= dt;
-  if (ringDirty && ringTimer <= 0) { ringTimer = 1; updateRing(); }
+  if (ringDirty && ringTimer <= 0) { ringTimer = 2; updateRing(); }
   updateTrees(dt, changed);
   updateRocks(dt, changed);
   updateParticles(dt);
   updateChunks(dt);
   updateJobs(dt);
+  updateGoal(dt);
+  updateMap(dt);
   updateCamera(dt);
   updateGrass(dt, me);
   sun.position.set(me.x + SUN_DIR.x * 150, me.y + SUN_DIR.y * 150, me.z + SUN_DIR.z * 150);
@@ -1729,12 +2112,14 @@ function start() {
     generate(seed, true);
     for (const t of trees) t.y = hAt(t.x, t.z) - .15;
     resetMachines();
-    freshJobs();
   }
   buildTreeMeshes();
   buildRocks();
-  dMinI = 0; dMaxI = N - 1; dMinJ = 0; dMaxJ = N - 1;
-  updateWater(); updateTerrain(); updateRing(); buildFarForest();
+  scanWater();
+  goalSetup();
+  updateTerrainChunks(0, machines[active], true);
+  updateRing(); buildFarForest();
+  if (mapCv) mapCv.style.display = mapOn ? 'block' : 'none';
   for (const m of machines) poseMachine(m, 0, ZERO);
   select(active);
   for (const j of jobs) j.prog = jobProgress(j);
@@ -1746,7 +2131,7 @@ function start() {
   if (!resumed && !localStorage.getItem('groundwork.seenHelp')) showHelp(true);
   if (!resumed) save();
   // test hook: run the game forward without drawing (used by the automated checks)
-  window.GW = { snd, machines, H, W, M, D, BED, stats, hAt, select, save, trees, rocks, renderer, scene, camera, get jobs() { return jobs; }, get active() { return active; },
+  window.GW = { dirty, snd, goal, GOALS, RIVERS, YARD, GRAVEL, CAMP, MARSH, SPEC, riverAt, tchunks, machines, H, W, M, D, BED, stats, hAt, select, save, trees, rocks, renderer, scene, camera, get jobs() { return jobs; }, get active() { return active; },
     step(n, input = {}) { for (let i = 0; i < n; i++) { Object.assign(inp, ZERO, input); if (i > 0) inp.act = false; update(1 / 30); } },
     pause(on) { paused = !!on; },
     render() { updateCamera(1); camera.position.copy(_cam); renderer.getDrawingBufferSize(_bs); pMat.uniforms.uScale.value = _bs.y * .5 * camera.projectionMatrix.elements[5]; renderer.render(scene, camera); } };

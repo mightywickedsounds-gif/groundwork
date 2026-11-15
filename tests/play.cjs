@@ -24,12 +24,12 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
     r.fulfill({ status: 200, contentType: f.endsWith('.js') ? 'text/javascript' : 'text/html', body: fs.readFileSync(fp) });
   });
   await p.goto('http://game.test/');
-  await p.waitForFunction(() => window.GW, null, { timeout: 90000 });
+  await p.waitForFunction(() => window.GW, null, { timeout: 240000 });
   await p.click('#helpGo');
   await p.evaluate(() => GW.pause(true));
 
   // river
-  const river = await p.evaluate(() => { let wet = 0, vol = 0; for (let k = 0; k < GW.W.length; k++) if (GW.W[k] > .05) { wet++; vol += GW.W[k]; } let east = 0; for (let j = 0; j < 160; j++) east = Math.max(east, GW.W[j * 160 + 150]); return { wet, vol: Math.round(vol), east: +east.toFixed(2) }; });
+  const river = await p.evaluate(() => { let wet = 0, vol = 0; for (let k = 0; k < GW.W.length; k++) if (GW.W[k] > .05) { wet++; vol += GW.W[k]; } let east = 0; for (let j = 0; j < 256; j++) east = Math.max(east, GW.W[j * 256 + 250]); return { wet, vol: Math.round(vol), east: +east.toFixed(2) }; });
   check('river has water and reaches the east side', river.wet > 500 && river.east > .2, JSON.stringify(river));
 
   // dozer
@@ -86,22 +86,41 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
 
   // dirt slides when piled too steep
   const sl = await p.evaluate(() => {
-    const k = 100 * 160 + 120; const before = GW.H[k]; GW.H[k] += 6;
+    const k = 182 * 256 + 132; const before = GW.H[k]; GW.H[k] += 6; GW.dirty(k);
     GW.step(60);
-    let steep = 0; for (const n of [1, -1, 160, -160]) steep = Math.max(steep, GW.H[k] - GW.H[k + n]);
+    let steep = 0; for (const n of [1, -1, 256, -256]) steep = Math.max(steep, GW.H[k] - GW.H[k + n]);
     return { before: +before.toFixed(2), after: +GW.H[k].toFixed(2), steep: +steep.toFixed(2) };
   });
   check('a tall pile crumbles until it can stand', sl.steep < 1.3 && sl.after < sl.before + 3, JSON.stringify(sl));
 
-  // finishing a job pays and opens a new one
-  const jb = await p.evaluate(() => {
-    const j = GW.jobs.find(j => j.type === 'level');
-    for (let z = j.z0; z <= j.z1; z++) for (let x = j.x0; x <= j.x1; x++) GW.H[z * 160 + x] = j.target;
-    const m0 = GW.stats.money;
-    GW.step(25);
-    return { paid: GW.stats.money - m0, jobs: GW.jobs.length, stillThere: GW.jobs.includes(j) };
+  // rivers are too deep to drive through
+  const fd = await p.evaluate(() => {
+    const h = GW.machines[3]; GW.select(3);
+    h.x = 120; h.z = 142; h.yaw = Math.PI; h.v = 0;   // on the south bank, facing the river
+    let deepest = 0;
+    for (let i = 0; i < 300; i++) { GW.step(1, { throttle: 1 }); deepest = Math.max(deepest, GW.W[Math.round(h.z) * 256 + Math.round(h.x)]); }
+    return { deepest: +deepest.toFixed(2), ford: GW.SPEC.hauler.ford, z: +h.z.toFixed(1) };
   });
-  check('a finished job pays and a new one appears', jb.paid === 450 && jb.jobs === 3 && !jb.stillThere, JSON.stringify(jb));
+  check('a machine will not drive into water deeper than it can ford', fd.deepest <= fd.ford + .15, JSON.stringify(fd));
+
+  // a dam backs the creek up
+  const dm = await p.evaluate(() => {
+    const at = (x, z) => GW.W[z * 256 + x];
+    let up = 0; for (let x = 58; x <= 80; x++) up = Math.max(up, at(x, 168));
+    for (let z = 150; z <= 153; z++) for (let x = 50; x <= 90; x++) { const k = z * 256 + x; GW.H[k] = Math.max(GW.H[k], 14.5); GW.W[k] = 0; }
+    GW.step(900);
+    let after = 0; for (let x = 58; x <= 80; x++) after = Math.max(after, at(x, 168));
+    return { before: +up.toFixed(2), after: +after.toFixed(2) };
+  });
+  check('damming a creek makes the water back up behind it', dm.after > dm.before + .4, JSON.stringify(dm));
+
+  // reaching the first goal pays and moves on to the next
+  const gl = await p.evaluate(() => {
+    const G = GW.GOALS[0], h = GW.machines[3], m0 = GW.stats.money;
+    h.x = G.x; h.z = G.z; GW.step(30);
+    return { paid: GW.stats.money - m0, next: GW.GOALS[GW.goal.i] && GW.GOALS[GW.goal.i].id };
+  });
+  check('reaching the gravel pit with the hauler completes the first goal', gl.paid === 800 && gl.next === 'haul', JSON.stringify(gl));
 
   await p.evaluate(() => { GW.select(0); GW.step(30); });
   await p.screenshot({ path: OUT + '/p1.png' });
@@ -110,11 +129,11 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   check('no broken numbers reach the sound', bad.length === 0, JSON.stringify(bad));
 
   // persistence
-  const snap = await p.evaluate(() => { GW.save(); const m = GW.machines[0]; let s = 0; for (let k = 0; k < GW.H.length; k += 7) s += GW.H[k]; return { x: m.x, z: m.z, sum: s, money: GW.stats.money, gone: GW.trees.filter(t => t.st > 0).length }; });
+  const snap = await p.evaluate(() => { GW.save(); const m = GW.machines[0]; m.goalI = GW.goal.i; let s = 0; for (let k = 0; k < GW.H.length; k += 7) s += GW.H[k]; return { x: m.x, z: m.z, sum: s, money: GW.stats.money, gone: GW.trees.filter(t => t.st > 0).length }; });
   await p.reload();
-  await p.waitForFunction(() => window.GW, null, { timeout: 90000 });
+  await p.waitForFunction(() => window.GW, null, { timeout: 240000 });
   await p.evaluate(() => GW.pause(true));
-  const back = await p.evaluate(() => { const m = GW.machines[0]; let s = 0; for (let k = 0; k < GW.H.length; k += 7) s += GW.H[k]; return { x: m.x, z: m.z, sum: s, money: GW.stats.money, gone: GW.trees.filter(t => t.st > 0).length }; });
+  const back = await p.evaluate(() => { const m = GW.machines[0]; let s = 0; for (let k = 0; k < GW.H.length; k += 7) s += GW.H[k]; return { x: m.x, z: m.z, sum: s, money: GW.stats.money, gone: GW.trees.filter(t => t.st > 0).length, goal: GW.goal.i }; });
   check('the valley is the same after reloading the page', Math.abs(back.sum - snap.sum) < 1 && Math.abs(back.x - snap.x) < .01 && back.money === snap.money && back.gone === snap.gone, JSON.stringify({ snap, back }));
   await p.waitForTimeout(1500);
   await p.screenshot({ path: OUT + '/p2.png' });
