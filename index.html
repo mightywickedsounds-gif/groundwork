@@ -69,7 +69,18 @@
   #menu h2 { margin:0 0 18px; font-size:13px; font-weight:600; color:var(--dim); letter-spacing:.3em; }
   #menu button { border:0; background:none; color:var(--ink); font:600 21px var(--font); text-transform:uppercase; letter-spacing:.1em; padding:9px 18px; cursor:pointer; }
   #menu button:hover, #menu button:focus-visible { color:var(--acc); outline:none; }
-  #menu button.quiet { font-size:14px; color:var(--dim); margin-top:14px; }
+  #menu button.quiet, #worlds button.quiet { font-size:14px; color:var(--dim); margin-top:14px; }
+  #worlds .col { display:flex; flex-direction:column; align-items:center; gap:4px; max-width:calc(100vw - 30px); }
+  #worlds h2 { margin:0 0 14px; font-size:13px; font-weight:600; color:var(--dim); letter-spacing:.3em; }
+  #worlds > .col > button { border:0; background:none; color:var(--ink); font:600 21px var(--font); text-transform:uppercase; letter-spacing:.1em; padding:9px 18px; cursor:pointer; }
+  #worlds > .col > button:hover { color:var(--acc); }
+  #wList { max-height:42vh; overflow-y:auto; margin-bottom:10px; min-width:min(460px, calc(100vw - 30px)); }
+  .wRow { display:flex; align-items:center; gap:10px; padding:7px 4px; border-bottom:1px solid rgba(244,241,234,.15); text-transform:uppercase; letter-spacing:.06em; }
+  .wName { flex:1; font-weight:600; font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .wDate { font-size:11px; color:var(--dim); white-space:nowrap; }
+  .wRow button { border:1px solid rgba(244,241,234,.4); background:none; color:var(--ink); font:600 12px var(--font); letter-spacing:.1em; padding:5px 10px; cursor:pointer; text-transform:uppercase; }
+  .wRow button:hover { color:var(--acc); border-color:var(--acc); }
+  .wNone { color:var(--dim); font-size:13px; letter-spacing:.2em; text-align:center; padding:10px; }
   #help .wrap { width:min(560px, calc(100vw - 36px)); }
   #help h1 { margin:0 0 4px; font-size:32px; letter-spacing:.14em; font-weight:700; }
   #help h1 span { color:var(--acc); }
@@ -176,7 +187,17 @@
     <button id="mCrew">Crew: off</button>
     <button id="mSound">Sound: on</button>
     <button id="mGfx">Graphics: high</button>
-    <button id="mNew" class="quiet">Start a new valley</button>
+    <button id="mWorlds">Worlds</button>
+  </div>
+</div>
+
+<div id="worlds" class="over">
+  <div class="col t">
+    <h2>WORLDS</h2>
+    <div id="wList"></div>
+    <button id="wSave">Save this world</button>
+    <button id="wNew">New world</button>
+    <button id="wBack" class="quiet">Back</button>
   </div>
 </div>
 

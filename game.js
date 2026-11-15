@@ -1902,7 +1902,7 @@ addEventListener('keydown', e => {
   if (k >= '1' && k <= '4') select(+k - 1);
   if (k === 'm') toggleMap();
   if (k === 'h' || k === '?') showHelp(true);
-  if (k === 'escape') { const open = $('menu').style.display === 'flex' || $('help').style.display === 'flex'; showHelp(false); $('menu').style.display = open ? 'none' : 'flex'; }
+  if (k === 'escape') { const open = $('menu').style.display === 'flex' || $('help').style.display === 'flex' || $('worlds').style.display === 'flex'; showHelp(false); $('worlds').style.display = 'none'; $('menu').style.display = open ? 'none' : 'flex'; }
   audioStart();
 });
 addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
@@ -2038,11 +2038,56 @@ $('mGfx').onclick = () => {
   const next = { high: 'medium', medium: 'low', low: 'high' }[quality];
   localStorage.setItem('groundwork.quality', next); save(); location.reload();
 };
-$('mNew').onclick = () => {
-  if (!confirm('Start a brand new valley? Everything you dug here will be gone for good.')) return;
+// ---------------------------------------------------------------- worlds: saved valleys kept in the browser (IndexedDB)
+// The valley you're playing is always saved by itself. "Save this world" keeps a named copy; "Load" and "New world"
+// first keep the current valley as "Autosave" so nothing is lost by accident.
+const WDB = { db: null };
+function wdb() {
+  if (WDB.db) return Promise.resolve(WDB.db);
+  return new Promise((ok, bad) => {
+    const r = indexedDB.open('groundwork', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('worlds', { keyPath: 'id' });
+    r.onsuccess = () => { WDB.db = r.result; ok(r.result); };
+    r.onerror = () => bad(r.error);
+  });
+}
+const wreq = (mode, fn) => wdb().then(db => new Promise((ok, bad) => { const t = db.transaction('worlds', mode), r = fn(t.objectStore('worlds')); t.oncomplete = () => ok(r && r.result); t.onerror = () => bad(t.error); }));
+const worldsList = () => wreq('readonly', s => s.getAll()).then(l => (l || []).sort((a, b) => b.t - a.t));
+const worldPut = w => wreq('readwrite', s => s.put(w));
+const worldDel = id => wreq('readwrite', s => s.delete(id));
+async function keepCurrent(name, id) { const d = saveData(); if (d) await worldPut({ id: id || 'w' + Date.now(), name, t: Date.now(), data: d }); }
+function openWorlds() {
+  $('menu').style.display = 'none'; $('worlds').style.display = 'flex';
+  const L = $('wList'); L.textContent = '...';
+  worldsList().then(list => {
+    L.innerHTML = list.length ? '' : '<div class="wNone">NO SAVED WORLDS</div>';
+    for (const w of list) {
+      const row = document.createElement('div'); row.className = 'wRow';
+      const d = new Date(w.t);
+      row.innerHTML = `<span class="wName"></span><span class="wDate">${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span><button class="wLoad">Load</button><button class="wDel">X</button>`;
+      row.querySelector('.wName').textContent = w.name;
+      row.querySelector('.wLoad').onclick = async () => {
+        if (!confirm(`Load "${w.name}"? Your current valley is kept as "Autosave".`)) return;
+        await keepCurrent('Autosave', 'autosave');
+        localStorage.setItem(SAVE_KEY, w.data); noSave = true; location.reload();
+      };
+      row.querySelector('.wDel').onclick = async () => { if (!confirm(`Delete "${w.name}" for good?`)) return; await worldDel(w.id); openWorlds(); };
+      L.appendChild(row);
+    }
+  }).catch(() => { L.textContent = 'SAVING WORLDS IS BLOCKED IN THIS BROWSER'; });
+}
+$('mWorlds').onclick = openWorlds;
+$('wBack').onclick = () => { $('worlds').style.display = 'none'; $('menu').style.display = 'flex'; };
+$('wSave').onclick = async () => {
+  const n = prompt('Name this world', 'Valley ' + new Date().toLocaleDateString());
+  if (!n) return;
+  try { await keepCurrent(n.slice(0, 40)); toast('World saved'); openWorlds(); } catch (e) { toast('Could not save the world', 3000); }
+};
+$('wNew').onclick = async () => {
+  if (!confirm('Start a fresh valley? Your current one is kept as "Autosave" in Worlds.')) return;
+  try { await keepCurrent('Autosave', 'autosave'); } catch (e) { if (!confirm('Could not keep a copy of this valley. Start fresh anyway?')) return; }
   try { localStorage.removeItem(SAVE_KEY); } catch (e) { }
-  noSave = true;
-  location.reload();
+  noSave = true; location.reload();
 };
 
 // ---------------------------------------------------------------- saving (nothing ever resets)
@@ -2058,9 +2103,9 @@ function unb64(str, Type) {
   return new Type(u.buffer);
 }
 let saveWarned = false;
-function save() {
-  if (noSave || !machines.length) return;
-  try {
+function saveData() {
+  if (!machines.length) return null;
+  {
     const data = {
       v: 3, seed, t: Date.now(), active, stats, goal: { i: goal.i, marsh0: goal.marsh0 }, goalJob: goal.job ? jobs.indexOf(goal.job) : -1,
       H: b64(H), W: b64(W), M: b64(M), D: b64(D),
@@ -2070,7 +2115,13 @@ function save() {
       mach: machines.map(m => ({ type: m.type, x: +m.x.toFixed(3), z: +m.z.toFixed(3), yaw: +m.yaw.toFixed(4), load: m.load, blade: m.blade, arm: m.arm, swing: m.swing, reach: m.reach, tip: m.tip, tipping: m.tipping, grime: +m.grime.toFixed(3) })),
       jobs: jobs.map(j => ({ type: j.type, x0: j.x0, z0: j.z0, x1: j.x1, z1: j.z1, target: j.target, base: j.base, goal: j.goal })),
     };
-    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    return JSON.stringify(data);
+  }
+}
+function save() {
+  if (noSave || !machines.length) return;
+  try {
+    localStorage.setItem(SAVE_KEY, saveData());
   } catch (e) {
     if (!saveWarned) { saveWarned = true; toast('Saving is blocked in this browser', 4000); }
   }
