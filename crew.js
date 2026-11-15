@@ -373,7 +373,7 @@ export function makeCrew(G) {
 
   // ------------------------------------------------------------ following the player in a loose convoy
   const SLOT = { dozer: [-7, -15], excavator: [7, -18], hauler: [0, -28] };   // [sideways, behind] the player
-  function follow(m, st, dt, pm) {
+  function convoy(m, st, dt, pm) {
     const c = ctl(), [side, back] = SLOT[m.type];
     const fx = Math.sin(pm.yaw), fz = Math.cos(pm.yaw), lx = Math.cos(pm.yaw), lz = -Math.sin(pm.yaw);
     const x = clamp(pm.x + lx * side + fx * back, 5, 250), z = clamp(pm.z + lz * side + fz * back, 5, 250);
@@ -429,7 +429,7 @@ export function makeCrew(G) {
         if (site) unlock(site, m);
         continue;
       }
-      m.ai = site ? BRAIN[m.type](m, st, dt, site) : follow(m, st, dt, player);
+      m.ai = site ? BRAIN[m.type](m, st, dt, site) : convoy(m, st, dt, player);
     }
   }
   function setOn(v) {
