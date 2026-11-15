@@ -14,7 +14,7 @@ Play it here (once GitHub Pages is on, see below): https://mightywickedsounds-gi
   - **Excavator:** swing, reach, dig, dump (into the truck if it's under the bucket).
   - **Hauler:** carries 12 m³ and tips its bed to dump behind it.
   - Machines knock trees over. Fallen trees stay where they land as logs; push them out of the way.
-- **The crew (Menu → Crew):** three workers take the dozer, excavator and hauler and build a crossing over the nearest river, then the south creek. The excavator digs a borrow pit and loads the hauler, the hauler backs up to the water and tips, and the dozer pushes it out and grades the top. You get the loader. Switch to any of their machines to take it over; the others keep working, and the worker climbs back in when you leave. Turn the crew off and they stop and get out.
+- **The crew (Menu → Crew):** three workers take the dozer, excavator and hauler and follow you around the valley, finding their own way round deep water and steep ground. Stop at water too deep to drive through and they pick the narrowest spot nearby and build a crossing: the excavator digs a pit and loads the hauler, the hauler backs up to the water and tips, the dozer pushes it out and grades the top. When it's done ("CROSSING READY") they fall in behind you again; drive off and they drop the job and follow. You get the loader. Switch to any of their machines to take it over; the others keep working. Turn the crew off and they stop and get out.
 - **Jobs that pay:**
   - **Level the pad:** make the marked area flat at the see-through plane.
   - **Dig the pond:** dig down to the plane.
@@ -61,7 +61,7 @@ On GitHub, open this repository's **Settings, then Pages**. Under "Build and dep
 - the excavator digs and dumps;
 - a full bucket dumps as a heap about a metre tall;
 - fallen trees stay as logs and can be pushed;
-- the crew gets in, drives off, keeps working when you take one machine over, starts filling the river within five minutes, and gets out when turned off;
+- the crew gets in, follows you, keeps working when you take one machine over, starts building when you stop at the river and has begun filling it within five minutes, and gets out when turned off;
 - fast water washes loose dirt downstream, but the untouched riverbanks don't erode;
 - a tall pile crumbles until it can stand;
 - a finished job pays and a new one appears;
@@ -198,4 +198,11 @@ Tested: all 13 checks pass. The dam check now uses a wider dam and a little more
 **Graphics: digging.** The ground remembers how it was before you dug. Cut walls show soil layers: dark topsoil, brown subsoil, orange clay further down with a pale sandy band; dumped spoil is lighter and lumpier with clods. Cut faces are slightly rougher.
 
 **Tests:** 13 old checks plus 10 new ones (see Testing). The new pile check is what caught the loader bug. The test browser can't reach jsDelivr from here, so the test can load three.js from a local copy (`THREE_DIR=...`); the game itself still uses jsDelivr. I couldn't play it with a real graphics card or on a phone; screenshots were checked for the piles, pit walls, workers in cabs and the minimap.
+
+### Round 7: the crew follows you (owner: free roam, they do the work)
+
+- The crew no longer works on fixed spots. They drive behind you in a loose convoy (dozer and excavator either side, hauler at the back) wherever you go, planning their own route across the valley on a 2 m grid: round water deeper than each machine can ford and up slopes it can climb. Once a crossing is built, their routes use it.
+- Stop at a river or creek too deep to drive through (or have your machine refuse to go in) and after a moment they announce "CREW: BUILDING A CROSSING". They aim straight across the water near you, pick the narrowest line that keeps clear of your machine, and build it with the same team job as before. "CROSSING READY" when it's shallow enough to drive across; then they follow you again.
+- Drive more than about 90 m away from a crossing they're building and they drop it and come with you. The dirt they've already moved stays, so stopping there again later picks up where they left off.
+- Bug found while testing: two parts of the crew code had the same name, so the machines stood still during a job; fixed.
 
