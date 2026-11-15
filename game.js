@@ -1688,7 +1688,7 @@ const works = makeWorks({
 });
 const pipeMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a4, roughness: .35, metalness: .85 });
 const crew = makeCrew({
-  clamp, angWrap, YARD, RIVERS, SPEC, machines, hAt, wAt, gAt, wetAt, W, D, M, dirty, scene, THREE, pipeMat, works,
+  clamp, angWrap, YARD, RIVERS, SPEC, machines, hAt, wAt, gAt, wetAt, H, W, D, M, dirty, scene, THREE, pipeMat, works,
   h0At: (x, z) => H0[cellOf(x, z)],
   makeMachine, removeMachine,
   status: (t, f) => { const e = $('crewSt'); e.style.display = t ? 'flex' : 'none'; $('crewG').style.display = t ? 'block' : 'none'; if (t) { $('crewName').textContent = 'Crew · ' + t; $('crewPct').textContent = f === undefined ? '' : Math.round(f * 100) + '%'; $('crewBar').style.width = Math.round((f || 0) * 100) + '%'; } },
