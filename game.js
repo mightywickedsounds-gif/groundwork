@@ -1088,7 +1088,7 @@ function toolLoader(m, dt, inp) {
     m.pour += dt * 4;
   }
   if (inp.act) {
-    if (m.load.v < .05) toast('Lower the bucket (F) and drive into dirt to fill it');
+    if (m.load.v < .05) toast(isTouch ? 'Lower bucket into dirt' : 'Lower bucket into dirt <kbd>F</kbd>');
     else if (m.dumpT <= 0) {
       m.dumpT = .9;
       _p.set(0, -.45, .97); m.bucket.localToWorld(_p);
@@ -1097,10 +1097,10 @@ function toolLoader(m, dt, inp) {
       m.pourT = .55; m.pourG = grav;
       if (h && m.arm > .55) {
         const got = transfer(m.load, h.load, SPEC.hauler.cap);
-        if (got <= 0) toast('The hauler is full');
+        if (got <= 0) toast('Hauler full');
         else { dust(_p.x, _p.y - 1, _p.z, 14, grav ? GRAVEL_C : DIRT_C); snd.dump(_p.x, _p.y - 1, _p.z, got, grav); snd.clang(_p.x, _p.y - 1, _p.z, 95, .25); }
       } else {
-        if (h) toast('Raise the bucket higher (R) to reach the hauler bed');
+        if (h) toast(isTouch ? 'Raise bucket higher' : 'Raise bucket higher <kbd>R</kbd>');
         dropCircle(m.load, _p.x, _p.z, 1.6, m.load.v);
         dust(_p.x, hAt(_p.x, _p.z) + .5, _p.z, 16, grav ? GRAVEL_C : DIRT_C);
         snd.dump(_p.x, hAt(_p.x, _p.z), _p.z, vol, grav);
@@ -1138,7 +1138,7 @@ function toolExcavator(m, dt, inp) {
       if (m.mode === 'dig') {
         const gBefore = m.load.g;
         const got = cutCircle(m.load, tx, tz, 1.3, g - 1.0, s.cap);
-        if (got < .05) toast('Nothing left to dig here: the ground is too hard below');
+        if (got < .05) toast('Rock below. Too hard to dig');
         else { m.dig += got; m.digG += m.load.g - gBefore; snd.scoop(tx, g, tz, loadMat(m.load) === 2); }
         dust(tx, g + .3, tz, 12, loadMat(m.load) === 2 ? GRAVEL_C : DIRT_C);
       } else {
@@ -1147,7 +1147,7 @@ function toolExcavator(m, dt, inp) {
         chunks(_p.x, _p.y, _p.z, 26, grav, 0, 0, .9);
         if (truck) {
           const got = transfer(m.load, truck.load, SPEC.hauler.cap);
-          if (got <= 0) toast('The hauler is full');
+          if (got <= 0) toast('Hauler full');
           else { snd.dump(tx, truck.y + 2.5, tz, got, grav); snd.clang(tx, truck.y + 2, tz, 90, .3); }
           dust(tx, truck.y + 3, tz, 12, grav ? GRAVEL_C : DIRT_C);
         } else {
@@ -1177,7 +1177,7 @@ function toolExcavator(m, dt, inp) {
 }
 function toolHauler(m, dt, inp) {
   const s = SPEC.hauler;
-  if (inp.act) { m.tipping = !m.tipping; if (m.tipping && m.load.v < .05) toast('The bed is empty: get loaded at the gravel pit or a dig site'); }
+  if (inp.act) { m.tipping = !m.tipping; if (m.tipping && m.load.v < .05) toast('Bed empty'); }
   const before = m.tip;
   m.tip = clamp(m.tip + (m.tipping ? .45 : -.5) * dt, 0, 1);
   if (m.tip !== before) m.hyd = Math.max(m.hyd, .85);
@@ -1263,7 +1263,7 @@ function jobVis(j) {
   }
   scene.add(grp);
   j.grp = grp;
-  const tag = document.createElement('div'); tag.className = 'tag'; tag.style.borderBottom = '2px solid #' + info.color.toString(16).padStart(6, '0');
+  const tag = document.createElement('div'); tag.className = 'tag t cap'; tag.style.setProperty('--c', '#' + info.color.toString(16).padStart(6, '0'));
   $('tags').appendChild(tag); j.tag = tag;
   jobVisRefresh(j);
 }
@@ -1308,7 +1308,7 @@ function updateJobs(dt) {
     if (j.prog >= need) {
       const info = JOB[j.type];
       stats.money += info.reward; stats.done++;
-      toast(`Job done: ${info.name}. +$${info.reward}`, 3500);
+      toast('Job complete', 3200, `+$${info.reward}`);
       snd.chime();
       jobDispose(j);
       jobs.splice(jobs.indexOf(j), 1);
@@ -1319,14 +1319,15 @@ function updateJobs(dt) {
   }
   renderJobs();
 }
+const SHORT = { level: 'Level pad', pond: 'Dig pond', stock: 'Stockpile' };
 function renderJobs() {
   $('money').textContent = '$' + stats.money.toLocaleString();
-  $('moved').textContent = Math.round(stats.moved).toLocaleString() + ' m³ moved';
-  $('joblist').innerHTML = jobs.map(j => {
-    const info = JOB[j.type], p = Math.round(j.prog * 100);
-    const what = j.type === 'stock' ? `Dump ${j.goal} m³ of gravel inside the posts` : info.what;
-    return `<div class="job"><div class="nm"><span>${info.name}</span><span>${p}% · $${info.reward}</span></div><div class="what">${what}</div><div class="bar"><i style="width:${p}%;background:#${info.color.toString(16).padStart(6, '0')}"></i></div></div>`;
-  }).join('');
+  const me = machines[active];
+  let best = null, bd = 1e9;
+  if (me) for (const j of jobs) { const d = Math.hypot((j.x0 + j.x1) / 2 - me.x, (j.z0 + j.z1) / 2 - me.z); if (d < bd) { bd = d; best = j; } }
+  $('objName').textContent = best ? SHORT[best.type] : '';
+  $('objPct').textContent = best ? Math.round(best.prog * 100) + '%' : '';
+  $('objBar').style.width = best ? Math.round(best.prog * 100) + '%' : '0';
 }
 
 // ---------------------------------------------------------------- input
@@ -1347,6 +1348,7 @@ addEventListener('keydown', e => {
   if (k >= '1' && k <= '4') select(+k - 1);
   if (k === 'm') toggleSound();
   if (k === 'h' || k === '?') showHelp(true);
+  if (k === 'escape') { const open = $('menu').style.display === 'flex' || $('help').style.display === 'flex'; showHelp(false); $('menu').style.display = open ? 'none' : 'flex'; }
   audioStart();
 });
 addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
@@ -1410,6 +1412,12 @@ if (isTouch) document.body.classList.add('touch');
   }
 }
 
+const ICON = {
+  dozer: '<svg viewBox="0 0 40 24"><rect x="5" y="16" width="24" height="6" rx="3"/><rect x="8" y="9" width="15" height="7"/><rect x="10" y="3" width="8" height="7"/><path d="M30 6q6 7 1 16h3q5-9-1-16z"/></svg>',
+  loader: '<svg viewBox="0 0 40 24"><circle cx="9" cy="18" r="5"/><circle cx="25" cy="18" r="5"/><rect x="4" y="9" width="20" height="6"/><rect x="7" y="2" width="8" height="8"/><path d="M19 10l11 3" stroke-width="3" fill="none"/><path d="M29 10h8l-1 9h-6z"/></svg>',
+  excavator: '<svg viewBox="0 0 40 24"><rect x="3" y="17" width="22" height="5" rx="2.5"/><rect x="5" y="10" width="17" height="7"/><rect x="15" y="4" width="6" height="7"/><path d="M20 10l8-7 8 9" stroke-width="3" fill="none"/><path d="M33 12h5l-1 6h-4z"/></svg>',
+  hauler: '<svg viewBox="0 0 40 24"><circle cx="8" cy="19" r="4"/><circle cx="25" cy="19" r="4"/><circle cx="34" cy="19" r="4"/><rect x="2" y="6" width="9" height="9"/><path d="M13 3h25l-2 12H13z"/></svg>',
+};
 function select(i) {
   if (!machines[i]) return;
   active = i;
@@ -1418,46 +1426,49 @@ function select(i) {
   renderBar();
   const m = machines[i];
   $('mname').textContent = SPEC[m.type].name;
-  $('mhint').textContent = SPEC[m.type].hint + ' 1-4 or Tab switches machine, C cab view.';
   const show = (k, on) => document.querySelector(`#tbtns [data-k=${k}]`).classList.toggle('hide', !on);
   show('swl', m.type === 'excavator'); show('swr', m.type === 'excavator');
   show('up', m.type !== 'hauler'); show('down', m.type !== 'hauler');
   show('act', m.type !== 'dozer');
-  $('actBtn').textContent = { loader: 'Dump', excavator: 'Dig / Dump', hauler: 'Tip bed' }[m.type] || '';
+  renderJobs();
 }
 function renderBar() {
-  $('mbar').innerHTML = machines.map((m, i) => {
-    const s = SPEC[m.type], f = Math.round(100 * m.load.v / s.cap);
-    return `<button data-i="${i}" class="${i === active ? 'on' : ''}"><b>${s.name}</b><small>${i + 1}</small><div class="bar"><i style="width:${Math.min(100, f)}%;background:#e0772c"></i></div></button>`;
-  }).join('');
+  $('mbar').innerHTML = machines.map((m, i) =>
+    `<button data-i="${i}" class="${i === active ? 'on' : ''}" aria-label="${SPEC[m.type].name}"><b>${i + 1}</b>${ICON[m.type]}<i><u></u></i></button>`).join('');
 }
 $('mbar').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { select(+b.dataset.i); b.blur(); } });
 
 // ---------------------------------------------------------------- HUD, toast, menus
 let toastT = 0;
-function toast(msg, ms = 2200) {
-  const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+function toast(msg, ms = 1800, sub = '') {
+  const t = $('toast');
+  t.innerHTML = msg + (sub ? `<small>${sub}</small>` : '');
+  t.classList.toggle('big', !!sub); t.style.display = 'block';
   clearTimeout(toastT); toastT = setTimeout(() => { t.style.display = 'none'; }, ms);
 }
-function hudStat(m) {
-  const s = SPEC[m.type], L = m.load;
-  const amt = `${L.v.toFixed(1)} / ${s.cap} m³${L.v > .05 ? ' ' + loadName(L) : ''}`;
-  if (m.type === 'dozer') return `Blade ${m.blade >= 0 ? '+' : ''}${m.blade.toFixed(1)} m · pushing ${amt}`;
-  if (m.type === 'loader') return `Bucket ${amt} · ${m.arm < .2 ? 'down' : m.arm > .55 ? 'high' : 'mid'}`;
-  if (m.type === 'excavator') return `Bucket ${amt} · reach ${m.reach.toFixed(1)} m`;
-  return `Bed ${amt} · ${m.tipping ? 'tipping' : 'down'}`;
+function toolText(m) {
+  if (m.type === 'dozer') return `Blade ${m.blade >= 0 ? '+' : ''}${m.blade.toFixed(1)}`;
+  if (m.type === 'loader') return `Bucket ${m.arm < .2 ? 'down' : m.arm > .55 ? 'up' : 'mid'}`;
+  if (m.type === 'excavator') return `Reach ${m.reach.toFixed(1)} m`;
+  return m.tipping ? 'Bed up' : 'Bed down';
 }
 let barTimer = 0;
 function updateHud(dt) {
   barTimer -= dt;
   if (barTimer > 0) return;
-  barTimer = .2;
-  const m = machines[active];
-  $('mstat').textContent = hudStat(m) + (Math.abs(m.v) > .1 ? ` · ${(Math.abs(m.v) * 3.6).toFixed(0)} km/h` : '');
+  barTimer = .15;
+  const m = machines[active], s = SPEC[m.type], f = Math.min(1, m.load.v / s.cap);
+  $('mspd').textContent = Math.abs(m.v) > .3 ? `${(Math.abs(m.v) * 3.6).toFixed(0)} km/h` : '';
+  $('mgauge').style.width = (f * 100).toFixed(0) + '%';
+  $('mtool').textContent = toolText(m);
+  $('mload').textContent = m.load.v > .05 ? `${m.load.v.toFixed(1)} m³ ${loadName(m.load)}` : 'empty';
   document.querySelectorAll('#mbar button').forEach((b, i) => {
     const mm = machines[i]; if (!mm) return;
-    b.querySelector('i').style.width = Math.min(100, Math.round(100 * mm.load.v / SPEC[mm.type].cap)) + '%';
+    b.querySelector('u').style.width = Math.min(100, Math.round(100 * mm.load.v / SPEC[mm.type].cap)) + '%';
   });
+  if (m.type === 'excavator') $('actBtn').textContent = m.load.v > .05 ? 'DUMP' : 'DIG';
+  else $('actBtn').textContent = { loader: 'DUMP', hauler: 'TIP' }[m.type] || '';
+  renderJobs();
 }
 function showHelp(on) { $('help').style.display = on ? 'flex' : 'none'; }
 $('helpGo').onclick = () => { showHelp(false); audioStart(); localStorage.setItem('groundwork.seenHelp', '1'); };
@@ -1503,7 +1514,7 @@ function save() {
     };
     localStorage.setItem(SAVE_KEY, JSON.stringify(data));
   } catch (e) {
-    if (!saveWarned) { saveWarned = true; toast('This browser would not let the valley save. Progress may be lost.', 4000); }
+    if (!saveWarned) { saveWarned = true; toast('Saving is blocked in this browser', 4000); }
   }
 }
 function load() {
@@ -1584,7 +1595,7 @@ function updateTags() {
     if (vis) {
       j.tag.style.left = ((_tv.x + 1) / 2 * w).toFixed(0) + 'px';
       j.tag.style.top = ((1 - _tv.y) / 2 * h).toFixed(0) + 'px';
-      const txt = `${JOB[j.type].name} · ${Math.round(j.prog * 100)}%`;
+      const txt = `${SHORT[j.type]} ${Math.round(j.prog * 100)}%`;
       if (j.tag.textContent !== txt) j.tag.textContent = txt;
     }
   }
@@ -1733,7 +1744,6 @@ function start() {
   camera.position.copy(_cam);
   $('loading').style.display = 'none';
   if (!resumed && !localStorage.getItem('groundwork.seenHelp')) showHelp(true);
-  else if (resumed) toast('Welcome back. Your valley is just as you left it.', 3000);
   if (!resumed) save();
   // test hook: run the game forward without drawing (used by the automated checks)
   window.GW = { snd, machines, H, W, M, D, BED, stats, hAt, select, save, trees, rocks, renderer, scene, camera, get jobs() { return jobs; }, get active() { return active; },

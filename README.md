@@ -91,3 +91,16 @@ Built as a game in the same genre as a construction-sandbox reel the owner liked
 
 **Tested:** all 11 gameplay checks pass (one new: no broken numbers reach the sound engine, which caught a real bug where a zero-length frame made a number invalid). I also measured the sound output: the engines are running, and they get louder under load. I haven't been able to listen to it or see it on a real phone; the test browser has no graphics card. If phones stutter, Menu → Graphics → Low.
 
+### Round 3: a game screen, not a web page (owner: less text and boxes)
+
+The big text panels and paragraphs of hints are gone. What's left on screen:
+- **Top left:** the machine's name, a thin load gauge and one short line (blade height or bucket position, and what's in it). Speed shows only while moving.
+- **Top right:** money, the nearest job with its progress, and a small pause button.
+- **Bottom:** four machine silhouettes to switch machines (keys 1-4 still work).
+- **Jobs in the world:** a small diamond marker with the job name and percent, no box.
+- **Messages:** short prompts like "HAULER FULL" or "LOWER BUCKET INTO DIRT [F]"; a finished job shows "JOB COMPLETE +$450".
+- **Controls** only appear on the controls screen (first launch, H, or Pause → Controls). Esc pauses.
+- **Phone:** round icon buttons instead of word buttons.
+
+Tested: all 11 gameplay checks pass; desktop and phone screenshots checked for overlaps.
+

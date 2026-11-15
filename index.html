@@ -6,71 +6,101 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://cdn.jsdelivr.net; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
 <meta name="referrer" content="no-referrer">
 <title>Groundwork</title>
-<meta name="theme-color" content="#1b1d21">
+<meta name="theme-color" content="#111214">
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <style>
-  :root { --ink:#f3efe6; --dim:#b9b3a6; --panel:rgba(22,24,28,.82); --line:rgba(255,255,255,.12); --acc:#e0772c; --ok:#7fc46a; }
+  :root { --ink:#f4f1ea; --dim:rgba(244,241,234,.62); --acc:#e8792a; --shadow:0 1px 2px rgba(0,0,0,.75), 0 0 8px rgba(0,0,0,.35);
+    --font:"Bahnschrift","DIN Alternate","DIN Condensed","Roboto Condensed","Arial Narrow",system-ui,sans-serif; }
   * { box-sizing:border-box; }
-  html,body { margin:0; height:100%; overflow:hidden; background:#1b1d21; color:var(--ink);
-    font:14px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; -webkit-user-select:none; user-select:none; touch-action:none; }
+  html,body { margin:0; height:100%; overflow:hidden; background:#111214; color:var(--ink); font:15px/1.2 var(--font);
+    -webkit-user-select:none; user-select:none; touch-action:none; }
   canvas#view { position:fixed; inset:0; width:100%; height:100%; display:block; }
-  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; }
-  #hud { position:fixed; left:12px; top:12px; max-width:min(380px,calc(100vw - 24px)); padding:10px 12px; pointer-events:none; }
-  #hud .brand { font-weight:800; letter-spacing:.14em; font-size:12px; color:var(--acc); }
-  #hud .mname { font-size:20px; font-weight:700; margin-top:2px; }
-  #hud .mstat { color:var(--ink); margin-top:2px; font-variant-numeric:tabular-nums; }
-  #hud .hint { color:var(--dim); font-size:12px; margin-top:6px; }
-  #jobs { position:fixed; right:12px; top:12px; width:250px; padding:10px 12px; }
-  #jobs .row { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
-  #jobs .money { font-size:20px; font-weight:800; font-variant-numeric:tabular-nums; }
-  #jobs .sub { color:var(--dim); font-size:12px; }
-  .job { margin-top:9px; }
-  .job .nm { display:flex; justify-content:space-between; font-weight:600; }
-  .job .nm span:last-child { color:var(--dim); font-weight:500; font-variant-numeric:tabular-nums; }
-  .job .what { color:var(--dim); font-size:12px; }
-  .bar { height:5px; background:rgba(255,255,255,.12); border-radius:3px; margin-top:4px; overflow:hidden; }
-  .bar i { display:block; height:100%; width:0; background:var(--ok); }
-  #mbar { position:fixed; left:50%; bottom:12px; transform:translateX(-50%); display:flex; gap:6px; padding:6px; }
-  #mbar button { background:transparent; color:var(--ink); border:1px solid transparent; border-radius:8px; padding:6px 10px; font:inherit; cursor:pointer; min-width:84px; text-align:left; }
-  #mbar button.on { border-color:var(--acc); background:rgba(224,119,44,.14); }
-  #mbar button b { display:block; font-size:13px; }
-  #mbar button small { color:var(--dim); font-size:11px; }
-  #mbar .bar { height:3px; }
-  #menuBtn { position:fixed; right:12px; bottom:12px; }
-  .btn { background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:8px; padding:8px 12px; font:inherit; cursor:pointer; }
-  .btn.acc { background:var(--acc); border-color:var(--acc); color:#1b1d21; font-weight:700; }
-  #toast { position:fixed; left:50%; top:16px; transform:translateX(-50%); padding:9px 14px; display:none; font-weight:600; pointer-events:none; }
-  #help, #menu { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(10,11,13,.55); z-index:20; }
-  #help .card, #menu .card { width:min(520px,calc(100vw - 24px)); max-height:calc(100vh - 40px); overflow:auto; padding:18px 20px; }
-  #help h1 { margin:0; font-size:26px; letter-spacing:.06em; }
-  #help h1 em { font-style:normal; color:var(--acc); }
-  #help p, #help li { color:#ddd8cc; }
-  #help table { border-collapse:collapse; width:100%; font-size:13px; margin:8px 0; }
-  #help td { padding:3px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
-  #help td:first-child { white-space:nowrap; color:var(--acc); font-weight:600; }
-  #menu .card { display:flex; flex-direction:column; gap:8px; }
-  #loading { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:#1b1d21; z-index:30; font-weight:600; letter-spacing:.08em; }
-  .tag { position:fixed; transform:translate(-50%,-100%); padding:3px 7px; font-size:12px; font-weight:600; pointer-events:none; white-space:nowrap; border-radius:6px; background:rgba(22,24,28,.75); }
+  .t { text-shadow:var(--shadow); }
+  .cap { text-transform:uppercase; letter-spacing:.09em; }
+  .num { font-variant-numeric:tabular-nums; }
+  .gauge { height:3px; background:rgba(255,255,255,.22); margin-top:5px; }
+  .gauge i { display:block; height:100%; width:0; background:var(--ink); }
+
+  /* machine readout, top left */
+  #hud { position:fixed; left:max(18px, env(safe-area-inset-left)); top:max(16px, env(safe-area-inset-top)); width:190px; pointer-events:none; }
+  #hud .row { display:flex; justify-content:space-between; align-items:baseline; }
+  #mname { font-size:17px; font-weight:700; }
+  #mspd { font-size:13px; color:var(--dim); }
+  #mgauge { background:var(--acc); }
+  #mstat { margin-top:5px; font-size:12px; color:var(--dim); display:flex; justify-content:space-between; }
+
+  /* money + objective, top right */
+  #topr { position:fixed; right:max(16px, env(safe-area-inset-right)); top:max(14px, env(safe-area-inset-top)); display:flex; gap:14px; align-items:flex-start; }
+  #score { text-align:right; width:190px; pointer-events:none; }
+  #money { font-size:22px; font-weight:700; }
+  #obj { margin-top:4px; font-size:12px; color:var(--dim); display:flex; justify-content:space-between; gap:10px; white-space:nowrap; }
+  #objBar { background:var(--ink); }
+  #menuBtn { width:34px; height:34px; border:0; background:transparent; padding:6px; cursor:pointer; color:var(--ink); filter:drop-shadow(0 1px 2px rgba(0,0,0,.7)); }
+  #menuBtn svg { width:100%; height:100%; display:block; }
+
+  /* machine selector, bottom */
+  #mbar { position:fixed; left:50%; bottom:max(14px, env(safe-area-inset-bottom)); transform:translateX(-50%); display:flex; gap:6px; }
+  #mbar button { position:relative; width:58px; height:44px; padding:6px 8px 9px; border:0; border-radius:4px; background:rgba(12,13,15,.42); color:rgba(244,241,234,.55); cursor:pointer; }
+  #mbar button svg { width:100%; height:100%; display:block; fill:currentColor; stroke:currentColor; }
+  #mbar button.on { color:var(--ink); background:rgba(12,13,15,.62); box-shadow:inset 0 -2px 0 var(--acc); }
+  #mbar button b { position:absolute; left:5px; top:3px; font-size:10px; font-weight:600; opacity:.7; }
+  #mbar button i { position:absolute; left:8px; right:8px; bottom:4px; height:2px; background:rgba(255,255,255,.15); }
+  #mbar button i u { display:block; height:100%; width:0; background:var(--acc); text-decoration:none; }
+
+  /* short messages */
+  #toast { position:fixed; left:0; right:0; top:22%; text-align:center; pointer-events:none; display:none; font-size:15px; font-weight:600; }
+  #toast.big { font-size:26px; font-weight:700; }
+  #toast small { display:block; font-size:16px; color:var(--acc); margin-top:4px; letter-spacing:.06em; }
+  #toast kbd, #help kbd { display:inline-block; min-width:20px; padding:1px 5px; border:1px solid rgba(244,241,234,.55); border-radius:3px; font:600 11px var(--font); text-align:center; margin:0 3px; vertical-align:1px; }
+
+  /* job markers in the world */
   #tags { position:fixed; inset:0; pointer-events:none; overflow:hidden; }
+  .tag { position:fixed; transform:translate(-50%,-100%); font-size:11px; font-weight:600; white-space:nowrap; text-align:center; }
+  .tag::before { content:""; display:block; width:7px; height:7px; margin:0 auto 4px; transform:rotate(45deg); background:var(--c, var(--ink)); box-shadow:0 0 3px rgba(0,0,0,.6); }
+
+  /* pause menu and controls */
+  .over { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(8,9,10,.62); z-index:20; }
+  #menu .col { display:flex; flex-direction:column; align-items:center; gap:4px; }
+  #menu h2 { margin:0 0 18px; font-size:13px; font-weight:600; color:var(--dim); letter-spacing:.3em; }
+  #menu button { border:0; background:none; color:var(--ink); font:600 21px var(--font); text-transform:uppercase; letter-spacing:.1em; padding:9px 18px; cursor:pointer; }
+  #menu button:hover, #menu button:focus-visible { color:var(--acc); outline:none; }
+  #menu button.quiet { font-size:14px; color:var(--dim); margin-top:14px; }
+  #help .wrap { width:min(560px, calc(100vw - 36px)); }
+  #help h1 { margin:0 0 4px; font-size:32px; letter-spacing:.14em; font-weight:700; }
+  #help h1 span { color:var(--acc); }
+  #help .sub { color:var(--dim); margin:0 0 20px; font-size:14px; }
+  #help .keys { display:grid; grid-template-columns:auto 1fr; gap:9px 18px; font-size:14px; align-items:center; }
+  #help .keys > span:nth-child(odd) { text-align:right; white-space:nowrap; }
+  #help .note { color:var(--dim); font-size:13px; margin:20px 0 0; line-height:1.45; }
+  #help .go { margin-top:22px; border:0; background:var(--acc); color:#16120e; font:700 15px var(--font); letter-spacing:.12em; text-transform:uppercase; padding:11px 26px; cursor:pointer; }
+  body.touch #help .keys .kb { display:none; }
+  body:not(.touch) #help .keys .tc { display:none; }
+
+  #loading { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:#111214; z-index:30; font-weight:700; letter-spacing:.3em; font-size:14px; color:var(--dim); }
+
   /* touch controls */
   #touch { display:none; }
   body.touch #touch { display:block; }
-  #stick { position:fixed; left:18px; bottom:84px; width:130px; height:130px; border-radius:50%; background:rgba(22,24,28,.45); border:1px solid var(--line); touch-action:none; }
-  #knob { position:absolute; left:50%; top:50%; width:56px; height:56px; margin:-28px 0 0 -28px; border-radius:50%; background:rgba(243,239,230,.85); }
-  #tbtns { position:fixed; right:14px; bottom:84px; display:grid; grid-template-columns:repeat(2,74px); gap:8px; }
-  #tbtns button { height:54px; border-radius:12px; background:rgba(22,24,28,.7); color:var(--ink); border:1px solid var(--line); font:600 13px system-ui,sans-serif; touch-action:none; }
-  #tbtns button.big { grid-column:span 2; background:var(--acc); color:#1b1d21; border-color:var(--acc); }
+  #stick { position:fixed; left:22px; bottom:86px; width:124px; height:124px; border-radius:50%; border:2px solid rgba(244,241,234,.28); touch-action:none; }
+  #knob { position:absolute; left:50%; top:50%; width:50px; height:50px; margin:-25px 0 0 -25px; border-radius:50%; background:rgba(244,241,234,.55); }
+  #tbtns { position:fixed; right:18px; bottom:86px; width:150px; height:150px; }
+  #tbtns button { position:absolute; width:50px; height:50px; border-radius:50%; border:2px solid rgba(244,241,234,.3); background:rgba(12,13,15,.35); color:var(--ink); padding:12px; touch-action:none; }
+  #tbtns button svg { width:100%; height:100%; display:block; fill:none; stroke:currentColor; stroke-width:2.4; stroke-linecap:round; stroke-linejoin:round; }
   #tbtns button.hide { display:none; }
-  body.touch #hud .hint { display:none; }
-  body.touch #mbar { left:12px; transform:none; }
-  @media (max-width:760px) {
-    #jobs { width:190px; padding:8px 10px; font-size:12px; }
-    #jobs .money { font-size:16px; }
-    .job .what { display:none; }
-    #hud { max-width:calc(100vw - 230px); padding:8px 10px; }
-    #hud .mname { font-size:16px; }
-    #mbar button { min-width:62px; padding:5px 7px; }
-    #mbar button small { display:none; }
+  #tbtns [data-k=act] { right:0; bottom:0; width:72px; height:72px; background:rgba(232,121,42,.75); border-color:transparent; font:700 13px var(--font); letter-spacing:.08em; padding:0; }
+  #tbtns [data-k=up] { right:84px; bottom:46px; }
+  #tbtns [data-k=down] { right:84px; bottom:-10px; }
+  #tbtns [data-k=swl] { right:42px; bottom:84px; }
+  #tbtns [data-k=swr] { right:-12px; bottom:84px; }
+  #tbtns [data-k=cam] { right:96px; bottom:104px; width:40px; height:40px; padding:9px; }
+  body.touch #mbar { bottom:max(12px, env(safe-area-inset-bottom)); }
+  @media (max-width:640px) {
+    #hud { width:124px; } #score { width:112px; }
+    #mstat, #obj { font-size:10px; letter-spacing:.05em; }
+    #topr { gap:6px; }
+    #mname { font-size:15px; }
+    #money { font-size:19px; }
+    #mbar button { width:50px; height:40px; }
   }
 </style>
 </head>
@@ -78,66 +108,72 @@
 <canvas id="view"></canvas>
 <div id="tags"></div>
 
-<div id="hud" class="panel">
-  <div class="brand">GROUNDWORK</div>
-  <div class="mname" id="mname">-</div>
-  <div class="mstat" id="mstat"></div>
-  <div class="hint" id="mhint"></div>
+<div id="hud" class="t">
+  <div class="row"><span id="mname" class="cap">-</span><span id="mspd" class="num"></span></div>
+  <div class="gauge"><i id="mgauge"></i></div>
+  <div id="mstat" class="cap num"><span id="mtool"></span><span id="mload"></span></div>
 </div>
 
-<div id="jobs" class="panel">
-  <div class="row"><span class="money" id="money">$0</span><span class="sub" id="moved">0 m³ moved</span></div>
-  <div id="joblist"></div>
+<div id="topr">
+  <div id="score" class="t">
+    <div id="money" class="num">$0</div>
+    <div id="obj" class="cap num"><span id="objName"></span><span id="objPct"></span></div>
+    <div class="gauge"><i id="objBar"></i></div>
+  </div>
+  <button id="menuBtn" aria-label="Pause"><svg viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/></svg></button>
 </div>
 
-<div id="mbar" class="panel"></div>
-<button id="menuBtn" class="btn">Menu</button>
-<div id="toast" class="panel"></div>
+<div id="mbar"></div>
+<div id="toast" class="t cap"></div>
 
 <div id="touch">
   <div id="stick"><div id="knob"></div></div>
   <div id="tbtns">
-    <button data-k="up">Raise</button>
-    <button data-k="down">Lower</button>
-    <button data-k="swl">Swing L</button>
-    <button data-k="swr">Swing R</button>
-    <button data-k="act" class="big" id="actBtn">Dig / Dump</button>
-    <button data-k="cam">Cab view</button>
-    <button data-k="next">Next</button>
+    <button data-k="up" aria-label="Raise"><svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg></button>
+    <button data-k="down" aria-label="Lower"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+    <button data-k="swl" aria-label="Swing left"><svg viewBox="0 0 24 24"><path d="M19 15a7 7 0 0 0-13-3"/><path d="M5 6v6h6"/></svg></button>
+    <button data-k="swr" aria-label="Swing right"><svg viewBox="0 0 24 24"><path d="M5 15a7 7 0 0 1 13-3"/><path d="M19 6v6h-6"/></svg></button>
+    <button data-k="act" id="actBtn">DIG</button>
+    <button data-k="cam" aria-label="Cab view"><svg viewBox="0 0 24 24"><path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/></svg></button>
   </div>
 </div>
 
-<div id="help">
-  <div class="card panel">
-    <h1>GROUND<em>WORK</em></h1>
-    <p>A valley that remembers. Every cut, pile and channel you make stays where you left it. Nothing resets, even after you close the page.</p>
-    <table>
-      <tr><td>W A S D</td><td>Drive and steer (arrow keys work too)</td></tr>
-      <tr><td>R / F</td><td>Raise / lower the blade or bucket. Excavator: reach out / pull in</td></tr>
-      <tr><td>Q / E</td><td>Excavator: swing the cab</td></tr>
-      <tr><td>Space</td><td>Dig or dump. Hauler: tip or lower the bed</td></tr>
-      <tr><td>1-4, Tab</td><td>Jump between machines</td></tr>
-      <tr><td>C</td><td>Cab view</td></tr>
-      <tr><td>Mouse</td><td>Drag to look around, scroll to zoom</td></tr>
-    </table>
-    <p><b>Jobs</b> pay when the ground in the marked area is right. <b>Level</b>: flat at the see-through plane. <b>Pond</b>: dug down to the plane. <b>Stockpile</b>: gravel dumped inside the posts. The grey hill is the gravel pit.</p>
-    <p><b>Dirt slides</b> if you pile it too steep, and wet banks slump sooner. <b>Water runs downhill</b>: cut a channel from the river and it follows; dam it and a lake builds up behind.</p>
-    <p style="text-align:right;margin-bottom:0"><button class="btn acc" id="helpGo">Start digging</button></p>
+<div id="help" class="over">
+  <div class="wrap t">
+    <h1>GROUND<span>WORK</span></h1>
+    <p class="sub">Every cut and pile stays where you leave it.</p>
+    <div class="keys">
+      <span class="kb"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span class="kb">Drive</span>
+      <span class="kb"><kbd>R</kbd><kbd>F</kbd></span><span class="kb">Raise / lower blade or bucket (excavator: reach)</span>
+      <span class="kb"><kbd>Q</kbd><kbd>E</kbd></span><span class="kb">Swing excavator</span>
+      <span class="kb"><kbd>Space</kbd></span><span class="kb">Dig, dump, tip bed</span>
+      <span class="kb"><kbd>1</kbd>-<kbd>4</kbd></span><span class="kb">Switch machine</span>
+      <span class="kb"><kbd>C</kbd></span><span class="kb">Cab view</span>
+      <span class="kb"><kbd>Esc</kbd></span><span class="kb">Pause</span>
+      <span class="tc">Left stick</span><span class="tc">Drive</span>
+      <span class="tc">Arrows</span><span class="tc">Raise / lower (excavator: reach)</span>
+      <span class="tc">Curved arrows</span><span class="tc">Swing excavator</span>
+      <span class="tc">Orange button</span><span class="tc">Dig, dump, tip bed</span>
+      <span class="tc">Bottom bar</span><span class="tc">Switch machine</span>
+    </div>
+    <p class="note">Jobs are marked with posts. Level a pad to the see-through plane, dig a pond down to it, or haul gravel from the grey pit. Dirt slides if piled too steep. Water runs downhill.</p>
+    <button class="go" id="helpGo">Play</button>
   </div>
 </div>
 
-<div id="menu">
-  <div class="card panel">
-    <button class="btn" id="mHelp">How to play</button>
-    <button class="btn" id="mSound">Sound: on</button>
-    <button class="btn" id="mGfx">Graphics: high</button>
-    <button class="btn" id="mNew">Start a new valley</button>
-    <button class="btn acc" id="mClose">Back to work</button>
+<div id="menu" class="over">
+  <div class="col t">
+    <h2>PAUSED</h2>
+    <button id="mClose">Resume</button>
+    <button id="mHelp">Controls</button>
+    <button id="mSound">Sound: on</button>
+    <button id="mGfx">Graphics: high</button>
+    <button id="mNew" class="quiet">Start a new valley</button>
   </div>
 </div>
 
-<div id="loading">BUILDING THE VALLEY</div>
+<div id="loading">GROUNDWORK</div>
 
-<script type="module" src="game.js?v=2"></script>
+<script type="module" src="game.js?v=3"></script>
 </body>
 </html>

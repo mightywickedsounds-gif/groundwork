@@ -18,4 +18,6 @@ A browser digging game, hosted on GitHub Pages from `main` (root): https://might
 
 It's an original game in the construction-sandbox genre: don't copy any existing game's name, art, levels or look.
 
+Screen style (owner): keep the HUD minimal like a real game: no text panels or paragraphs, short uppercase prompts, controls only on the controls screen, no emoji.
+
 The owner isn't a programmer: explain changes in plain English, report test results honestly, and log each round in README.md under History.
