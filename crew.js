@@ -450,7 +450,8 @@ export function makeCrew(G) {
     let deep = 0, bed = 1e9, bedS = 0;
     for (let s = -S.cw; s <= S.cw; s += .5) { const [x, z] = pt(S, s, 0); deep = Math.max(deep, G.wAt(x, z)); const h = G.h0At(x, z); if (h < bed) { bed = h; bedS = s; } }
     const span = 2 * (S.cw - 1);
-    P.kind = span > 12 || deep > 1.35 ? 'bridge' : 'causeway';
+    const rv = G.riverAt(S.P[0], S.P[1]), main = rv.r && rv.r.name === 'river' && rv.d < 15;   // the main river is always bridged
+    P.kind = main || span > 12 || deep > 1.35 ? 'bridge' : 'causeway';
     P.top = S.lvl + 1.0;
     P.sA = -(S.cw + 12); P.sB = S.cw + 12;
     if (P.kind === 'bridge') {
