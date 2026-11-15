@@ -22,7 +22,7 @@ Play it here (once GitHub Pages is on, see below): https://mightywickedsounds-gi
   - Finish one and a new one opens somewhere else.
 - **Looks and sounds real:** textured ground (grass, dirt, gravel; darker and shiny where wet), a sky with clouds and sunlight, forest and hills out to the horizon, rippling water that follows the current, grass that sways, boulders the machines shove aside, exhaust smoke, dust and falling clods. Every machine has its own diesel engine, hydraulics, track clatter and backup beeper, placed in 3D where the machine is; plus scraping, dumping, tree cracks, the river, wind and birds.
 - **Graphics setting:** Menu → Graphics switches High / Medium / Low (phones start on Medium; Low turns off the grass and softer shadows for older devices).
-- **Saving:** the whole valley saves in your browser every 5 seconds and when you leave. "Start a new valley" in the menu is the only way to wipe it, and it asks first. Each browser or phone keeps its own valley.
+- **Saving and worlds:** the valley you're playing saves in your browser every 5 seconds and when you leave, so refreshing brings you back to it. Menu → Worlds lets you save a named copy ("Save this world"), load a saved one, delete one, or start a completely fresh valley ("New world"). Before loading or starting fresh, your current valley is kept as "Autosave", so nothing is lost by accident. Each browser or phone keeps its own worlds.
 
 ## Controls
 
@@ -47,7 +47,8 @@ On GitHub, open this repository's **Settings, then Pages**. Under "Build and dep
 - `models.js`: the 3D models (machines with track chains, tyres, hydraulic rams and cabs; trees, boulders, grass)
 - `textures.js`: all textures, drawn by code when the game starts (no image files)
 - `audio.js`: all sounds, synthesized live (no sound files)
-- `crew.js`: the crew's brains (who does what to build a river crossing)
+- `crew.js`: the crew's brains (following you, planning a crossing, who does what at each stage)
+- `construct.js`: what the crew builds (road layers, culverts, rock armour, guardrails, markings, lights, signs, bridge parts) and the list of materials
 - `tests/play.cjs`: automatic gameplay checks (see below)
 
 ## Testing

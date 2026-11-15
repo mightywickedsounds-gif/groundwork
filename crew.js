@@ -87,6 +87,23 @@ export function makeCrew(G) {
     return S.top;
   }
   const endOf = S => S.kind === 'bridge' ? S.sL - .6 : S.far;
+  // The fill front: how far along the line the finished embankment reaches. Truck loads and dozer pushes move it on
+  // (the crew also keeps shaping it between loads), and the ground behind it is shaped into the embankment with side
+  // slopes, so the earthwork can't stall or slide backwards.
+  const fillStart = S => S.kind === 'bridge' ? S.sL - 14 : -S.cw - 2;
+  function advance(S, d) { if (S.front !== undefined) S.front = Math.min(endOf(S) + .6, S.front + d); }
+  function shapeFill(S, s0, s1) {
+    const hw = S.w / 2 + 1.2;
+    for (let s = s0; s <= s1; s += .5) {
+      const y = S.kind === 'bridge' ? gradeAt(S, Math.min(s, S.sL)) : S.top;
+      if (y < -1e8) continue;
+      for (let o = -hw - 5; o <= hw + 5; o += .5) {
+        const [x, z] = pt(S, s, o), i = Math.round(x), j = Math.round(z); if (i < 1 || j < 1 || i > 254 || j > 254) continue;
+        const k = j * 256 + i, h = y - Math.max(0, Math.abs(o) - hw) / 1.8;
+        if (G.H[k] < h) { G.H[k] = h; G.D[k] = 1; if (G.M[k] === 0) G.M[k] = 1; G.dirty(k); }
+      }
+    }
+  }
   // how far the earthwork reaches: the first point along the line still under water or below grade
   function findHead(S) {
     for (let s = S.Ls + 6; s <= endOf(S); s += 1) {
@@ -161,18 +178,20 @@ export function makeCrew(G) {
       case 'start': st.state = 'go'; break;
       case 'go': {   // to the start of the lane (or a waiting spot beside it when the hauler is working the line)
         bladeTo(.35);
+        st.goT = (st.goT || 0) + dt;
+        if (st.goT > 25) { st.goT = 0; st.lane++; st.path = null; }   // can't get there: try another lane
         const outer = Math.abs(lane) > 3;
         const free = outer || S.lock === m || (!S.lock && !(G.time() - (S.waitAt || -9) < .5));   // a loaded hauler goes first
         const [x, z] = free ? pt(S, start, lane) : pt(S, start - 2, -7.5);
         const s0 = sOf(S, m.x, m.z), o0 = oOf(S, m.x, m.z);
         if (free && facing(m, S) < .5 && s0 > start + 1 && Math.abs(o0 - lane) < 3) { follow(m, c, S, lane, -1, .8, true); break; }   // back straight down the lane
         if (travel(m, st, c, x, z, free ? 1.8 : 2.5, .7)) {
-          if (free && (outer || lock(S, m))) st.state = 'turn'; else c.throttle = 0;
+          if (free && (outer || lock(S, m))) { st.state = 'turn'; st.goT = 0; } else c.throttle = 0;
         }
         break;
       }
       case 'turn': {   // face across the river
-        bladeTo(.35);
+        bladeTo(.35); st.credited = false;
         const [x, z] = pt(S, s + 10, lane);
         const [sv, e] = steerTo(m, x, z, false);
         c.steer = sv;
@@ -186,6 +205,7 @@ export function makeCrew(G) {
         st.peak = Math.max(st.peak, m.load.v);
         const front = s + 2.8;
         const empty = st.peak > .5 && m.load.v < .15;
+        if ((empty || m.blocked === 'deep') && front > S.head - 3 && !st.credited) { advance(S, 1.0); st.credited = true; }
         if (front > endOf(S) + (S.kind === 'bridge' ? 0 : 2) || empty || st.t > 28 || (m.blocked === 'deep' && st.t > 1) || (st.t > 3 && Math.abs(m.v) < .08)) { st.state = 'back'; st.t = 0; }
         break;
       }
@@ -315,7 +335,7 @@ export function makeCrew(G) {
         st.t += dt; unst = false;
         if (st.t > .3 && !m.tipping && m.load.v > .05 && st.t < 1) c.act = true;
         if ((m.load.v < .05 || st.t > 12) && m.tipping) c.act = true;
-        if ((!m.tipping && st.t > 1.2 && m.tip < .05) || st.t > 16) { if (m.tipping) c.act = true; st.state = 'return'; st.t = 0; }
+        if ((!m.tipping && st.t > 1.2 && m.tip < .05) || st.t > 16) { if (m.tipping) c.act = true; st.state = 'return'; st.t = 0; advance(S, 2.4); }
         break;
       }
       case 'return': {   // drive straight back to the loading spot
@@ -699,8 +719,12 @@ export function makeCrew(G) {
     P.stageT += dt;
     const id = stage(P), d = STG[id] || {};
     if (d.earth) {
-      headT -= dt;
-      if (headT <= 0) { headT = .5; const h = findHead(P); if (h === null) nextStage(P); else P.head = h; }
+      if (P.front === undefined) P.front = fillStart(P);
+      const was = P.front;
+      advance(P, dt * .07);   // the crew keeps shaping between loads
+      if (Math.floor(P.front * 2) !== Math.floor(was * 2)) shapeFill(P, fillStart(P), P.front);
+      P.head = P.front;
+      if (P.front >= endOf(P) + .5) { shapeFill(P, fillStart(P), endOf(P) + .5); nextStage(P); }
     } else {
       applyLead(P, dt);
       if (stageDone(P)) nextStage(P);
@@ -709,7 +733,7 @@ export function makeCrew(G) {
   }
   function statusPct(P, s0, s1) {
     const id = stage(P), d = STG[id] || {};
-    if (d.earth) return clamp((P.head - (P.Ls + 6)) / (endOf(P) - (P.Ls + 6)), 0, 1);
+    if (d.earth) return clamp(((P.front ?? fillStart(P)) - fillStart(P)) / (endOf(P) + .5 - fillStart(P)), 0, 1);
     if (id === 'culverts' || id === 'crane') return (P.kind === 'bridge' ? P.placed / P.items.length : P.pipes / P.culverts.length);
     if (id === 'deck') return clamp(((P.cut.deck ?? P.sL) - P.sL) / (P.sR - P.sL + .5), 0, 1);
     return clamp(((P.lead ?? s0) - s0) / (s1 - s0), 0, 1);
@@ -778,7 +802,7 @@ export function makeCrew(G) {
     else if (proj) { syncEquip(proj); startStage(proj); }
   }
   // saving: plain data for every project (meshes are rebuilt on load)
-  const KEEP = ['name', 'P', 'u', 'p', 'lvl', 'cw', 'Ls', 'far', 'head', 'kind', 'w', 'seed', 'surface', 'girder', 'top', 'deckY', 'sL', 'sR', 'sA', 'sB', 'piers', 'culverts', 'si', 'cut', 'placed', 'pipes', 'prof', 'done', 'stages', 'rampFoot'];
+  const KEEP = ['name', 'P', 'u', 'p', 'lvl', 'cw', 'Ls', 'far', 'head', 'front', 'kind', 'w', 'seed', 'surface', 'girder', 'top', 'deckY', 'sL', 'sR', 'sA', 'sB', 'piers', 'culverts', 'si', 'cut', 'placed', 'pipes', 'prof', 'done', 'stages', 'rampFoot'];
   function serialize() { return { roads: roads.map(P => Object.fromEntries(KEEP.filter(k => P[k] !== undefined).map(k => [k, P[k]]))), cur: proj ? roads.indexOf(proj) : -1, lastDone }; }
   function restore(d) {
     if (!d) return;
