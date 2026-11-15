@@ -497,16 +497,21 @@ export function makeCrew(G) {
   function stageEquip(P) { const d = STG[stage(P)] || {}; return stage(P) === 'surface' && P.surface === 'concrete' ? d.concrete : d.equip || []; }
 
   // ------------------------------------------------------------ equipment comes in for a stage and leaves after
-  function spawnPoint(P) {
-    for (const [s, o] of [[P.Ls - 30, 0], [P.Ls - 20, -12], [P.Ls - 20, 12], [P.Ls - 10, -18], [P.Ls - 10, 18], [P.Ls, -20]]) {
-      const [x, z] = pt(P, s, o); if (x > 6 && z > 6 && x < 249 && z < 249 && G.wAt(x, z) < .05) return [x, z];
+  // somewhere dry behind the site with room around it (machines never arrive on top of each other)
+  function spawnPoint(P, roomy = true) {
+    const cands = [];
+    for (const s of [P.Ls - 30, P.Ls - 20, P.Ls - 40, P.Ls - 10]) for (const o of [0, -12, 12, -22, 22]) cands.push([s, o]);
+    for (const [s, o] of cands) {
+      const [x, z] = pt(P, s, o); if (!(x > 8 && z > 8 && x < 247 && z < 247) || G.wAt(x, z) > .05) continue;
+      if (roomy && G.machines.some(m => Math.hypot(m.x - x, m.z - z) < 9)) continue;
+      return [x, z];
     }
-    return pt(P, P.Ls - 8, 0);
+    return roomy ? spawnPoint(P, false) : pt(P, P.Ls - 8, 0);
   }
   function syncEquip(P) {
     const want = P && !P.done ? stageEquip(P) : [];
     for (const t of want) if (!equip.some(m => m.type === t && !m.leaving)) {
-      const [x, z] = spawnPoint(P), m = G.makeMachine(t, x + (Math.random() - .5) * 4, z + (Math.random() - .5) * 4, Math.atan2(P.u[0], P.u[1]), true);
+      const [x, z] = spawnPoint(P), m = G.makeMachine(t, x, z, Math.atan2(P.u[0], P.u[1]), true);
       equip.push(m); stOf(m).state = 'start';
     }
     for (const m of equip) if (!want.includes(m.type) && !m.leaving && !(P && !P.done && stillNeeded(P, m.type))) { m.leaving = true; stOf(m).state = 'leave'; m.leaveAt = P ? spawnPoint(P) : [m.x, m.z]; }
