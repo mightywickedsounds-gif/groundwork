@@ -1339,7 +1339,9 @@ function drive(m, dt, inp) {
   const dir = Math.sign(Math.abs(m.v) > .05 ? m.v : target) || 1;
   const fx = fwdX(m.yaw), fz = fwdZ(m.yaw);
   const L = s.len / 2;
-  const hA = hAt(m.x + fx * L * dir, m.z + fz * L * dir), hB = hAt(m.x - fx * L * dir, m.z - fz * L * dir);
+  let hA = hAt(m.x + fx * L * dir, m.z + fz * L * dir); const hB = hAt(m.x - fx * L * dir, m.z - fz * L * dir);
+  // a dozer with its blade down doesn't climb the heap in front: the blade shoves it (only the ground up to the edge counts)
+  if (m.type === 'dozer' && dir > 0 && m.blade < .4) hA = Math.min(hA, m.y + m.blade + .35);
   const grade = (hA - hB) / s.len;
   let lim = 1;
   if (grade > .35) lim = Math.max(0, 1 - (grade - .35) / .45);
