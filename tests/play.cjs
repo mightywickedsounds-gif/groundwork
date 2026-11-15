@@ -179,11 +179,23 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   check('the crew drives off to work', cr.dozMoved > 5, JSON.stringify(cr));
   check('taking a machine over leaves the rest of the crew working', !cr.takeover.dozerAI && cr.takeover.othersAI, JSON.stringify(cr));
 
-  const build = await p.evaluate(() => {
-    GW.select(1);
-    const S = GW.crew.site, fill = () => { let v = 0; for (let s = -S.cw; s <= S.cw; s++) for (let o = -2; o <= 2; o++) { const [x, z] = GW.crew.pt(S, s, o); v += GW.H[Math.round(z) * 256 + Math.round(x)]; } return v; };
-    const v0 = fill(); GW.step(30 * 60 * 5); return { added: +(fill() - v0).toFixed(1), head: +S.head.toFixed(1) };
+  // the crew follows the player across the valley
+  const fol = await p.evaluate(() => {
+    GW.select(1); const L = GW.machines[1]; L.x = 150; L.z = 178; L.yaw = Math.PI / 2; L.v = 0;
+    GW.step(30 * 50);
+    return { dozer: +Math.hypot(GW.machines[0].x - L.x, GW.machines[0].z - L.z).toFixed(1), hauler: +Math.hypot(GW.machines[3].x - L.x, GW.machines[3].z - L.z).toFixed(1) };
   });
+  check('the crew follows the player', fol.dozer < 32 && fol.hauler < 45, JSON.stringify(fol));
+
+  // stop at the river and the crew builds a crossing there
+  const build = await p.evaluate(() => {
+    const L = GW.machines[1]; L.x = 118; L.z = 142; L.yaw = Math.PI; L.v = 0;
+    GW.step(150, { throttle: .6 }); GW.step(90);
+    const S = GW.crew.site; if (!S) return { site: false };
+    const fill = () => { let v = 0; for (let s = -S.cw; s <= S.cw; s++) for (let o = -2; o <= 2; o++) { const [x, z] = GW.crew.pt(S, s, o); v += GW.H[Math.round(z) * 256 + Math.round(x)]; } return v; };
+    const v0 = fill(); GW.step(30 * 60 * 5); return { site: true, added: +(fill() - v0).toFixed(1), head: +S.head.toFixed(1) };
+  });
+  check('stopping at the river sets the crew building a crossing', build.site, JSON.stringify(build));
   check('in five minutes the crew has started filling the river', build.added > 15, JSON.stringify(build));
 
   const off = await p.evaluate(() => { GW.setCrew(false); GW.step(5); return { ai: GW.machines.filter(m => m.ai).length, workers: GW.machines.filter((m, i) => i !== GW.active && m.worker.visible).length }; });

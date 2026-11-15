@@ -1,32 +1,58 @@
-// The crew: three workers who drive the dozer, the excavator and the hauler and build a crossing over the nearest river.
-// They work as a team: the excavator digs a borrow pit and loads the hauler, the hauler carries the dirt to the head of
-// the crossing and tips it, and the dozer pushes it out into the water, grading the top to just above the river.
+// The crew: three workers who drive the dozer, the excavator and the hauler. They follow the player around the valley
+// in a loose convoy, finding their own way round deep water and steep ground. When the player stops at water too deep
+// to drive through, they pick the narrowest place nearby and build a crossing there as a team: the excavator digs a
+// borrow pit and loads the hauler, the hauler backs up to the water's edge and tips, and the dozer pushes the dirt out
+// and grades the top. Then they fall in behind the player again.
 // Each worker produces the same controls the player does (throttle, steer, tool, swing, act), so a machine behaves
 // exactly the same whoever drives it. When the player takes a machine over, that worker sits out; the others carry on.
 //
-// A crossing site is a straight line across the river: s runs along it (0 = river centre, negative = our side) and
-// o runs sideways. The "head" is how far along the line the built ground reaches.
+// A crossing site is a straight line across the water: s runs along it (0 = middle of the water, negative = our side)
+// and o runs sideways. The "head" is how far along the line the built ground reaches.
 export function makeCrew(G) {
   const { clamp, angWrap } = G;
   const ROLES = ['dozer', 'excavator', 'hauler'];
-  let on = false, siteIdx = 0, headT = 0, site = null, doneAll = false;
-  const sites = [];
+  let on = false, headT = 0, site = null, waitT = 0, coolT = 0, awayT = 0, gridT = 0;
 
-  // ------------------------------------------------------------ crossing sites (nearest point of each river to the yard)
-  function makeSite(r, near) {
-    let bi = 0, bd = 1e9;
-    r.s.forEach((p, i) => { const d = Math.hypot(p[0] - near[0], p[1] - near[1]); if (d < bd) { bd = d; bi = i; } });
-    const a = r.s[Math.max(0, bi - 8)], b = r.s[Math.min(r.s.length - 1, bi + 8)], P = r.s[bi];
-    let tx = b[0] - a[0], tz = b[1] - a[1]; const tl = Math.hypot(tx, tz); tx /= tl; tz /= tl;
-    let u = [-tz, tx];
-    if (u[0] * (P[0] - near[0]) + u[1] * (P[1] - near[1]) < 0) u = [tz, -tx];
-    const cw = r.hw * 1.7;
-    return { name: r.name, P: [P[0], P[1]], u, p: [u[1], -u[0]], lvl: P[2] + r.depth, hw: r.hw, cw, Ls: -(cw + 26), far: cw + 4, head: -cw, lock: null };
+  // ------------------------------------------------------------ choosing where to cross
+  // Walk across the water along a direction; returns the wet span, or null if there is no dry land within reach.
+  function span(x, z, ux, uz) {
+    let sin = null;
+    for (let d = 0; d < 70; d += .5) {
+      const px = x + ux * d, pz = z + uz * d;
+      if (px < 4 || pz < 4 || px > 251 || pz > 251) return null;
+      const w = G.wAt(px, pz);
+      if (sin === null) { if (w > .3) sin = d; else if (d > 24) return null; }
+      else if (w < .05) {   // dry again: make sure it stays dry for a few metres (not just a bar in the middle)
+        let ok = true; for (let e = .5; e <= 3; e += .5) if (G.wAt(px + ux * e, pz + uz * e) > .05) ok = false;
+        if (ok) return [sin, d];
+      }
+    }
+    return null;
   }
-  function setupSites() {
-    const near = [(G.YARD.x0 + G.YARD.x1) / 2, (G.YARD.z0 + G.YARD.z1) / 2];
-    sites.length = 0;
-    for (const name of ['river', 'south creek']) { const r = G.RIVERS.find(q => q.name === name); if (r) sites.push(makeSite(r, near)); }
+  // a crossing near where the machine stands, heading roughly the way it faces: the narrowest line that keeps clear of
+  // the player's machine
+  function siteAt(pm) {
+    const fx = Math.sin(pm.yaw), fz = Math.cos(pm.yaw);
+    let best = null;
+    for (const da of [0, -.35, .35, -.7, .7, -1.05, 1.05]) {
+      const ux = Math.cos(da) * fx + Math.sin(da) * fz, uz = -Math.sin(da) * fx + Math.cos(da) * fz;
+      for (const off of [0, -6, 6, -12, 12, -18, 18]) {
+        const x = pm.x + uz * off, z = pm.z - ux * off, sp = span(x, z, ux, uz);
+        if (!sp) continue;
+        const width = sp[1] - sp[0], near = Math.abs(off) < 4.5 ? 14 : 0;   // keep the line off the player's machine
+        const score = width + near + Math.abs(off) * .15 + Math.abs(da) * 2;
+        if (!best || score < best.score) best = { score, x, z, ux, uz, sp };
+      }
+    }
+    if (!best) return null;
+    const { x, z, ux, uz, sp } = best, mid = (sp[0] + sp[1]) / 2, cw = (sp[1] - sp[0]) / 2 + 1;
+    const P = [x + ux * mid, z + uz * mid];
+    // the water level: the surface along the middle of the line
+    let lvl = -1e9; for (let d = sp[0]; d <= sp[1]; d += 1) { const px = x + ux * d, pz = z + uz * d; if (G.wAt(px, pz) > .05) lvl = Math.max(lvl, G.hAt(px, pz) + G.wAt(px, pz)); }
+    const S = { name: 'crossing', P, u: [ux, uz], p: [uz, -ux], lvl, cw, Ls: -(cw + 24), far: cw + 4, head: -cw, lock: null };
+    // keep the loading spot on the map
+    for (let k = 0; k < 6; k++) { const [lx, lz] = pt(S, S.Ls - 16, 0); if (lx > 8 && lz > 8 && lx < 247 && lz < 247) break; S.Ls += 3; }
+    return S;
   }
   const pt = (S, s, o = 0) => [S.P[0] + S.u[0] * s + S.p[0] * o, S.P[1] + S.u[1] * s + S.p[1] * o];
   const sOf = (S, x, z) => (x - S.P[0]) * S.u[0] + (z - S.P[1]) * S.u[1];
@@ -108,7 +134,7 @@ export function makeCrew(G) {
         bladeTo(.35);
         const free = S.lock === m || (!S.lock && !(G.time() - (S.waitAt || -9) < .5));   // a loaded hauler goes first
         const [x, z] = free ? pt(S, start, lane) : pt(S, start - 2, -7.5);
-        if (goto(m, c, x, z, free ? 1.8 : 2.5, .7)) {
+        if (travel(m, st, c, x, z, free ? 1.8 : 2.5, .7)) {
           if (free && lock(S, m)) st.state = 'turn'; else c.throttle = 0;
         }
         break;
@@ -151,7 +177,7 @@ export function makeCrew(G) {
     const E = pt(S, S.Ls, 5.8);
     switch (st.state) {
       case 'start': st.state = 'go'; break;
-      case 'go': if (goto(m, c, E[0], E[1], 1.6, .8)) st.state = 'work'; break;
+      case 'go': if (travel(m, st, c, E[0], E[1], 1.6, .8)) st.state = 'work'; break;
       case 'work': {
         if (Math.hypot(m.x - E[0], m.z - E[1]) > 4) { st.state = 'go'; break; }
         const h = G.machines.find(o => o.type === 'hauler');
@@ -218,7 +244,7 @@ export function makeCrew(G) {
       case 'start':
         if (m.tipping) c.act = true;
         st.state = Math.abs(he) < .5 && Math.abs(o) < 3 && s > S.Ls - 3 && s < S.Ls + 6 ? 'load' : Math.abs(he) < .4 && s < S.Ls - 3 && s > S.Ls - 25 ? 'dock' : 'toTurn'; st.t = 0; break;
-      case 'toTurn': if (goto(m, c, K[0], K[1], 7, .6)) { st.state = 'turn'; st.t = 0; st.tt = 0; st.ph = 0; st.sg = Math.sign(he) || 1; } break;
+      case 'toTurn': if (travel(m, st, c, K[0], K[1], 7, .6)) { st.state = 'turn'; st.t = 0; st.tt = 0; st.ph = 0; st.sg = Math.sign(he) || 1; } break;
       case 'turn': {   // a three-point turn: full lock forwards, opposite lock backwards, until facing away from the river
         st.t += dt; st.tt += dt; unst = false;
         if (Math.abs(he) < .3) { st.state = 'dock'; st.t = 0; break; }
@@ -273,12 +299,81 @@ export function makeCrew(G) {
     return c;
   }
 
-  // ------------------------------------------------------------ parking when every crossing is done
-  function park(m, st, dt) {
-    const i = ROLES.indexOf(m.type), c = ctl();
-    const x = G.YARD.x0 + 6 + i * 8, z = G.YARD.z0 + 4;
-    if (!goto(m, c, x, z, 2.5, .6)) unstick(m, st, c, dt);
-    if (m.type === 'dozer') c.tool = clamp((0 - m.blade) * 5, -1, 1);
+  // ------------------------------------------------------------ finding a way: a route over the valley on a 2 m grid
+  // Cells are blocked where the water is deeper than the machine can ford or the ground is too steep to climb.
+  const GS = 2, GN = 128, gDepth = new Float32Array(GN * GN), gH = new Float32Array(GN * GN);
+  function buildGrid() {
+    for (let j = 0; j < GN; j++) for (let i = 0; i < GN; i++) {
+      const x = i * GS + 1, z = j * GS + 1;
+      gH[j * GN + i] = G.hAt(x, z);
+      gDepth[j * GN + i] = Math.max(G.wAt(x - .5, z - .5), G.wAt(x + .5, z - .5), G.wAt(x - .5, z + .5), G.wAt(x + .5, z + .5));
+    }
+  }
+  const D8 = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, 1.414], [1, -1, 1.414], [-1, 1, 1.414], [-1, -1, 1.414]];
+  function findPath(m, x0, z0, x1, z1) {
+    const ford = G.SPEC[m.type].ford * .85;
+    const ok = n => { const i = n % GN, j = (n / GN) | 0; return i > 1 && j > 1 && i < GN - 2 && j < GN - 2 && gDepth[n] <= ford; };
+    const cellOf = (x, z) => clamp(Math.round((z - 1) / GS), 0, GN - 1) * GN + clamp(Math.round((x - 1) / GS), 0, GN - 1);
+    const start = cellOf(x0, z0);
+    let goal = cellOf(x1, z1);
+    if (!ok(goal)) {   // the spot itself is under water: aim for the nearest dry cell
+      let bd = 1e9, bg = -1; const gi = goal % GN, gj = (goal / GN) | 0;
+      for (let dj = -8; dj <= 8; dj++) for (let di = -8; di <= 8; di++) { const n = (gj + dj) * GN + gi + di; if (gj + dj < 0 || gj + dj >= GN || gi + di < 0 || gi + di >= GN) continue; const d = di * di + dj * dj; if (d < bd && ok(n)) { bd = d; bg = n; } }
+      if (bg < 0) return null; goal = bg;
+    }
+    const gi = goal % GN, gj = (goal / GN) | 0;
+    const g = new Float32Array(GN * GN).fill(1e9), from = new Int32Array(GN * GN).fill(-1), closed = new Uint8Array(GN * GN);
+    const heap = []; const push = (n, f) => { heap.push([f, n]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+    const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = i * 2 + 1, r = l + 1; let s = i; if (l < heap.length && heap[l][0] < heap[s][0]) s = l; if (r < heap.length && heap[r][0] < heap[s][0]) s = r; if (s === i) break; [heap[s], heap[i]] = [heap[i], heap[s]]; i = s; } } return top; };
+    const hgt = n => Math.hypot(n % GN - gi, ((n / GN) | 0) - gj);
+    g[start] = 0; push(start, hgt(start));
+    let it = 0;
+    while (heap.length && it++ < 30000) {
+      const [, n] = pop(); if (closed[n]) continue; closed[n] = 1;
+      if (n === goal) break;
+      const i = n % GN, j = (n / GN) | 0;
+      for (const [di, dj, dc] of D8) {
+        const ni = i + di, nj = j + dj; if (ni < 0 || nj < 0 || ni >= GN || nj >= GN) continue;
+        const q = nj * GN + ni; if (closed[q] || (!ok(q) && q !== start)) continue;
+        const grade = Math.abs(gH[q] - gH[n]) / (dc * GS);
+        if (grade > .5) continue;
+        const cost = g[n] + dc * (1 + grade * 4 + gDepth[q] * 2);
+        if (cost < g[q]) { g[q] = cost; from[q] = n; push(q, cost + hgt(q)); }
+      }
+    }
+    if (from[goal] < 0 && goal !== start) return null;
+    const path = []; for (let n = goal; n >= 0 && n !== start; n = from[n]) path.push([(n % GN) * GS + 1, ((n / GN) | 0) * GS + 1]);
+    return path.reverse();
+  }
+  // drive somewhere, along a route when it is far or round water; returns true when there
+  function travel(m, st, c, x, z, tol = 2.5, speed = .8) {
+    const d = Math.hypot(x - m.x, z - m.z);
+    if (d < tol) { st.path = null; return true; }
+    if (d < 10) return goto(m, c, x, z, tol, speed);
+    st.pathT = (st.pathT || 0) - st.dt;
+    if (!st.path || st.pathT <= 0 || Math.hypot(x - st.goal[0], z - st.goal[1]) > 6) {
+      st.path = findPath(m, m.x, m.z, x, z); st.pi = 0; st.pathT = 3; st.goal = [x, z];
+    }
+    if (!st.path || !st.path.length) return goto(m, c, x, z, tol, speed);
+    while (st.pi < st.path.length - 1 && Math.hypot(st.path[st.pi][0] - m.x, st.path[st.pi][1] - m.z) < 7) st.pi++;
+    const [tx, tz] = st.path[st.pi];
+    goto(m, c, tx, tz, 0, speed);
+    return false;
+  }
+
+  // ------------------------------------------------------------ following the player in a loose convoy
+  const SLOT = { dozer: [-7, -15], excavator: [7, -18], hauler: [0, -28] };   // [sideways, behind] the player
+  function follow(m, st, dt, pm) {
+    const c = ctl(), [side, back] = SLOT[m.type];
+    const fx = Math.sin(pm.yaw), fz = Math.cos(pm.yaw), lx = Math.cos(pm.yaw), lz = -Math.sin(pm.yaw);
+    const x = clamp(pm.x + lx * side + fx * back, 5, 250), z = clamp(pm.z + lz * side + fz * back, 5, 250);
+    const d = Math.hypot(x - m.x, z - m.z);
+    if (d > (st.moving ? 4 : 11)) {
+      st.moving = true;
+      if (travel(m, st, c, x, z, 4, clamp(d / 25, .4, 1))) st.moving = false;
+      unstick(m, st, c, dt);
+    } else st.moving = false;
+    if (m.type === 'dozer') c.tool = clamp((.35 - m.blade) * 5, -1, 1);
     if (m.type === 'hauler' && m.tipping) c.act = true;
     return c;
   }
@@ -288,39 +383,48 @@ export function makeCrew(G) {
   const stOf = m => { let st = state.get(m); if (!st) { st = { state: 'start', stall: 0, rec: 0, lane: 0, dig: 0, t: 0, wp: 0, tries: 0, sg: 1, tt: 0 }; state.set(m, st); } return st; };
   function crewMachines() { return ROLES.map(t => G.machines.find(m => m.type === t)).filter(Boolean); }
 
+  const restart = () => { for (const st of state.values()) { st.state = 'start'; st.wp = 0; st.path = null; } };
   function update(dt) {
     const player = G.machines[G.active()];
     for (const m of G.machines) if (!ROLES.includes(m.type)) m.ai = null;
     if (!on) { for (const m of G.machines) m.ai = null; return; }
-    if (!sites.length) setupSites();
-    site = sites[siteIdx] || null;
-    if (site) {
+    gridT -= dt; if (gridT <= 0) { gridT = 2; buildGrid(); }
+    coolT -= dt;
+    if (!site) {
+      // the player has stopped at water too deep to drive through: build a crossing there
+      const fx = Math.sin(player.yaw), fz = Math.cos(player.yaw), ford = Math.min(.6, G.SPEC[player.type].ford);
+      let deep = 0; for (let d = 3; d <= 10; d += 1.5) deep = Math.max(deep, G.wAt(player.x + fx * d, player.z + fz * d));
+      if ((deep > ford && Math.abs(player.v) < .8) || player.blocked === 'deep') waitT += dt * (player.blocked === 'deep' ? 2 : 1); else waitT = 0;
+      if (waitT > 1.5 && coolT <= 0) {
+        waitT = 0; coolT = 6;
+        site = siteAt(player);
+        if (site) { const h = findHead(site); if (h === null) site = null; else { site.head = h; restart(); G.say('Crew: building a crossing'); } }
+      }
+    } else {
+      // the player drove off: drop the job and follow
+      if (Math.hypot(player.x - site.P[0], player.z - site.P[1]) > 90) awayT += dt; else awayT = 0;
+      if (awayT > 6) { site = null; awayT = 0; restart(); }
       headT -= dt;
-      if (headT <= 0) {
+      if (site && headT <= 0) {
         headT = .5;
         const h = findHead(site);
-        if (h === null) {   // nothing too deep left along the line: this crossing is done
-          G.crossed(site);
-          siteIdx++; site = sites[siteIdx] || null;
-          for (const st of state.values()) { st.state = 'start'; st.wp = 0; }
-          if (!site) doneAll = true;
-        } else site.head = h;
+        if (h === null) { G.crossed(site); site = null; coolT = 10; restart(); }   // nothing too deep left: done
+        else site.head = h;
       }
     }
     for (const m of crewMachines()) {
-      const st = stOf(m);
+      const st = stOf(m); st.dt = dt;
       if (m === player) {   // the player has this one: the worker steps out and the plan restarts when they hand it back
-        m.ai = null; st.state = 'start'; st.wp = 0; st.rec = 0;
+        m.ai = null; st.state = 'start'; st.wp = 0; st.rec = 0; st.path = null;
         if (site) unlock(site, m);
         continue;
       }
-      m.ai = site ? BRAIN[m.type](m, st, dt, site) : park(m, st, dt);
+      m.ai = site ? BRAIN[m.type](m, st, dt, site) : follow(m, st, dt, player);
     }
   }
   function setOn(v) {
     on = !!v;
-    for (const st of state.values()) { st.state = 'start'; st.wp = 0; st.rec = 0; }
-    for (const S of sites) S.lock = null;
+    restart(); site = null; waitT = 0; coolT = 0;
     if (!on) for (const m of G.machines) m.ai = null;
   }
   return {
@@ -329,8 +433,9 @@ export function makeCrew(G) {
     isCrew: m => ROLES.includes(m.type),
     stateOf: m => (state.get(m) || {}).state,
     refresh() { for (const m of G.machines) { const st = state.get(m); if (st && m === G.machines[G.active()]) st.state = 'start'; } },
-    get site() { return site; }, get siteIdx() { return siteIdx; }, set siteIdx(v) { siteIdx = v | 0; },
-    get doneAll() { return doneAll; },
-    sites, findHead, sOf, pt,
+    get site() { return site; },
+    buildAt(pm) { buildGrid(); const S = siteAt(pm); if (S) { const h = findHead(S); if (h !== null) { S.head = h; site = S; restart(); } } return site; },
+    findPath: (m, x1, z1) => { buildGrid(); return findPath(m, m.x, m.z, x1, z1); },
+    findHead, sOf, pt,
   };
 }

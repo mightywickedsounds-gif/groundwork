@@ -1625,7 +1625,8 @@ const crew = makeCrew({
   h0At: (x, z) => H0[cellOf(x, z)],
   active: () => active, time: () => simTime,
   bedPoint: h => { _p.set(0, 2.3, -1.5); h.group.localToWorld(_p); return [_p.x, _p.z]; },
-  crossed: S => { toast('Crew crossed the ' + S.name, 3200); snd.chime(); save(); },
+  crossed: () => { toast('Crossing ready', 3200); snd.chime(); save(); },
+  say: msg => toast(msg, 2600),
 });
 function setCrew(v, quiet) {
   crew.setOn(v);
@@ -2054,7 +2055,7 @@ function save() {
   if (noSave || !machines.length) return;
   try {
     const data = {
-      v: 3, seed, t: Date.now(), active, stats, goal: { i: goal.i, marsh0: goal.marsh0 }, goalJob: goal.job ? jobs.indexOf(goal.job) : -1, crewSite: crew.siteIdx,
+      v: 3, seed, t: Date.now(), active, stats, goal: { i: goal.i, marsh0: goal.marsh0 }, goalJob: goal.job ? jobs.indexOf(goal.job) : -1,
       H: b64(H), W: b64(W), M: b64(M), D: b64(D),
       gone: trees.map((t, i) => t.st === 3 ? i : -1).filter(i => i >= 0),
       logs: trees.map((t, i) => t.st === 1 || t.st === 2 ? [i, +t.x.toFixed(2), +t.z.toFixed(2), +t.dx.toFixed(3), +t.dz.toFixed(3)] : null).filter(Boolean),
@@ -2089,7 +2090,6 @@ function load() {
     if (data.goal) { goal.i = data.goal.i | 0; goal.marsh0 = data.goal.marsh0 || 0; }
     if (data.goalJob >= 0 && jobs[data.goalJob]) goal.job = jobs[data.goalJob];
     active = clamp(data.active | 0, 0, machines.length - 1);
-    crew.siteIdx = data.crewSite | 0;
     return true;
   } catch (e) {
     console.warn('save unreadable, starting a new valley', e);
