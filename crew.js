@@ -32,15 +32,25 @@ export function makeCrew(G) {
   // a crossing near where the machine stands, heading roughly the way it faces: the narrowest line that keeps clear of
   // the player's machine
   function siteAt(pm) {
-    const fx = Math.sin(pm.yaw), fz = Math.cos(pm.yaw);
+    // straight across: towards the middle of the water near the machine (on a river that points across the channel)
+    let cx = 0, cz = 0, n = 0;
+    for (let dz = -16; dz <= 16; dz += 2) for (let dx = -16; dx <= 16; dx += 2) {
+      if (dx * dx + dz * dz > 256) continue;
+      const w = G.wAt(pm.x + dx, pm.z + dz); if (w > .3) { cx += dx * w; cz += dz * w; n += w; }
+    }
+    if (n <= 0) return null;
+    const l = Math.hypot(cx, cz) || 1, fx = cx / l, fz = cz / l;
     let best = null;
-    for (const da of [0, -.35, .35, -.7, .7, -1.05, 1.05]) {
+    for (const da of [0, -.2, .2, -.4, .4]) {
       const ux = Math.cos(da) * fx + Math.sin(da) * fz, uz = -Math.sin(da) * fx + Math.cos(da) * fz;
-      for (const off of [0, -6, 6, -12, 12, -18, 18]) {
+      for (const off of [0, -6, 6, -11, 11, -16, 16]) {
         const x = pm.x + uz * off, z = pm.z - ux * off, sp = span(x, z, ux, uz);
-        if (!sp) continue;
-        const width = sp[1] - sp[0], near = Math.abs(off) < 4.5 ? 14 : 0;   // keep the line off the player's machine
-        const score = width + near + Math.abs(off) * .15 + Math.abs(da) * 2;
+        if (!sp || sp[0] > 14 || sp[1] - sp[0] < 2) continue;
+        // the approach behind the line must be dry land
+        let wet = false; for (let d = -30; d < sp[0] - 1; d += 2) if (G.wAt(x + ux * d, z + uz * d) > .2) wet = true;
+        if (wet) continue;
+        const width = sp[1] - sp[0], near = Math.abs(off) < 4.5 ? 12 : 0;   // keep the line off the player's machine
+        const score = width + near + Math.abs(off) * .2 + Math.abs(da) * 4;
         if (!best || score < best.score) best = { score, x, z, ux, uz, sp };
       }
     }
