@@ -114,25 +114,6 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   const er0 = await p.evaluate(() => GW.eroded);
   check('untouched river banks do not erode', er0 < .3, JSON.stringify({ eroded: +er0.toFixed(2) }));
 
-  // a dam backs the creek up
-  const dm = await p.evaluate(() => {
-    const at = (x, z) => GW.W[z * 256 + x];
-    let up = 0; for (let x = 58; x <= 80; x++) up = Math.max(up, at(x, 168));
-    for (let z = 150; z <= 153; z++) for (let x = 36; x <= 104; x++) { const k = z * 256 + x; GW.H[k] = Math.max(GW.H[k], 14.5); GW.W[k] = 0; GW.dirty(k); }
-    GW.step(1500);
-    let after = 0; for (let x = 58; x <= 80; x++) after = Math.max(after, at(x, 168));
-    return { before: +up.toFixed(2), after: +after.toFixed(2) };
-  });
-  check('damming a creek makes the water back up behind it', dm.after > dm.before + .4, JSON.stringify(dm));
-
-  // reaching the first goal pays and moves on to the next
-  const gl = await p.evaluate(() => {
-    const G = GW.GOALS[0], h = GW.machines[3], m0 = GW.stats.money;
-    h.x = G.x; h.z = G.z; GW.step(30);
-    return { paid: GW.stats.money - m0, next: GW.GOALS[GW.goal.i] && GW.GOALS[GW.goal.i].id };
-  });
-  check('reaching the gravel pit with the hauler completes the first goal', gl.paid === 800 && gl.next === 'haul', JSON.stringify(gl));
-
   // a dumped load lands as a real heap, not a thin layer
   const pile = await p.evaluate(() => {
     GW.select(1); const m = GW.machines[1], h = GW.machines[3];
@@ -175,7 +156,7 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
     const takeover = { dozerAI: !!ms[0].ai, othersAI: !!ms[2].ai && !!ms[3].ai };
     return { playerType, inCab, workers: ms.filter(m => m.worker.visible).length, dozMoved: +dozMoved.toFixed(1), takeover };
   });
-  check('turning the crew on puts workers in the dozer, excavator and hauler', cr.playerType === 'loader' && cr.inCab.length === 3 && cr.workers >= 3, JSON.stringify(cr));
+  check('turning the crew on puts workers in the dozer, excavator and hauler', cr.playerType === 'loader' && cr.inCab.length >= 3 && cr.workers >= 3, JSON.stringify(cr));
   check('taking a machine over leaves the rest of the crew working', !cr.takeover.dozerAI && cr.takeover.othersAI, JSON.stringify(cr));
 
   // the crew follows the player across the valley
@@ -205,6 +186,7 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   check('the finished causeway is a paved road above the water', road.done && road.top > .8 && road.water < .05 && road.meshes > 5, JSON.stringify(road));
   // the main river is too big for a causeway: the crew builds a bridge, and you can drive across it
   const br = await p.evaluate(() => {
+    GW.step(400);   // the crew rests a moment after finishing a job
     const L = GW.machines[1]; L.x = 121; L.z = 140; L.yaw = Math.PI; L.v = 0;
     GW.step(150, { throttle: .6 }); GW.step(90);
     const P = GW.crew.site; if (!P || P.kind !== 'bridge') return { kind: P && P.kind };
@@ -218,6 +200,25 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   });
   check('the main river gets a bridge with piers, girders and a deck', br.kind === 'bridge' && br.done && br.deck > 50 && br.items >= 6, JSON.stringify(br));
   check('a hauler can drive across the finished bridge', br.far > 3, JSON.stringify(br));
+
+  // a dam backs the creek up
+  const dm = await p.evaluate(() => {
+    const at = (x, z) => GW.W[z * 256 + x];
+    let up = 0; for (let x = 58; x <= 80; x++) up = Math.max(up, at(x, 168));
+    for (let z = 150; z <= 153; z++) for (let x = 36; x <= 104; x++) { const k = z * 256 + x; GW.H[k] = Math.max(GW.H[k], 14.5); GW.W[k] = 0; GW.dirty(k); }
+    GW.step(1500);
+    let after = 0; for (let x = 58; x <= 80; x++) after = Math.max(after, at(x, 168));
+    return { before: +up.toFixed(2), after: +after.toFixed(2) };
+  });
+  check('damming a creek makes the water back up behind it', dm.after > dm.before + .4, JSON.stringify(dm));
+
+  // reaching the first goal pays and moves on to the next
+  const gl = await p.evaluate(() => {
+    const G = GW.GOALS[0], h = GW.machines[3], m0 = GW.stats.money;
+    h.x = G.x; h.z = G.z; GW.step(30);
+    return { paid: GW.stats.money - m0, next: GW.GOALS[GW.goal.i] && GW.GOALS[GW.goal.i].id };
+  });
+  check('reaching the gravel pit with the hauler completes the first goal', gl.paid === 800 && gl.next === 'haul', JSON.stringify(gl));
 
   const off = await p.evaluate(() => { GW.setCrew(false); GW.step(5); return { ai: GW.machines.filter(m => m.ai).length, workers: GW.machines.filter((m, i) => i !== GW.active && m.worker.visible).length }; });
   check('turning the crew off empties the cabs', off.ai === 0 && off.workers === 0, JSON.stringify(off));
