@@ -2,6 +2,10 @@
 // water flows over it (a "virtual pipes" shallow-water model), and the whole valley is saved in the
 // browser so nothing ever resets.
 import * as THREE from 'three';
+import { Sky } from 'three/addons/objects/Sky.js';
+import { makeTextures } from './textures.js?v=2';
+import * as MOD from './models.js?v=2';
+import { Sound } from './audio.js?v=2';
 
 const N = 160, NN = N * N;           // 160 x 160 cells, 1 m each
 const SAVE_KEY = 'groundwork.save.v1';
@@ -106,6 +110,7 @@ function generate(sd, settle) {
   SPRING.length = 0;
   for (let j = 0; j < N; j++) { const k = j * N + 1; if (RD[k] < 3) SPRING.push(k); }
   makeTrees(nz, rnd);
+  makeRocks(sd);
   if (settle) {
     for (let it = 0; it < 120; it++) relax(true);
     for (let it = 0; it < 300; it++) waterStep(.06);
@@ -183,7 +188,7 @@ const trees = [];
 const treeGrid = new Int16Array(NN).fill(-1);
 function makeTrees(nz, rnd) {
   trees.length = 0; treeGrid.fill(-1);
-  for (let a = 0; a < 7000 && trees.length < 760; a++) {
+  for (let a = 0; a < 7000 && trees.length < 520; a++) {
     const x = 2 + rnd() * (N - 4), z = 2 + rnd() * (N - 4);
     const k = cellOf(x, z);
     if (RD[k] < 12.5 || M[k] === 2 || inYard(x, z, 9)) continue;
@@ -207,6 +212,8 @@ function treeFall(t, fx, fz) {
   t.dx = dx / l; t.dz = dz / l; t.st = 1; t.a = 0; t.y = hAt(t.x, t.z) - .1; t.dirty = true;
   treeGrid[t.k] = -1;
   dust(t.x, t.y + .5, t.z, 10, [.45, .4, .3]);
+  spawn('leaf', t.x, t.y + 6 * t.s, t.z, 10, [.25, .36, .14], { jitter: 3 });
+  snd.treeFall(t.x, t.y + 3, t.z);
 }
 function treeFallAt(k, fx, fz) {
   const ti = treeGrid[k];
@@ -282,184 +289,309 @@ function dropCircle(L, x, z, r, vol) {
   return put;
 }
 
-// ---------------------------------------------------------------- three.js scene
+// ---------------------------------------------------------------- graphics quality
+const isTouch = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in window;
+let quality = localStorage.getItem('groundwork.quality');
+if (!['high', 'medium', 'low'].includes(quality)) quality = isTouch ? 'medium' : 'high';
+const QS = {
+  high: { shadow: 2048, grass: 20000, grassR: 44, dpr: 2, soft: true, near: 550, far: 2400 },
+  medium: { shadow: 1536, grass: 8000, grassR: 30, dpr: 1.5, soft: true, near: 280, far: 1300 },
+  low: { shadow: 1024, grass: 0, grassR: 0, dpr: 1, soft: false, near: 120, far: 600 },
+};
+const Q = QS[quality];
+const T = makeTextures(quality);
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+let simTime = 0;
+
+// ---------------------------------------------------------------- scene, sky and light
 const canvas = $('view');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, Q.dpr));
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = Q.soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = .6;
+{ const an = Math.min(8, renderer.capabilities.getMaxAnisotropy()); for (const k in T) if (T[k] && T[k].isTexture) T[k].anisotropy = an; }
 const scene = new THREE.Scene();
-const HORIZON = new THREE.Color(0xe8dcc6);
-scene.fog = new THREE.Fog(HORIZON, 150, 480);
-const camera = new THREE.PerspectiveCamera(55, 1, .1, 3000);
-
-{ // sky dome
-  const g = new THREE.SphereGeometry(1400, 32, 16);
-  const m = new THREE.ShaderMaterial({
-    side: THREE.BackSide, depthWrite: false, fog: false,
-    uniforms: { top: { value: new THREE.Color(0x5d93c9) }, mid: { value: HORIZON }, bot: { value: new THREE.Color(0xc4b49c) } },
-    vertexShader: 'varying vec3 vP; void main(){ vP = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }',
-    fragmentShader: 'uniform vec3 top; uniform vec3 mid; uniform vec3 bot; varying vec3 vP; void main(){ float h = vP.y; vec3 c = h > 0. ? mix(mid, top, pow(clamp(h*1.6,0.,1.),.7)) : mix(mid, bot, clamp(-h*3.,0.,1.)); gl_FragColor = vec4(c,1.); }',
-  });
-  const sky = new THREE.Mesh(g, m); sky.frustumCulled = false; sky.renderOrder = -1;
-  scene.add(sky);
-  scene.userData.sky = sky;
+const FOG = new THREE.Color(0xb7c4cf);
+scene.fog = new THREE.FogExp2(FOG, .0019);
+const camera = new THREE.PerspectiveCamera(55, 1, .1, 9000);
+const SUN_DIR = new THREE.Vector3(-.5, .56, .66).normalize();
+function makeSky(scale) {
+  const s = new Sky(); s.scale.setScalar(scale);
+  const u = s.material.uniforms;
+  u.turbidity.value = 4.5; u.rayleigh.value = 1.25; u.mieCoefficient.value = .0045; u.mieDirectionalG.value = .82; u.sunPosition.value.copy(SUN_DIR);
+  return s;
 }
-const hemi = new THREE.HemisphereLight(0xd6e6ff, 0x6b5a45, 1.15);
-scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xffe2bd, 2.6);
+const sky = makeSky(7000); sky.position.set(N / 2, 0, N / 2); scene.add(sky);
+{
+  const pm = new THREE.PMREMGenerator(renderer), es = new THREE.Scene();
+  es.add(makeSky(1000));
+  const gp = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x2f3a22 }));
+  gp.position.y = -2; es.add(gp);
+  scene.environment = pm.fromScene(es, .03).texture; pm.dispose();
+}
+T.clouds.repeat.set(3, 3);
+const clouds = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000).rotateX(Math.PI / 2),
+  new THREE.MeshBasicMaterial({ map: T.clouds, transparent: true, opacity: .75, depthWrite: false, fog: false, color: new THREE.Color(1.5, 1.5, 1.5) }));
+clouds.position.set(N / 2, 900, N / 2); clouds.renderOrder = -1; scene.add(clouds);
+const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x4d4030, .45);
+const sun = new THREE.DirectionalLight(0xfff0dc, 4.4);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-Object.assign(sun.shadow.camera, { left: -45, right: 45, top: 45, bottom: -45, near: 1, far: 320 });
-sun.shadow.bias = -.0005; sun.shadow.normalBias = .06;
-scene.add(sun, sun.target);
-const SUN_DIR = new THREE.Vector3(-.55, .75, .38).normalize();
+sun.shadow.mapSize.set(Q.shadow, Q.shadow);
+Object.assign(sun.shadow.camera, { left: -48, right: 48, top: 48, bottom: -48, near: 1, far: 420 });
+sun.shadow.bias = -.0004; sun.shadow.normalBias = .05;
+scene.add(hemi, sun, sun.target);
 
-// terrain + water meshes share one index buffer
+// ---------------------------------------------------------------- the ground (textured: grass, dirt, gravel; wet where water is)
+function terrainMaterial() {
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: .96, metalness: 0, vertexColors: true });
+  m.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, { tGrass: { value: T.grass }, tDirt: { value: T.dirt }, tGravel: { value: T.gravel }, tHgt: { value: T.heights }, tMacro: { value: T.macro } });
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec4 aMat;\nvarying vec4 vMat;\nvarying vec3 vTWP;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvMat = aMat;\nvTWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        uniform sampler2D tGrass, tDirt, tGravel, tHgt, tMacro; varying vec4 vMat; varying vec3 vTWP;
+        vec3 gwPerturb(vec3 surf_pos, vec3 surf_norm, vec2 dHdxy, float faceDirection) {
+          vec3 vSigmaX = normalize(dFdx(surf_pos)); vec3 vSigmaY = normalize(dFdy(surf_pos)); vec3 vN = surf_norm;
+          vec3 R1 = cross(vSigmaY, vN); vec3 R2 = cross(vN, vSigmaX); float fDet = dot(vSigmaX, R1) * faceDirection;
+          vec3 vGrad = sign(fDet) * (dHdxy.x * R1 + dHdxy.y * R2); return normalize(abs(fDet) * surf_norm - vGrad); }`)
+      .replace('#include <map_fragment>', `
+        vec2 gp1 = vTWP.xz * .25, gp2 = vTWP.zx * .071 + .37;
+        float gmac = texture2D(tMacro, vTWP.xz * .011).r * .6 + texture2D(tMacro, vTWP.xz * .053).r * .4;
+        vec3 gh = texture2D(tHgt, gp1).rgb;
+        vec3 gw = max(vMat.xyz, 0.) + 1e-4; gw = gw * (.35 + gh * 1.3); gw = gw * gw * gw; gw /= (gw.x + gw.y + gw.z);
+        vec3 cG = mix(texture2D(tGrass, gp1).rgb, texture2D(tGrass, gp2).rgb, .4);
+        vec3 cD = mix(texture2D(tDirt, gp1).rgb, texture2D(tDirt, gp2).rgb, .35);
+        vec3 cR = mix(texture2D(tGravel, gp1 * 1.5).rgb, texture2D(tGravel, gp2 * 1.5).rgb, .3);
+        vec3 gcol = cG * gw.x + cD * gw.y + cR * gw.z;
+        gcol *= mix(.78, 1.15, gmac);
+        float gwet = clamp(vMat.w, 0., 1.);
+        gcol *= mix(1., .55, gwet);
+        diffuseColor.rgb *= gcol;`)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, .3, gwet * .85);')
+      .replace('#include <normal_fragment_maps>', `
+        { vec2 gdx = dFdx(gp1), gdy = dFdy(gp1);
+          float h0 = dot(texture2D(tHgt, gp1).rgb, gw), hx = dot(texture2D(tHgt, gp1 + gdx).rgb, gw), hy = dot(texture2D(tHgt, gp1 + gdy).rgb, gw);
+          normal = gwPerturb(-vViewPosition, normal, vec2(hx - h0, hy - h0) * 1.6 * (1. - gwet * .7), faceDirection); }`);
+  };
+  m.customProgramCacheKey = () => 'gw-terrain';
+  return m;
+}
+const terrainMat = terrainMaterial();
 const index = new Uint32Array((N - 1) * (N - 1) * 6);
 { let p = 0; for (let j = 0; j < N - 1; j++) for (let i = 0; i < N - 1; i++) { const a = j * N + i, b = a + 1, c = a + N, d = c + 1; index.set([a, c, b, b, c, d], p); p += 6; } }
 const idxAttr = new THREE.BufferAttribute(index, 1);
-const tPos = new Float32Array(NN * 3), tCol = new Float32Array(NN * 3);
-const wPos = new Float32Array(NN * 3), wCol = new Float32Array(NN * 4);
-for (let k = 0; k < NN; k++) { tPos[k * 3] = wPos[k * 3] = k % N; tPos[k * 3 + 2] = wPos[k * 3 + 2] = (k / N) | 0; }
+const tPos = new Float32Array(NN * 3), tNor = new Float32Array(NN * 3), tAO = new Float32Array(NN * 3), tMat = new Float32Array(NN * 4);
+const wPos = new Float32Array(NN * 3), wDep = new Float32Array(NN), wFlow = new Float32Array(NN * 2);
+for (let k = 0; k < NN; k++) { tPos[k * 3] = wPos[k * 3] = k % N; tPos[k * 3 + 2] = wPos[k * 3 + 2] = (k / N) | 0; tNor[k * 3 + 1] = 1; }
 const tGeo = new THREE.BufferGeometry();
 tGeo.setIndex(idxAttr);
 tGeo.setAttribute('position', new THREE.BufferAttribute(tPos, 3).setUsage(THREE.DynamicDrawUsage));
-tGeo.setAttribute('color', new THREE.BufferAttribute(tCol, 3).setUsage(THREE.DynamicDrawUsage));
-const terrain = new THREE.Mesh(tGeo, new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: .96, metalness: 0 }));
+tGeo.setAttribute('normal', new THREE.BufferAttribute(tNor, 3).setUsage(THREE.DynamicDrawUsage));
+tGeo.setAttribute('color', new THREE.BufferAttribute(tAO, 3).setUsage(THREE.DynamicDrawUsage));
+tGeo.setAttribute('aMat', new THREE.BufferAttribute(tMat, 4).setUsage(THREE.DynamicDrawUsage));
+const terrain = new THREE.Mesh(tGeo, terrainMat);
 terrain.receiveShadow = true; terrain.castShadow = true; terrain.frustumCulled = false;
 scene.add(terrain);
+
+// ---------------------------------------------------------------- water (ripples that follow the current, reflections, foam)
+function waterMaterial() {
+  return new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, fog: true,
+    uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
+      uTime: { value: 0 }, tN: { value: null }, uSun: { value: SUN_DIR.clone() }, uSunCol: { value: new THREE.Color(1, .92, .8) },
+      uSky: { value: new THREE.Color(.25, .42, .7) }, uHor: { value: new THREE.Color(.42, .5, .56) },
+      uDeep: { value: new THREE.Color(.015, .07, .075) }, uShallow: { value: new THREE.Color(.11, .2, .15) },
+    }]),
+    vertexShader: `
+      #include <common>
+      #include <fog_pars_vertex>
+      attribute float aW; attribute vec2 aFlow;
+      varying float vW; varying vec2 vFlow; varying vec3 vWP;
+      void main() {
+        vW = aW; vFlow = aFlow;
+        vec4 wp = modelMatrix * vec4(position, 1.0); vWP = wp.xyz;
+        vec4 mvPosition = viewMatrix * wp;
+        gl_Position = projectionMatrix * mvPosition;
+        #include <fog_vertex>
+      }`,
+    fragmentShader: `
+      #include <common>
+      #include <fog_pars_fragment>
+      uniform float uTime; uniform sampler2D tN; uniform vec3 uSun, uSunCol, uSky, uHor, uDeep, uShallow;
+      varying float vW; varying vec2 vFlow; varying vec3 vWP;
+      void main() {
+        if (vW < 0.008) discard;
+        vec2 fl = vFlow, uv = vWP.xz * .16;
+        float ph = fract(uTime * .12), w1 = abs(ph - .5) * 2.;
+        vec4 a1 = texture2D(tN, uv - fl * ph * .9 + vec2(uTime * .006, 0.));
+        vec4 a2 = texture2D(tN, uv - fl * fract(ph + .5) * .9 + vec2(.37, .21));
+        vec4 b1 = texture2D(tN, uv * 2.3 + vec2(-uTime * .011, uTime * .014));
+        vec3 n1 = mix(a1.xyz, a2.xyz, w1) * 2. - 1., n2 = b1.xyz * 2. - 1.;
+        vec3 nt = normalize(vec3(n1.xy * .9 + n2.xy * .5, 1.6));
+        vec3 N = normalize(vec3(nt.x, nt.z, nt.y));
+        vec3 V = normalize(cameraPosition - vWP);
+        float fres = .02 + .98 * pow(1. - max(dot(N, V), 0.), 5.);
+        vec3 R = reflect(-V, N);
+        vec3 skyc = mix(uHor, uSky, clamp(R.y * 1.8, 0., 1.));
+        float spec = pow(max(dot(R, uSun), 0.), 350.) * 9. + pow(max(dot(R, uSun), 0.), 40.) * .25;
+        float depthF = 1. - exp(-vW * 1.1);
+        vec3 body = mix(uShallow, uDeep, depthF) * (.75 + .25 * max(dot(N, uSun), 0.));
+        vec3 col = mix(body, skyc, fres) + uSunCol * spec;
+        float speed = length(fl);
+        float fn = mix(a1.a, a2.a, w1) * .6 + texture2D(tN, uv * 3.7 - fl * uTime * .3).a * .4;
+        float foam = smoothstep(.58, .88, fn) * (smoothstep(.2, .0, vW) * .8 + clamp(speed * .22, 0., .4));
+        col = mix(col, vec3(.85, .88, .86), foam * .75);
+        float alpha = clamp(.38 + depthF * .58 + fres * .3 + foam * .5, 0., .97) * smoothstep(.008, .07, vW);
+        gl_FragColor = vec4(col, alpha);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+        #include <fog_fragment>
+      }`,
+  });
+}
+const waterMat = waterMaterial(); waterMat.uniforms.tN.value = T.water;
 const wGeo = new THREE.BufferGeometry();
 wGeo.setIndex(idxAttr);
 wGeo.setAttribute('position', new THREE.BufferAttribute(wPos, 3).setUsage(THREE.DynamicDrawUsage));
-wGeo.setAttribute('color', new THREE.BufferAttribute(wCol, 4).setUsage(THREE.DynamicDrawUsage));
-const water = new THREE.Mesh(wGeo, new THREE.MeshStandardMaterial({ vertexColors: true, transparent: true, flatShading: true, roughness: .12, metalness: .05, depthWrite: false }));
-water.frustumCulled = false; water.receiveShadow = true; water.renderOrder = 2;
+wGeo.setAttribute('aW', new THREE.BufferAttribute(wDep, 1).setUsage(THREE.DynamicDrawUsage));
+wGeo.setAttribute('aFlow', new THREE.BufferAttribute(wFlow, 2).setUsage(THREE.DynamicDrawUsage));
+const water = new THREE.Mesh(wGeo, waterMat);
+water.frustumCulled = false; water.renderOrder = 2;
 scene.add(water);
 
-// soil walls around the edge of the valley (it sits like a cut-out block)
-const EDGE = [];
-for (let i = 0; i < N; i++) EDGE.push(i);                       // z = 0
-for (let j = 0; j < N; j++) EDGE.push(j * N + N - 1);           // x = max
-for (let i = N - 1; i >= 0; i--) EDGE.push((N - 1) * N + i);    // z = max
-for (let j = N - 1; j >= 0; j--) EDGE.push(j * N);              // x = 0
-const sPos = new Float32Array(EDGE.length * 3 * 3), sCol = new Float32Array(EDGE.length * 3 * 3);
-const sIdx = [];
-for (let e = 0; e < EDGE.length; e++) {
-  const k = EDGE[e], x = k % N, z = (k / N) | 0;
-  for (let r = 0; r < 3; r++) {
-    const v = e * 3 + r;
-    sPos[v * 3] = x; sPos[v * 3 + 2] = z; sPos[v * 3 + 1] = [0, 3, -4][r];
-    const c = [[.42, .28, .17], [.3, .2, .13], [.2, .14, .1]][r];
-    sCol.set(c, v * 3);
-  }
-  if (e < EDGE.length - 1) for (let r = 0; r < 2; r++) {
-    const a = e * 3 + r, b = a + 1, c = a + 3, d = b + 3;
-    sIdx.push(a, b, c, c, b, d);
-  }
-}
-const sGeo = new THREE.BufferGeometry();
-sGeo.setIndex(sIdx);
-sGeo.setAttribute('position', new THREE.BufferAttribute(sPos, 3).setUsage(THREE.DynamicDrawUsage));
-sGeo.setAttribute('color', new THREE.BufferAttribute(sCol, 3));
-const skirt = new THREE.Mesh(sGeo, new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 1, flatShading: true }));
-skirt.frustumCulled = false;
-scene.add(skirt);
-{
-  const base = new THREE.Mesh(new THREE.PlaneGeometry(N - 1, N - 1).rotateX(Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x241a12, roughness: 1 }));
-  base.position.set((N - 1) / 2, -4, (N - 1) / 2); scene.add(base);
-}
-
-function updateSkirt() {
-  for (let e = 0; e < EDGE.length; e++) {
-    const k = EDGE[e], h = H[k];
-    sPos[(e * 3) * 3 + 1] = h;
-    sPos[(e * 3 + 1) * 3 + 1] = h - 1.4;
-    sPos[(e * 3 + 2) * 3 + 1] = -4;
-  }
-  sGeo.attributes.position.needsUpdate = true;
-}
-
-function cellColor(k, i, j, o) {
-  const t = TINT[k];
-  let r, g, b;
-  const sl = (i > 0 && i < N - 1 && j > 0 && j < N - 1) ? Math.abs(H[k + 1] - H[k - 1]) + Math.abs(H[k + N] - H[k - N]) : 0;
-  if (M[k] === 2) { r = .6 + t * .09; g = .58 + t * .09; b = .54 + t * .08; }
-  else if (M[k] === 1 || D[k]) { r = .55 + t * .07; g = .35 + t * .05; b = .21 + t * .04; }
-  else {
-    r = .37 + t * .12; g = .55 + t * .13; b = .2 + t * .05;
-    if (sl > 1.1) { const f = clamp((sl - 1.1) / 1.2, 0, .8); r = lerp(r, .5, f); g = lerp(g, .36, f); b = lerp(b, .22, f); }
-  }
-  const w = W[k];
-  if (w > .02) {
-    if (M[k] === 0 && !D[k]) { r = .46; g = .42; b = .3; }
-    const f = clamp(.75 - w * .12, .45, .75); r *= f; g *= f * 1.02; b *= f * 1.05;
-  } else if (M[k] !== 2) {
-    // damp ground next to water
-    const wet = (i > 0 && W[k - 1] > .02) || (i < N - 1 && W[k + 1] > .02) || (j > 0 && W[k - N] > .02) || (j < N - 1 && W[k + N] > .02);
-    if (wet) { r *= .82; g *= .84; b *= .86; }
-  }
-  o[0] = r; o[1] = g; o[2] = b;
-}
-const tmpC = [0, 0, 0];
+let ringDirty = true, grassDirty = true;
 function updateTerrain() {
-  if (dMaxI < dMinI) return;
-  const i0 = Math.max(0, dMinI - 1), i1 = Math.min(N - 1, dMaxI + 1), j0 = Math.max(0, dMinJ - 1), j1 = Math.min(N - 1, dMaxJ + 1);
+  if (dMaxI < dMinI) return false;
+  const i0 = Math.max(0, dMinI - 2), i1 = Math.min(N - 1, dMaxI + 2), j0 = Math.max(0, dMinJ - 2), j1 = Math.min(N - 1, dMaxJ + 2);
   for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
-    const k = j * N + i;
-    tPos[k * 3 + 1] = H[k];
-    cellColor(k, i, j, tmpC);
-    tCol[k * 3] = tmpC[0]; tCol[k * 3 + 1] = tmpC[1]; tCol[k * 3 + 2] = tmpC[2];
-  }
-  tGeo.attributes.position.needsUpdate = true;
-  tGeo.attributes.color.needsUpdate = true;
-  if (i0 === 0 || j0 === 0 || i1 === N - 1 || j1 === N - 1) updateSkirt();
-  dMinI = N; dMaxI = -1; dMinJ = N; dMaxJ = -1;
-}
-let waterColorTick = 0;
-function updateWater() {
-  waterColorTick++;
-  const doCol = true;
-  for (let k = 0; k < NN; k++) {
+    const k = j * N + i, h = H[k];
+    tPos[k * 3 + 1] = h;
+    const hl = H[i > 0 ? k - 1 : k], hr = H[i < N - 1 ? k + 1 : k], hd = H[j > 0 ? k - N : k], hu = H[j < N - 1 ? k + N : k];
+    const nx = (hl - hr) * (i > 0 && i < N - 1 ? 1 : 2), nz = (hd - hu) * (j > 0 && j < N - 1 ? 1 : 2), l = Math.hypot(nx, 2, nz);
+    tNor[k * 3] = nx / l; tNor[k * 3 + 1] = 2 / l; tNor[k * 3 + 2] = nz / l;
+    const lap = (hl + hr + hd + hu) * .25 - h;
+    const h2 = (H[i > 1 ? k - 2 : k] + H[i < N - 2 ? k + 2 : k] + H[j > 1 ? k - 2 * N : k] + H[j < N - 2 ? k + 2 * N : k]) * .25 - h;
+    const ao = clamp(1 - Math.max(0, lap) * .45 - Math.max(0, h2) * .16 + Math.max(0, -lap) * .05, .5, 1.05);
+    tAO[k * 3] = tAO[k * 3 + 1] = tAO[k * 3 + 2] = ao;
+    let g = 0, d = 0, r = 0;
+    if (M[k] === 2) r = 1; else if (M[k] === 1 || D[k]) d = 1; else g = 1;
+    const sl = Math.abs(hl - hr) + Math.abs(hd - hu);
+    if (g && sl > 1.1) { const f = clamp((sl - 1.1) / 1.2, 0, .85); g -= f; d += f; }
     const w = W[k];
-    const wet = w > .015;
-    wPos[k * 3 + 1] = wet ? H[k] + w : H[k] - .25;
-    if (doCol) {
-      const o = k * 4;
-      if (!wet) { wCol[o + 3] = 0; continue; }
-      const f = clamp(w / 2.2, 0, 1);
-      wCol[o] = lerp(.36, .1, f); wCol[o + 1] = lerp(.6, .3, f); wCol[o + 2] = lerp(.58, .44, f);
-      wCol[o + 3] = clamp(.35 + w * .5, .35, .88);
+    if (w > .05 && M[k] === 0 && !D[k]) { g = 0; d = .7; r = .3; }
+    let wet = 0;
+    if (w > .02) wet = clamp(.6 + w * .3, 0, 1);
+    else if ((i > 0 && W[k - 1] > .02) || (i < N - 1 && W[k + 1] > .02) || (j > 0 && W[k - N] > .02) || (j < N - 1 && W[k + N] > .02)) wet = .45;
+    tMat[k * 4] = g; tMat[k * 4 + 1] = d; tMat[k * 4 + 2] = r; tMat[k * 4 + 3] = wet;
+  }
+  for (const a of ['position', 'normal', 'color', 'aMat']) tGeo.attributes[a].needsUpdate = true;
+  if (i0 === 0 || j0 === 0 || i1 === N - 1 || j1 === N - 1) ringDirty = true;
+  if (grassAt && i1 > grassAt[0] - Q.grassR && i0 < grassAt[0] + Q.grassR && j1 > grassAt[1] - Q.grassR && j0 < grassAt[1] + Q.grassR) grassDirty = true;
+  dMinI = N; dMaxI = -1; dMinJ = N; dMaxJ = -1;
+  return true;
+}
+let wetTick = 0;
+function updateWater() {
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const k = j * N + i, w = W[k];
+    if (w > .012) {
+      wPos[k * 3 + 1] = H[k] + w; wDep[k] = w;
+      let vx = (FR[k] - FL[k] + (i > 0 ? FR[k - 1] : 0) - (i < N - 1 ? FL[k + 1] : 0)) * .5;
+      let vz = (FD[k] - FU[k] + (j > 0 ? FD[k - N] : 0) - (j < N - 1 ? FU[k + N] : 0)) * .5;
+      const dd = Math.max(w, .08); vx /= dd; vz /= dd;
+      const sp = Math.hypot(vx, vz); if (sp > 2.5) { vx *= 2.5 / sp; vz *= 2.5 / sp; }
+      wFlow[k * 2] = vx; wFlow[k * 2 + 1] = vz;
+    } else {
+      let lvl = -1e9;
+      if (i > 0 && W[k - 1] > .012) lvl = Math.max(lvl, H[k - 1] + W[k - 1]);
+      if (i < N - 1 && W[k + 1] > .012) lvl = Math.max(lvl, H[k + 1] + W[k + 1]);
+      if (j > 0 && W[k - N] > .012) lvl = Math.max(lvl, H[k - N] + W[k - N]);
+      if (j < N - 1 && W[k + N] > .012) lvl = Math.max(lvl, H[k + N] + W[k + N]);
+      if (lvl > -1e8) { wPos[k * 3 + 1] = lvl; wDep[k] = Math.max(-2, lvl - H[k]); }
+      else { wPos[k * 3 + 1] = H[k] - .3; wDep[k] = -1; }
+      wFlow[k * 2] = wFlow[k * 2 + 1] = 0;
     }
   }
-  wGeo.attributes.position.needsUpdate = true;
-  wGeo.attributes.color.needsUpdate = true;
-  // the river colours the bank, so recolour terrain cells with water now and then
-  if (waterColorTick % 30 === 0) { dMinI = 0; dMaxI = N - 1; dMinJ = 0; dMaxJ = N - 1; }
+  wGeo.attributes.position.needsUpdate = true; wGeo.attributes.aW.needsUpdate = true; wGeo.attributes.aFlow.needsUpdate = true;
+  // water darkens the bank, so recolour the whole ground now and then
+  if (++wetTick % 40 === 0) { dMinI = Math.min(dMinI, 0); dMaxI = N - 1; dMinJ = Math.min(dMinJ, 0); dMaxJ = N - 1; }
 }
 
-// ---------------------------------------------------------------- tree meshes
-let trunkIM, crownIM, crown2IM;
+// ---------------------------------------------------------------- the land beyond the work site (out to the horizon)
+const EDGE = [];
+for (let i = 0; i < N; i++) EDGE.push(i);
+for (let j = 0; j < N; j++) EDGE.push(j * N + N - 1);
+for (let i = N - 1; i >= 0; i--) EDGE.push((N - 1) * N + i);
+for (let j = N - 1; j >= 0; j--) EDGE.push(j * N);
+const RING_R = [0, 1.5, 4, 8, 14, 24, 40, 65, 100, 160, 250, 400, 650, 1000, 1600, 2600];
+const RN = RING_R.length, RP = EDGE.length;
+const RDIR = EDGE.map(k => { const dx = k % N - (N - 1) / 2, dz = ((k / N) | 0) - (N - 1) / 2, l = Math.hypot(dx, dz); return [dx / l, dz / l]; });
+const rPos = new Float32Array(RP * RN * 3), rAO = new Float32Array(RP * RN * 3).fill(1), rMat = new Float32Array(RP * RN * 4);
+const rwPos = new Float32Array(RP * RN * 3), rwDep = new Float32Array(RP * RN), rwFlow = new Float32Array(RP * RN * 2);
+const rIdx = [];
+for (let e = 0; e < RP - 1; e++) for (let r = 0; r < RN - 1; r++) { const a = e * RN + r, b = a + 1, c = a + RN, d = c + 1; rIdx.push(a, c, b, c, d, b); }
+const rGeo = new THREE.BufferGeometry(), rwGeo = new THREE.BufferGeometry();
+rGeo.setIndex(rIdx); rwGeo.setIndex(rIdx);
+rGeo.setAttribute('position', new THREE.BufferAttribute(rPos, 3)); rGeo.setAttribute('color', new THREE.BufferAttribute(rAO, 3)); rGeo.setAttribute('aMat', new THREE.BufferAttribute(rMat, 4));
+rwGeo.setAttribute('position', new THREE.BufferAttribute(rwPos, 3)); rwGeo.setAttribute('aW', new THREE.BufferAttribute(rwDep, 1)); rwGeo.setAttribute('aFlow', new THREE.BufferAttribute(rwFlow, 2));
+const ringLand = new THREE.Mesh(rGeo, terrainMat); ringLand.receiveShadow = true; ringLand.frustumCulled = false; scene.add(ringLand);
+const ringWater = new THREE.Mesh(rwGeo, waterMat); ringWater.frustumCulled = false; ringWater.renderOrder = 2; scene.add(ringWater);
+function farH(x, z, R) {
+  const d = Math.abs(z - riverZ(x)), amp = clamp(d / 28, .35, 1);
+  let h = 11.5 + (N - x) * .02 + noiseFn(x / 45, z / 45, 4) * 7 * amp + noiseFn(x / 11 + 50, z / 11, 2) * 1.1;
+  h += smooth(60, 800, R) * (16 + noiseFn(x / 230 + 9, z / 230 - 4, 4) * 70);
+  const wd = 11 + R * .04;
+  if (d < wd) { const bed = bedLevel(x); h = Math.min(h, bed + (d / wd) ** 2 * (h - bed)); }
+  return h;
+}
+const ringH = (k, x, z, R) => R === 0 ? H[k] : lerp(H[k], farH(x, z, R), smooth(0, 30, R));
+function riverLevel(x, z) { return (x < 0 || x > N - 1) && Math.abs(z - riverZ(x)) < 8 ? bedLevel(x) + 1.3 : null; }
+function updateRing() {
+  ringDirty = false;
+  for (let e = 0; e < RP; e++) {
+    const k = EDGE[e], x0 = k % N, z0 = (k / N) | 0, [dx, dz] = RDIR[e];
+    for (let r = 0; r < RN; r++) {
+      const v = e * RN + r, R = RING_R[r], x = x0 + dx * R, z = z0 + dz * R, h = ringH(k, x, z, R);
+      rPos[v * 3] = rwPos[v * 3] = x; rPos[v * 3 + 1] = h; rPos[v * 3 + 2] = rwPos[v * 3 + 2] = z;
+      const lv = R === 0 ? (W[k] > .012 ? H[k] + W[k] : null) : riverLevel(x, z);
+      if (lv !== null && lv > h) { rwPos[v * 3 + 1] = lv; rwDep[v] = lv - h; rwFlow[v * 2] = .7; rwFlow[v * 2 + 1] = 0; }
+      else { rwPos[v * 3 + 1] = h - .3; rwDep[v] = -1; rwFlow[v * 2] = rwFlow[v * 2 + 1] = 0; }
+      rMat[v * 4] = 1; rMat[v * 4 + 1] = 0; rMat[v * 4 + 2] = 0; rMat[v * 4 + 3] = (lv !== null && lv > h) ? 1 : 0;
+    }
+  }
+  // shore: dry points next to water take the water's level so the edge meets the bank
+  for (let e = 0; e < RP; e++) for (let r = 0; r < RN; r++) {
+    const v = e * RN + r; if (rwDep[v] > 0) continue;
+    let lvl = -1e9;
+    for (const n of [v - RN, v + RN, v - 1, v + 1]) if (n >= 0 && n < RP * RN && rwDep[n] > 0 && Math.abs((n % RN) - r) <= 1) lvl = Math.max(lvl, rwPos[n * 3 + 1]);
+    if (lvl > -1e8) { rwPos[v * 3 + 1] = lvl; rwDep[v] = Math.max(-2, lvl - rPos[v * 3 + 1]); rMat[v * 4 + 3] = .5; }
+  }
+  rGeo.computeVertexNormals();
+  for (const a of ['position', 'aMat']) rGeo.attributes[a].needsUpdate = true;
+  for (const a of ['position', 'aW', 'aFlow']) rwGeo.attributes[a].needsUpdate = true;
+  rGeo.attributes.normal.needsUpdate = true;
+}
+
+// ---------------------------------------------------------------- trees, rocks, grass
+const treeMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: T.needles, roughness: .92 });
+const TREE_GEOS = [MOD.pineGeo(1, 10.5), MOD.pineGeo(2, 12.5), MOD.pineGeo(3, 14), MOD.broadGeo(1, 9), MOD.broadGeo(2, 10.5)];
+const treeVariant = t => t.hue < .27 ? 3 + (t.hue < .135 ? 0 : 1) : Math.min(2, Math.floor((t.hue - .27) / .73 * 3));
+let treeIMs = [];
 function buildTreeMeshes() {
-  for (const im of [trunkIM, crownIM, crown2IM]) if (im) { scene.remove(im); im.dispose(); }
-  const trunkG = new THREE.CylinderGeometry(.16, .27, 2.2, 6).translate(0, 1.1, 0);
-  const c1 = new THREE.ConeGeometry(1.7, 3.8, 7).translate(0, 3.7, 0);
-  const c2 = new THREE.ConeGeometry(1.2, 3.0, 7).translate(0, 5.6, 0);
-  trunkIM = new THREE.InstancedMesh(trunkG, new THREE.MeshStandardMaterial({ color: 0x5a3f2a, roughness: 1, flatShading: true }), trees.length);
-  const cm = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: .95, flatShading: true });
-  crownIM = new THREE.InstancedMesh(c1, cm, trees.length);
-  crown2IM = new THREE.InstancedMesh(c2, cm, trees.length);
-  const col = new THREE.Color();
-  trees.forEach((t, i) => {
-    col.setHSL(.27 + t.hue * .07, .42 + t.hue * .15, .2 + t.hue * .08);
-    crownIM.setColorAt(i, col);
-    col.offsetHSL(.01, 0, .04);
-    crown2IM.setColorAt(i, col);
-    t.dirty = true;
+  for (const im of treeIMs) { scene.remove(im); im.dispose(); }
+  const counts = TREE_GEOS.map(() => 0);
+  for (const t of trees) { t.v = treeVariant(t); t.slot = counts[t.v]++; }
+  treeIMs = TREE_GEOS.map((g, v) => {
+    const im = new THREE.InstancedMesh(g, treeMat, Math.max(1, counts[v]));
+    im.count = counts[v]; im.castShadow = true; im.receiveShadow = true; im.frustumCulled = false; scene.add(im); return im;
   });
-  for (const im of [trunkIM, crownIM, crown2IM]) { im.castShadow = true; im.receiveShadow = true; im.frustumCulled = false; scene.add(im); }
+  const col = new THREE.Color();
+  for (const t of trees) { col.setRGB(.85 + t.hue * .3, .9 + t.hue * .2, .85 + t.hue * .2); treeIMs[t.v].setColorAt(t.slot, col); t.dirty = true; }
+  for (const im of treeIMs) if (im.instanceColor) im.instanceColor.needsUpdate = true;
 }
 const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new THREE.Vector3(), _s = new THREE.Vector3(), _ax = new THREE.Vector3();
 let treeHeightTimer = 0;
@@ -467,99 +599,250 @@ function updateTrees(dt, terrainChanged) {
   treeHeightTimer -= dt;
   const refresh = terrainChanged && treeHeightTimer <= 0;
   if (refresh) treeHeightTimer = .4;
-  let any = false;
-  for (let i = 0; i < trees.length; i++) {
-    const t = trees[i];
-    if (t.st === 1) { t.a = Math.min(1, t.a + dt * (.5 + t.a * 2.6)); if (t.a >= 1) { t.st = 2; t.t = 0; } t.dirty = true; }
-    else if (t.st === 2) { t.t += dt; if (t.t > 5) { t.g -= dt * .8; if (t.g <= 0) { t.g = 0; t.st = 3; } t.dirty = true; } }
-    else if (t.st === 0 && refresh) {
-      const y = hAt(t.x, t.z) - .1;
-      if (Math.abs(y - t.y) > .01) { t.y = y; t.dirty = true; }
-    }
+  const touched = new Set();
+  for (const t of trees) {
+    if (t.st === 1) {
+      t.a = Math.min(1, t.a + dt * (.45 + t.a * 2.4));
+      if (t.a >= 1) { t.st = 2; t.t = 0; dust(t.x + t.dx * 6 * t.s, t.y + .5, t.z + t.dz * 6 * t.s, 14, [.42, .38, .3]); }
+      t.dirty = true;
+    } else if (t.st === 2) { t.t += dt; if (t.t > 6) { t.g -= dt * .7; if (t.g <= 0) { t.g = 0; t.st = 3; } t.dirty = true; } }
+    else if (t.st === 0 && refresh) { const y = hAt(t.x, t.z) - .15; if (Math.abs(y - t.y) > .01) { t.y = y; t.dirty = true; } }
     if (!t.dirty) continue;
-    t.dirty = false; any = true;
-    if (t.st === 3) { _m4.makeScale(0, 0, 0); }
+    t.dirty = false; touched.add(t.v);
+    if (t.st === 3) _m4.makeScale(0, 0, 0);
     else {
       _q2.setFromAxisAngle(_ax.set(0, 1, 0), t.r);
-      if (t.st > 0) { _q.setFromAxisAngle(_ax.set(t.dz, 0, -t.dx), t.a * 1.47); _q.multiply(_q2); } else _q.copy(_q2);
+      if (t.st > 0) { _q.setFromAxisAngle(_ax.set(t.dz, 0, -t.dx), t.a * 1.5); _q.multiply(_q2); } else _q.copy(_q2);
       const sc = t.s * t.g;
       _m4.compose(_v.set(t.x, t.y, t.z), _q, _s.set(sc, sc, sc));
     }
-    trunkIM.setMatrixAt(i, _m4); crownIM.setMatrixAt(i, _m4); crown2IM.setMatrixAt(i, _m4);
+    treeIMs[t.v].setMatrixAt(t.slot, _m4);
   }
-  if (any) for (const im of [trunkIM, crownIM, crown2IM]) im.instanceMatrix.needsUpdate = true;
+  for (const v of touched) treeIMs[v].instanceMatrix.needsUpdate = true;
 }
 
-// ---------------------------------------------------------------- dust
-const PMAX = 600;
-const pPos = new Float32Array(PMAX * 3), pCol = new Float32Array(PMAX * 4), pVel = new Float32Array(PMAX * 3), pLife = new Float32Array(PMAX);
+// boulders: lie about the valley and get shoved aside by the machines
+const rocks = [];
+function makeRocks(sd) {
+  const r = mulberry32(sd * 13 + 5); rocks.length = 0;
+  for (let a = 0; a < 4000 && rocks.length < 120; a++) {
+    let x, z;
+    if (rocks.length < 45) { const an = r() * 6.283, d = GRAVEL.r * (.6 + r() * .7); x = GRAVEL.x + Math.cos(an) * d; z = GRAVEL.z + Math.sin(an) * d; }
+    else { x = 4 + r() * (N - 8); z = 4 + r() * (N - 8); }
+    if (x < 3 || z < 3 || x > N - 4 || z > N - 4) continue;
+    const k = cellOf(x, z); if (RD[k] < 9 || inYard(x, z, 6)) continue;
+    rocks.push({ x, z, s: .3 + r() ** 2 * 1.1, ry: r() * 6.28, rx: 0, tint: .75 + r() * .35, y: 0, dirty: true });
+  }
+}
+const rockMat = new THREE.MeshStandardMaterial({ map: T.rock, roughness: .88, metalness: 0 });
+let rockIM = null;
+function buildRocks() {
+  if (rockIM) scene.remove(rockIM);
+  rockIM = new THREE.InstancedMesh(MOD.rockGeo(3), rockMat, Math.max(1, rocks.length));
+  rockIM.castShadow = true; rockIM.receiveShadow = true; rockIM.frustumCulled = false; scene.add(rockIM);
+  const col = new THREE.Color();
+  rocks.forEach((rk, i) => { col.setRGB(rk.tint, rk.tint * .98, rk.tint * .94); rockIM.setColorAt(i, col); rk.dirty = true; });
+  updateRocks(1, true);
+}
+let rockTimer = 0;
+function updateRocks(dt, changed) {
+  rockTimer -= dt;
+  const refresh = changed && rockTimer <= 0; if (refresh) rockTimer = .4;
+  let any = false;
+  rocks.forEach((rk, i) => {
+    if (refresh) rk.dirty = true;
+    if (!rk.dirty) return;
+    rk.dirty = false; any = true;
+    rk.y = hAt(rk.x, rk.z) - rk.s * .22;
+    _q.setFromEuler(new THREE.Euler(rk.rx, rk.ry, 0, 'YXZ'));
+    _m4.compose(_v.set(rk.x, rk.y, rk.z), _q, _s.set(rk.s, rk.s, rk.s));
+    rockIM.setMatrixAt(i, _m4);
+  });
+  if (any) rockIM.instanceMatrix.needsUpdate = true;
+}
+
+// grass tufts near the camera, swaying in the wind; gone wherever the ground has been dug or driven
+const grassMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: .85 });
+const grassU = { uTime: { value: 0 } };
+grassMat.onBeforeCompile = sh => {
+  sh.uniforms.uTime = grassU.uTime;
+  sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;')
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+      #ifdef USE_INSTANCING
+        vec4 gIP = instanceMatrix * vec4(0., 0., 0., 1.);
+        float sway = sin(uTime * 1.7 + gIP.x * .35 + gIP.z * .27) + .5 * sin(uTime * 2.9 + gIP.x * .9 - gIP.z * .4);
+        transformed.x += sway * .07 * position.y; transformed.z += sway * .045 * position.y;
+      #endif`);
+};
+let grassIM = null, grassAt = null, grassTimer = 0;
+if (Q.grass > 0) {
+  grassIM = new THREE.InstancedMesh(MOD.tuftGeo(), grassMat, Q.grass);
+  grassIM.receiveShadow = true; grassIM.frustumCulled = false; grassIM.count = 0; scene.add(grassIM);
+}
+const hashf = (a, b) => { const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return s - Math.floor(s); };
+function updateGrass(dt, me) {
+  if (!grassIM) return;
+  grassTimer -= dt;
+  const cx = camera.position.x * .5 + me.x * .5, cz = camera.position.z * .5 + me.z * .5;
+  const moved = !grassAt || Math.hypot(cx - grassAt[0], cz - grassAt[1]) > 6;
+  if (!(moved || grassDirty) || grassTimer > 0) return;
+  grassTimer = .5; grassDirty = false; grassAt = [cx, cz];
+  const R = Q.grassR, i0 = Math.max(1, Math.floor(cx - R)), i1 = Math.min(N - 2, Math.ceil(cx + R)), j0 = Math.max(1, Math.floor(cz - R)), j1 = Math.min(N - 2, Math.ceil(cz + R));
+  let n = 0;
+  for (let j = j0; j <= j1 && n < Q.grass; j++) for (let i = i0; i <= i1 && n < Q.grass; i++) {
+    const dd = (i - cx) ** 2 + (j - cz) ** 2; if (dd > R * R) continue;
+    const k = j * N + i;
+    if (M[k] !== 0 || D[k] || W[k] > .005 || W[k + 1] > .005 || W[k + N] > .005) continue;
+    if (Math.abs(H[k + 1] - H[k - 1]) + Math.abs(H[k + N] - H[k - N]) > 1.1) continue;
+    for (let q = 0; q < 2 && n < Q.grass; q++) {
+      const hx = hashf(i + q * .37, j), hz = hashf(j + q * .51, i + 3.1);
+      if (dd > R * R * .55 && hx < .5) continue;
+      const x = i + hx - .5, z = j + hz - .5, s = .7 + hashf(i, j + q) * .7;
+      _q.setFromAxisAngle(_ax.set(0, 1, 0), hx * 6.28);
+      _m4.compose(_v.set(x, hAt(x, z) - .03, z), _q, _s.set(s, s * (.8 + hz * .5), s));
+      grassIM.setMatrixAt(n++, _m4);
+    }
+  }
+  grassIM.count = n; grassIM.instanceMatrix.needsUpdate = true;
+}
+
+// the forest beyond the work site (fixed scenery)
+let farForest = [];
+function buildFarForest() {
+  for (const im of farForest) scene.remove(im);
+  farForest = [];
+  const r = mulberry32(seed * 3 + 7);
+  const near = [[], [], [], [], []], far = [];
+  for (let a = 0; a < (Q.near + Q.far) * 4 && (near.flat().length < Q.near || far.length < Q.far); a++) {
+    const e = Math.floor(r() * RP), isNear = r() < Q.near / (Q.near + Q.far);
+    const R = isNear ? 3 + r() ** 1.3 * 70 : 70 + r() ** 1.7 * 1500;
+    const k = EDGE[e], [dx, dz] = RDIR[e], x = k % N + dx * R + (r() - .5) * 6, z = ((k / N) | 0) + dz * R + (r() - .5) * 6;
+    if (Math.abs(z - riverZ(x)) < 14 + R * .05 && (x < 0 || x > N - 1)) continue;
+    if (noiseFn(x / 70, z / 70, 2) < -.12 && r() < .75) continue;
+    const y = ringH(k, x, z, R) - .2, s = .8 + r() * .6, ry = r() * 6.28;
+    if (isNear) { if (near.flat().length >= Q.near) continue; near[r() < .27 ? 3 + (r() < .5 ? 0 : 1) : Math.floor(r() * 3)].push([x, y, z, s, ry]); }
+    else { if (far.length >= Q.far) continue; far.push([x, y, z, s * 1.4, ry]); }
+  }
+  const put = (geo, mat, list) => {
+    if (!list.length) return;
+    const im = new THREE.InstancedMesh(geo, mat, list.length);
+    list.forEach(([x, y, z, s, ry], i) => { _q.setFromAxisAngle(_ax.set(0, 1, 0), ry); _m4.compose(_v.set(x, y, z), _q, _s.set(s, s, s)); im.setMatrixAt(i, _m4); });
+    im.castShadow = false; im.receiveShadow = true; scene.add(im); farForest.push(im);
+  };
+  near.forEach((l, v) => put(TREE_GEOS[v], treeMat, l));
+  put(MOD.farTreeGeo(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .95 }), far);
+}
+
+// ---------------------------------------------------------------- dust, smoke and spray
+const PMAX = 1200;
+const pPos = new Float32Array(PMAX * 3), pVel = new Float32Array(PMAX * 3), pCol = new Float32Array(PMAX * 4), pSize = new Float32Array(PMAX);
+const pLife = new Float32Array(PMAX), pMax = new Float32Array(PMAX), pS0 = new Float32Array(PMAX), pS1 = new Float32Array(PMAX), pA0 = new Float32Array(PMAX), pG = new Float32Array(PMAX), pDrag = new Float32Array(PMAX);
 const pGeo = new THREE.BufferGeometry();
 pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3).setUsage(THREE.DynamicDrawUsage));
-pGeo.setAttribute('color', new THREE.BufferAttribute(pCol, 4).setUsage(THREE.DynamicDrawUsage));
-const dustTex = (() => {
-  const c = document.createElement('canvas'); c.width = c.height = 32;
-  const g = c.getContext('2d'); g.fillStyle = '#fff'; g.beginPath(); g.arc(16, 16, 14, 0, Math.PI * 2); g.fill();
-  const t = new THREE.CanvasTexture(c); return t;
-})();
-const dustPts = new THREE.Points(pGeo, new THREE.PointsMaterial({ size: .8, map: dustTex, alphaTest: .02, vertexColors: true, transparent: true, depthWrite: false }));
-dustPts.frustumCulled = false;
-scene.add(dustPts);
+pGeo.setAttribute('aCol', new THREE.BufferAttribute(pCol, 4).setUsage(THREE.DynamicDrawUsage));
+pGeo.setAttribute('aSize', new THREE.BufferAttribute(pSize, 1).setUsage(THREE.DynamicDrawUsage));
+const pMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, fog: true,
+  uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { tPuff: { value: null }, uScale: { value: 400 } }]),
+  vertexShader: `
+    #include <common>
+    #include <fog_pars_vertex>
+    attribute vec4 aCol; attribute float aSize; uniform float uScale; varying vec4 vCol;
+    void main() { vCol = aCol; vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = aSize * uScale / max(.2, -mvPosition.z); gl_Position = projectionMatrix * mvPosition;
+      #include <fog_vertex>
+    }`,
+  fragmentShader: `
+    #include <common>
+    #include <fog_pars_fragment>
+    uniform sampler2D tPuff; varying vec4 vCol;
+    void main() { float a = texture2D(tPuff, gl_PointCoord).a * vCol.a; if (a < .01) discard; gl_FragColor = vec4(vCol.rgb, a);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+      #include <fog_fragment>
+    }`,
+});
+pMat.uniforms.tPuff.value = T.puff;
+const puffs = new THREE.Points(pGeo, pMat); puffs.frustumCulled = false; puffs.renderOrder = 3; scene.add(puffs);
 let pNext = 0;
-function dust(x, y, z, n, c) {
+const lin = c => c.map(v => Math.pow(v, 2.2));
+const PK = {
+  dust: { life: [1.4, 2.6], s0: .5, s1: 3.2, a: .5, up: [.3, 1.1], spread: 1.6, g: -.05, drag: 1.2 },
+  smoke: { life: [1.6, 2.6], s0: .3, s1: 2.4, a: .45, up: [1.4, 2.2], spread: .3, g: -.25, drag: .6 },
+  splash: { life: [.5, .9], s0: .35, s1: .7, a: .7, up: [1.5, 3.2], spread: 1.8, g: 9, drag: .2 },
+  leaf: { life: [1.5, 2.5], s0: .25, s1: .25, a: .9, up: [.2, 1.2], spread: 2.4, g: 1.2, drag: 1.5 },
+};
+function spawn(kind, x, y, z, n, col, opts = {}) {
+  const K = PK[kind], c = lin(col);
   for (let q = 0; q < n; q++) {
     const p = pNext; pNext = (pNext + 1) % PMAX;
-    pPos[p * 3] = x + (Math.random() - .5) * 1.4; pPos[p * 3 + 1] = y + Math.random() * .4; pPos[p * 3 + 2] = z + (Math.random() - .5) * 1.4;
-    pVel[p * 3] = (Math.random() - .5) * 1.6; pVel[p * 3 + 1] = .6 + Math.random() * 1.6; pVel[p * 3 + 2] = (Math.random() - .5) * 1.6;
-    pLife[p] = 1 + Math.random() * .6;
+    pPos[p * 3] = x + (Math.random() - .5) * (opts.jitter ?? .8); pPos[p * 3 + 1] = y + Math.random() * .3; pPos[p * 3 + 2] = z + (Math.random() - .5) * (opts.jitter ?? .8);
+    pVel[p * 3] = (Math.random() - .5) * K.spread + (opts.vx || 0); pVel[p * 3 + 1] = lerp(K.up[0], K.up[1], Math.random()) * (opts.up ?? 1); pVel[p * 3 + 2] = (Math.random() - .5) * K.spread + (opts.vz || 0);
+    pMax[p] = pLife[p] = lerp(K.life[0], K.life[1], Math.random());
+    pS0[p] = K.s0 * (opts.size ?? 1); pS1[p] = K.s1 * (opts.size ?? 1); pA0[p] = K.a * (opts.alpha ?? 1); pG[p] = K.g; pDrag[p] = K.drag;
     pCol[p * 4] = c[0]; pCol[p * 4 + 1] = c[1]; pCol[p * 4 + 2] = c[2];
   }
 }
-const DIRT_C = [.55, .4, .28], GRAVEL_C = [.68, .66, .62];
-function updateDust(dt) {
+function dust(x, y, z, n, c) { spawn('dust', x, y, z, Math.ceil(n * .6), c); }
+const DIRT_C = [.5, .38, .27], GRAVEL_C = [.62, .6, .57];
+function updateParticles(dt) {
+  const wind = .6;
   for (let p = 0; p < PMAX; p++) {
-    if (pLife[p] <= 0) { pCol[p * 4 + 3] = 0; continue; }
+    if (pLife[p] <= 0) { pCol[p * 4 + 3] = 0; pSize[p] = 0; continue; }
     pLife[p] -= dt;
-    pVel[p * 3 + 1] -= 1.2 * dt;
+    const f = 1 - pLife[p] / pMax[p], dr = Math.exp(-pDrag[p] * dt);
+    pVel[p * 3] = pVel[p * 3] * dr + wind * dt * .4; pVel[p * 3 + 1] = pVel[p * 3 + 1] * dr - pG[p] * dt; pVel[p * 3 + 2] = pVel[p * 3 + 2] * dr + wind * dt * .25;
     pPos[p * 3] += pVel[p * 3] * dt; pPos[p * 3 + 1] += pVel[p * 3 + 1] * dt; pPos[p * 3 + 2] += pVel[p * 3 + 2] * dt;
-    pCol[p * 4 + 3] = clamp(pLife[p], 0, 1) * .55;
+    pSize[p] = lerp(pS0[p], pS1[p], Math.sqrt(f));
+    pCol[p * 4 + 3] = pA0[p] * Math.min(1, f * 6) * (1 - f) * (1 - f * .3);
   }
-  pGeo.attributes.position.needsUpdate = true; pGeo.attributes.color.needsUpdate = true;
+  pGeo.attributes.position.needsUpdate = true; pGeo.attributes.aCol.needsUpdate = true; pGeo.attributes.aSize.needsUpdate = true;
+}
+
+// clods and stones that tumble out of buckets and beds (just for show: the ground has already been changed)
+const CMAX = 360;
+const chunkIM = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(.13, 0), new THREE.MeshStandardMaterial({ roughness: 1, flatShading: true }), CMAX);
+chunkIM.castShadow = true; chunkIM.frustumCulled = false; scene.add(chunkIM);
+const cPos = new Float32Array(CMAX * 3), cVel = new Float32Array(CMAX * 3), cLife = new Float32Array(CMAX), cRot = new Float32Array(CMAX * 2), cS = new Float32Array(CMAX);
+let cNext = 0, chunksLive = 0;
+{ const col = new THREE.Color(); for (let i = 0; i < CMAX; i++) { chunkIM.setMatrixAt(i, _m4.makeScale(0, 0, 0)); chunkIM.setColorAt(i, col.setRGB(.4, .3, .2)); } }
+const CHUNK_DIRT = new THREE.Color(0x5e4029), CHUNK_GRAVEL = new THREE.Color(0x8c8880), _cc = new THREE.Color();
+function chunks(x, y, z, n, gravel, vx = 0, vz = 0, spread = 1) {
+  for (let q = 0; q < n; q++) {
+    const i = cNext; cNext = (cNext + 1) % CMAX;
+    cPos[i * 3] = x + (Math.random() - .5) * spread; cPos[i * 3 + 1] = y + (Math.random() - .5) * .3; cPos[i * 3 + 2] = z + (Math.random() - .5) * spread;
+    cVel[i * 3] = vx + (Math.random() - .5) * 1.2; cVel[i * 3 + 1] = Math.random() * 1.2; cVel[i * 3 + 2] = vz + (Math.random() - .5) * 1.2;
+    cLife[i] = 1.6 + Math.random(); cRot[i * 2] = Math.random() * 6; cRot[i * 2 + 1] = Math.random() * 6; cS[i] = .6 + Math.random() * 1.3;
+    _cc.copy(gravel ? CHUNK_GRAVEL : CHUNK_DIRT).multiplyScalar(.75 + Math.random() * .5);
+    chunkIM.setColorAt(i, _cc);
+  }
+  chunkIM.instanceColor.needsUpdate = true;
+  chunksLive = 3;
+}
+function updateChunks(dt) {
+  if (chunksLive <= 0) return;
+  chunksLive -= dt;
+  for (let i = 0; i < CMAX; i++) {
+    if (cLife[i] <= 0) continue;
+    cLife[i] -= dt;
+    cVel[i * 3 + 1] -= 9.8 * dt;
+    let x = cPos[i * 3] + cVel[i * 3] * dt, y = cPos[i * 3 + 1] + cVel[i * 3 + 1] * dt, z = cPos[i * 3 + 2] + cVel[i * 3 + 2] * dt;
+    const g = hAt(x, z) + .05;
+    if (y < g) { y = g; cVel[i * 3] *= .4; cVel[i * 3 + 2] *= .4; cVel[i * 3 + 1] = -cVel[i * 3 + 1] * .25; cLife[i] = Math.min(cLife[i], .6); }
+    cPos[i * 3] = x; cPos[i * 3 + 1] = y; cPos[i * 3 + 2] = z;
+    cRot[i * 2] += dt * 6; cRot[i * 2 + 1] += dt * 4;
+    const s = cLife[i] > 0 ? cS[i] * Math.min(1, cLife[i] * 3) : 0;
+    _q.setFromEuler(new THREE.Euler(cRot[i * 2], cRot[i * 2 + 1], 0));
+    chunkIM.setMatrixAt(i, _m4.compose(_v.set(x, y, z), _q, _s.set(s, s, s)));
+  }
+  chunkIM.instanceMatrix.needsUpdate = true;
 }
 
 // ---------------------------------------------------------------- machines
-const MAT = {
-  paint: new THREE.MeshStandardMaterial({ color: 0xdf7a2e, roughness: .5, metalness: .15, flatShading: true }),
-  dark: new THREE.MeshStandardMaterial({ color: 0x2a2d32, roughness: .85, flatShading: true }),
-  steel: new THREE.MeshStandardMaterial({ color: 0x8d9299, roughness: .38, metalness: .7, flatShading: true }),
-  glass: new THREE.MeshStandardMaterial({ color: 0x4b6a7c, roughness: .1, metalness: .2, transparent: true, opacity: .62 }),
-  tire: new THREE.MeshStandardMaterial({ color: 0x1b1b1d, roughness: .95, flatShading: true }),
-  cream: new THREE.MeshStandardMaterial({ color: 0xefe5cd, roughness: .6, flatShading: true }),
-  dirt: new THREE.MeshStandardMaterial({ color: 0x7c5435, roughness: 1, flatShading: true }),
-  gravel: new THREE.MeshStandardMaterial({ color: 0x9c978e, roughness: 1, flatShading: true }),
+const LOADMAT = {
+  dirt: new THREE.MeshStandardMaterial({ map: T.dirt, roughness: 1, color: 0xc8b8a8 }),
+  gravel: new THREE.MeshStandardMaterial({ map: T.gravel, roughness: .95 }),
 };
-function addBox(p, w, h, d, mat, x, y, z) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-  m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; p.add(m); return m;
-}
-function addWheel(p, r, w, x, y, z, mat = MAT.tire, hubMat = MAT.paint) {
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, w, 14).rotateZ(Math.PI / 2), mat);
-  m.position.set(x, y, z); m.castShadow = true; p.add(m);
-  const hub = new THREE.Mesh(new THREE.CylinderGeometry(r * .45, r * .45, w + .04, 8).rotateZ(Math.PI / 2), hubMat);
-  m.add(hub);
-  return m;
-}
-function addCab(p, w, h, d, x, y, z) {
-  addBox(p, w - .08, h, d - .08, MAT.glass, x, y + h / 2, z);
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) addBox(p, .1, h, .1, MAT.paint, x + sx * (w / 2 - .05), y + h / 2, z + sz * (d / 2 - .05));
-  addBox(p, w + .16, .14, d + .16, MAT.paint, x, y + h + .07, z);
-}
-function addTracks(g, half, len) {
-  for (const s of [-1, 1]) {
-    addBox(g, .78, .88, len, MAT.dark, s * half, .44, 0);
-    for (const z of [-len / 2 + .35, len / 2 - .35]) addWheel(g, .42, .82, s * half, .44, z, MAT.steel, MAT.dark);
-    addBox(g, .8, .1, len - .9, MAT.steel, s * half, .92, 0);
-  }
-}
 const SPEC = {
   dozer: { name: 'Dozer', vmax: 3.6, acc: 2.5, turn: .85, tracks: true, len: 4.6, wid: 3.2, circ: [[1.2, 1.9], [-1.0, 1.7]], cap: 6, tool: 'Blade',
     hint: 'R/F blade up and down. Drive forward with the blade low to cut; over low ground it fills. Back up to leave the pile.' },
@@ -570,103 +853,20 @@ const SPEC = {
   hauler: { name: 'Hauler', vmax: 8.5, acc: 3, wb: 4.6, len: 8, wid: 3, circ: [[2.6, 1.6], [-.6, 1.6], [-3.2, 1.6]], cap: 12, tool: 'Bed',
     hint: 'Park next to the loader or excavator to get filled. Space tips the bed and dumps behind you; Space again lowers it.' },
 };
-const ORDER = ['dozer', 'loader', 'excavator', 'hauler'];
-
-function buildDozer(m) {
-  const g = new THREE.Group();
-  addTracks(g, 1.2, 4.4);
-  addBox(g, 1.7, .9, 3.6, MAT.paint, 0, 1.3, -.2);
-  addBox(g, 1.55, .75, 1.7, MAT.paint, 0, 2.1, .8);
-  addBox(g, 1.72, .1, 3.62, MAT.cream, 0, 1.72, -.2);
-  addBox(g, 1.2, .5, .08, MAT.dark, 0, 2.05, 1.66);
-  addBox(g, .14, .9, .14, MAT.dark, .5, 2.9, 1.2);
-  addCab(g, 1.7, 1.25, 1.6, 0, 1.75, -.9);
-  addBox(g, .2, 1.0, .3, MAT.dark, 0, .7, -2.55);
-  addBox(g, 1.4, .25, .35, MAT.paint, 0, 1.15, -2.45);
-  const blade = new THREE.Group(); blade.position.set(0, 0, 2.55); g.add(blade);
-  addBox(blade, 3.8, 1.3, .26, MAT.paint, 0, .65, .15);
-  addBox(blade, 3.8, .14, .34, MAT.steel, 0, .07, .2);
-  for (const s of [-1, 1]) { addBox(blade, .12, 1.3, .55, MAT.paint, s * 1.88, .65, .4); addBox(blade, .2, .26, 2.3, MAT.dark, s * 1.3, .5, -1.05); }
-  const pile = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 0), MAT.dirt); pile.castShadow = true; blade.add(pile);
-  const cab = new THREE.Object3D(); cab.position.set(0, 2.55, -.85); g.add(cab);
-  Object.assign(m, { group: g, blade3: blade, pile, cab });
-}
-function buildLoader(m) {
-  const g = new THREE.Group();
-  addBox(g, 1.9, .9, 2.6, MAT.paint, 0, 1.3, -1.3);
-  addBox(g, 1.75, .85, 1.9, MAT.paint, 0, 2.15, -1.75);
-  addBox(g, 2.1, .9, .45, MAT.dark, 0, 1.35, -2.75);
-  addBox(g, 1.92, .1, 2.62, MAT.cream, 0, 1.78, -1.3);
-  addBox(g, 1.2, .7, 2.0, MAT.dark, 0, 1.15, .8);
-  m.wheels = [];
-  for (const s of [-1, 1]) for (const z of [1.3, -1.6]) { m.wheels.push(addWheel(g, .82, .62, s * 1.2, .82, z)); addBox(g, .72, .1, 1.7, MAT.paint, s * 1.2, 1.72, z); }
-  addCab(g, 1.5, 1.35, 1.5, 0, 1.75, -.05);
-  const arms = new THREE.Group(); arms.position.set(0, 1.75, 1.0); g.add(arms);
-  for (const s of [-1, 1]) addBox(arms, .22, .3, 2.6, MAT.paint, s * .85, 0, 1.3);
-  addBox(arms, 1.9, .2, .2, MAT.paint, 0, 0, 1.6);
-  const bucket = new THREE.Group(); bucket.position.set(0, 0, 2.6); arms.add(bucket);
-  addBox(bucket, 2.9, .12, 1.0, MAT.steel, 0, -.45, .45);
-  addBox(bucket, 2.9, .95, .12, MAT.paint, 0, 0, 0);
-  for (const s of [-1, 1]) addBox(bucket, .1, .95, 1.0, MAT.paint, s * 1.45, 0, .45);
-  addBox(bucket, 2.9, .07, .14, MAT.steel, 0, -.45, .97);
-  const bl = new THREE.Mesh(new THREE.BoxGeometry(2.6, .7, .85).translate(0, .35, 0), MAT.dirt); bl.position.set(0, -.42, .45); bl.castShadow = true; bucket.add(bl);
-  const cab = new THREE.Object3D(); cab.position.set(0, 2.65, -.05); g.add(cab);
-  Object.assign(m, { group: g, arms, bucket, bucketLoad: bl, cab });
-}
-function buildExcavator(m) {
-  const g = new THREE.Group();
-  addTracks(g, 1.25, 4.3);
-  addBox(g, 1.6, .35, 2.6, MAT.dark, 0, .95, 0);
-  const house = new THREE.Group(); house.position.set(0, 1.15, 0); g.add(house);
-  addBox(house, 2.5, 1.0, 3.0, MAT.paint, 0, .55, -.45);
-  addBox(house, 2.5, .95, .8, MAT.dark, 0, .6, -2.2);
-  addBox(house, 2.52, .1, 3.02, MAT.cream, 0, .98, -.45);
-  addCab(house, 1.05, 1.35, 1.4, .7, 1.05, .35);
-  addBox(house, 1.2, .4, 1.5, MAT.paint, -.55, 1.25, -1.0);
-  const boom = new THREE.Group(); boom.position.set(-.25, 1.0, 1.0); house.add(boom);
-  addBox(boom, .42, .55, 4.6, MAT.paint, 0, 0, 2.3);
-  addBox(boom, .12, .12, 2.6, MAT.steel, 0, -.4, 1.4);
-  const stick = new THREE.Group(); stick.position.set(0, 0, 4.6); boom.add(stick);
-  addBox(stick, .32, .42, 3.3, MAT.paint, 0, 0, 1.65);
-  addBox(stick, .1, .1, 2.2, MAT.steel, 0, .32, 1.1);
-  const bucket = new THREE.Group(); bucket.position.set(0, 0, 3.3); stick.add(bucket);
-  addBox(bucket, 1.15, .65, .95, MAT.dark, 0, 0, .5);
-  addBox(bucket, 1.15, .1, .2, MAT.steel, 0, -.28, 1.02);
-  const bl = new THREE.Mesh(new THREE.BoxGeometry(1.0, .5, .8), MAT.dirt); bl.position.set(0, .4, .5); bl.castShadow = true; bucket.add(bl);
-  const cab = new THREE.Object3D(); cab.position.set(.7, 2.05, .45); house.add(cab);
-  Object.assign(m, { group: g, house, boom, stick, bucket, bucketLoad: bl, cab });
-}
-function buildHauler(m) {
-  const g = new THREE.Group();
-  addBox(g, 2.3, 1.1, 1.9, MAT.paint, 0, 1.65, 3.2);
-  addBox(g, 1.8, .45, .1, MAT.dark, 0, 1.6, 4.17);
-  addCab(g, 1.7, 1.25, 1.4, 0, 2.2, 2.25);
-  addBox(g, .9, .6, 1.4, MAT.dark, 0, 1.25, 1.4);
-  addBox(g, 1.6, .5, 5.4, MAT.dark, 0, 1.15, -1.6);
-  m.wheels = [];
-  for (const s of [-1, 1]) {
-    for (const z of [3.1, -.8, -2.9]) m.wheels.push(addWheel(g, .88, .75, s * 1.3, .88, z));
-    addBox(g, .8, .1, 1.9, MAT.paint, s * 1.3, 1.85, 3.1);
-  }
-  const bed = new THREE.Group(); bed.position.set(0, 1.62, -4.3); g.add(bed);
-  addBox(bed, 2.7, .14, 5.6, MAT.paint, 0, 0, 2.8);
-  for (const s of [-1, 1]) addBox(bed, .12, 1.25, 5.6, MAT.paint, s * 1.35, .62, 2.8);
-  addBox(bed, 2.7, 1.55, .14, MAT.paint, 0, .78, 5.6);
-  for (const s of [-1, 1]) addBox(bed, .2, .1, 5.62, MAT.cream, s * 1.35, 1.27, 2.8);
-  const bl = new THREE.Mesh(new THREE.BoxGeometry(2.5, 1, 5.3).translate(0, .5, 0), MAT.dirt); bl.position.set(0, .07, 2.75); bl.castShadow = true; bed.add(bl);
-  const cab = new THREE.Object3D(); cab.position.set(0, 3.05, 2.25); g.add(cab);
-  Object.assign(m, { group: g, bed, bedLoad: bl, cab });
-}
-const BUILD = { dozer: buildDozer, loader: buildLoader, excavator: buildExcavator, hauler: buildHauler };
-
+const BUILD = { dozer: MOD.buildDozer, loader: MOD.buildLoader, excavator: MOD.buildExcavator, hauler: MOD.buildHauler };
+const PAINT = 0xd9701c;
 const machines = [];
 function makeMachine(type, x, z, yaw) {
-  const m = { type, x, z, yaw, v: 0, y: hAt(x, z), pitch: 0, roll: 0, load: newLoad(),
-    blade: 0, arm: .3, armA: 0, dumpT: 0, swing: 0, reach: 5, act: -1, did: false, mode: 'dig', curl: .2, tip: 0, tipping: false, ext: { hover: 0 } };
-  BUILD[type](m);
+  const mats = MOD.machineMats(T, PAINT);
+  const m = { type, x, z, yaw, v: 0, y: hAt(x, z), pitch: 0, roll: 0, load: newLoad(), mats, id: machines.length,
+    blade: 0, arm: .3, dumpT: 0, swing: 0, reach: 5, act: -1, did: false, mode: 'dig', curl: .2, tip: 0, tipping: false,
+    work: 0, workSm: 0, hyd: 0, hydSm: 0, dig: 0, digG: 0, digSm: 0, pour: 0, pourSm: 0, trackSpeed: 0, steerVis: 0,
+    sPitch: 0, sRoll: 0, lastV: 0, grime: .2, smokeAcc: 0, pourT: 0, pourG: false, splashT: 0 };
+  BUILD[type](m, mats, LOADMAT);
+  m.group.traverse(o => { if (o.isMesh && !o.isInstancedMesh) { o.castShadow = true; o.receiveShadow = true; } });
   scene.add(m.group);
-  m.y = hAt(x, z);
   machines.push(m);
+  if (snd.ready) snd.machine(m.id, ENGINE[type]);
   return m;
 }
 function resetMachines() {
@@ -691,7 +891,7 @@ function overlap(m, x, z, yaw) {
   }
   return pen;
 }
-function poseMachine(m, dt) {
+function poseMachine(m, dt, inp) {
   const s = SPEC[m.type];
   const fx = fwdX(m.yaw), fz = fwdZ(m.yaw), lx = Math.cos(m.yaw), lz = -Math.sin(m.yaw);
   const L = s.len / 2 * .9, Wd = s.wid / 2 * .9;
@@ -702,10 +902,44 @@ function poseMachine(m, dt) {
   m.y = lerp(m.y, y, k);
   m.pitch = lerp(m.pitch, Math.atan2(hf - hb, L * 2), k);
   m.roll = lerp(m.roll, Math.atan2(hl - hr, Wd * 2), k);
-  m.group.position.set(m.x, m.y, m.z);
-  m.group.rotation.set(-m.pitch, m.yaw, m.roll, 'YXZ');
+  // the body rocks back when pulling away, dips when stopping and leans in turns
+  if (dt > 0) {
+    const acc = (m.v - m.lastV) / dt; m.lastV = m.v;
+    const soft = s.tracks ? .006 : .014;
+    m.sPitch = lerp(m.sPitch, clamp(-acc * soft, -.05, .05), 1 - Math.exp(-dt * 5));
+    m.sRoll = lerp(m.sRoll, clamp(-m.v * inp.steer * soft * .8, -.04, .04), 1 - Math.exp(-dt * 4));
+    m.steerVis = lerp(m.steerVis, inp.steer * (Math.abs(m.v) > .05 || inp.throttle ? 1 : .6), 1 - Math.exp(-dt * 3));
+  }
+  const shake = Math.sin(simTime * 57 + m.id * 3) * .004 * (.4 + m.workSm);
+  m.group.position.set(m.x, m.y + shake, m.z);
+  m.group.rotation.set(-m.pitch + m.sPitch, m.yaw, m.roll + m.sRoll, 'YXZ');
+  if (m.front) m.front.rotation.y = m.steerVis * .5;
+  m.group.updateMatrixWorld(true);
+  for (const r of m.rams) r.update();
+  m.mats.U.uGround.value = m.y; m.mats.U.uGrime.value = m.grime;
+}
+const _w = new THREE.Vector3();
+function machineFx(m, dt, isActive) {
+  // exhaust: a light haze at idle, dark puffs when the engine is pulling
+  const s = SPEC[m.type], load = clamp((isActive ? Math.abs(inp.throttle) * .6 : 0) + m.workSm, 0, 1);
+  m.smokeAcc += dt * (1.5 + load * 14 + (isActive ? Math.abs(m.v) / s.vmax * 4 : 0));
+  if (m.smokeAcc >= 1) {
+    const n = Math.floor(m.smokeAcc); m.smokeAcc -= n;
+    m.exhaust.getWorldPosition(_w);
+    const g = lerp(.55, .16, load);
+    spawn('smoke', _w.x, _w.y, _w.z, n, [g, g, g * .98], { jitter: .1, size: .7 + load * .8, alpha: .35 + load * .5 });
+  }
+  for (const b of m.beacons) b.material.emissiveIntensity = isActive ? (Math.sin(simTime * 9) > .55 ? 4 : .25) : .1;
+  // driving through water throws spray
+  if (Math.abs(m.v) > .8 && wAt(m.x, m.z) > .15) {
+    m.splashT -= dt;
+    spawn('splash', m.x, m.y + .3, m.z, 2, [.75, .8, .82], { jitter: s.wid });
+    if (m.splashT <= 0) { m.splashT = .7; snd.splash(m.x, m.y, m.z, Math.min(1, Math.abs(m.v) / 3)); }
+    m.grime = Math.max(.12, m.grime - dt * .04);
+  }
 }
 
+const _p = new THREE.Vector3();
 function drive(m, dt, inp) {
   const s = SPEC[m.type];
   let target = inp.throttle * s.vmax;
@@ -720,6 +954,7 @@ function drive(m, dt, inp) {
   if (m.type === 'dozer') lim *= 1 - .35 * m.load.v / s.cap;
   if (m.type === 'hauler') lim *= 1 - .25 * m.load.v / s.cap;
   target *= lim;
+  if (grade > .2 && Math.abs(inp.throttle) > 0) m.work = Math.max(m.work, clamp(grade * 1.5, 0, .8));
   m.v += clamp(target - m.v, -s.acc * dt * (inp.throttle === 0 ? 1.6 : 1), s.acc * dt);
   if (Math.abs(m.v) < .01 && inp.throttle === 0) m.v = 0;
   let yaw = m.yaw;
@@ -727,25 +962,55 @@ function drive(m, dt, inp) {
   else yaw += (m.v / s.wb) * Math.tan(inp.steer * .55) * dt;
   let nx = clamp(m.x + fwdX(yaw) * m.v * dt, 3, N - 4), nz = clamp(m.z + fwdZ(yaw) * m.v * dt, 3, N - 4);
   const before = overlap(m, m.x, m.z, m.yaw), after = overlap(m, nx, nz, yaw);
-  if (after > before + 1e-4) { m.v = 0; return; }
-  const dist = Math.hypot(nx - m.x, nz - m.z) * Math.sign(m.v);
+  if (after > before + 1e-4) { m.v = 0; m.trackSpeed = 0; return; }
+  const dist = Math.hypot(nx - m.x, nz - m.z) * Math.sign(m.v), dyaw = angWrap(yaw - m.yaw);
   m.x = nx; m.z = nz; m.yaw = yaw;
-  if (m.wheels) for (const w of m.wheels) w.rotation.x += dist / .85;
+  if (m.wheels) for (const w of m.wheels) w.rotation.x += dist / .88;
+  if (m.tracks) {
+    const half = s.wid / 2 * .75, dl = dist - dyaw * half, dr = dist + dyaw * half;
+    m.tracks[0].update(dl); m.tracks[1].update(dr);
+    m.trackSpeed = Math.max(Math.abs(dl), Math.abs(dr)) / Math.max(dt, 1e-3);
+  } else m.trackSpeed = 0;
+  if (Math.abs(dist) + Math.abs(dyaw) < 1e-4) return;
+  const cs = circlesOf(m, m.x, m.z, m.yaw);
   // knock trees over
-  if (Math.abs(m.v) > .15) {
-    const cs = circlesOf(m, m.x, m.z, m.yaw);
+  if (Math.abs(m.v) > .15 || Math.abs(dyaw) > .002) {
     for (const t of trees) {
       if (t.st !== 0) continue;
       for (const c of cs) if (Math.abs(t.x - c[0]) < c[2] + .6 && Math.abs(t.z - c[1]) < c[2] + .6 && Math.hypot(t.x - c[0], t.z - c[1]) < c[2] + .5) { treeFall(t, m.x, m.z); break; }
     }
   }
+  // shove boulders aside
+  for (const rk of rocks) {
+    for (const c of cs) {
+      const dx = rk.x - c[0], dz = rk.z - c[1], need = c[2] + rk.s * .9;
+      if (Math.abs(dx) > need || Math.abs(dz) > need) continue;
+      const d = Math.hypot(dx, dz) || .01;
+      if (d < need) {
+        const push = need - d;
+        rk.x = clamp(rk.x + dx / d * push, 2, N - 3); rk.z = clamp(rk.z + dz / d * push, 2, N - 3);
+        rk.rx += push / rk.s; rk.ry += push * .3 / rk.s; rk.dirty = true;
+        m.work = Math.max(m.work, .5);
+      }
+    }
+  }
+  // wheels and tracks wear the grass off where they run
+  const pts = s.tracks ? [[1.2, 1.6], [-1.2, 1.6], [1.2, -1.6], [-1.2, -1.6], [1.2, 0], [-1.2, 0]]
+    : m.type === 'hauler' ? [[1.3, 3.1], [-1.3, 3.1], [1.3, -.8], [-1.3, -.8], [1.3, -2.9], [-1.3, -2.9]] : [[1.18, 1.3], [-1.18, 1.3], [1.18, -1.6], [-1.18, -1.6]];
+  const chance = Math.abs(dist) * (s.tracks ? .9 : .5) + Math.abs(dyaw) * (s.tracks ? 3 : 0);
+  for (const [px, pz] of pts) {
+    if (Math.random() > chance) continue;
+    const wx = m.x + Math.cos(m.yaw) * px + Math.sin(m.yaw) * pz, wz = m.z - Math.sin(m.yaw) * px + Math.cos(m.yaw) * pz;
+    const k = cellOf(wx, wz);
+    if (M[k] === 0 && !D[k]) { D[k] = 1; dirty(k); }
+  }
+  if (Math.abs(m.v) > 1.5 && Math.random() < dt * 4) { const k = cellOf(m.x, m.z); if (D[k] || M[k]) spawn('dust', m.x - fx * L, m.y + .3, m.z - fz * L, 1, M[k] === 2 ? GRAVEL_C : DIRT_C, { alpha: .35, size: .8 }); }
 }
 
-const _p = new THREE.Vector3();
-let work = 0;  // how hard the engine is working (sound)
 function toolDozer(m, dt, inp) {
   const s = SPEC.dozer;
   m.blade = clamp(m.blade + inp.tool * .8 * dt, -.6, 1.2);
+  m.hyd = Math.max(m.hyd, Math.abs(inp.tool));
   m.blade3.position.y = m.blade;
   m.group.updateMatrixWorld();
   if (m.v > .1) {
@@ -756,19 +1021,24 @@ function toolDozer(m, dt, inp) {
       const over = H[k] - _p.y;
       if (over > .02 && m.load.v < s.cap * 1.4) {
         const a = Math.min(over, rate, H[k] - BED[k]);
-        if (a > 0) { takeFrom(m.load, k, a); work = Math.max(work, .8); }
+        if (a > 0) { if (M[k] === 2) m.digG += a; takeFrom(m.load, k, a); m.dig += a; m.work = Math.max(m.work, .85); }
       } else if (over < -.05 && m.load.v > 0) {
         giveTo(m.load, k, Math.min(-over, rate, m.load.v / 6));
       }
     }
     if (m.load.v > s.cap) {   // spill off the blade ends
       const spill = Math.min(m.load.v - s.cap, 2.5 * dt);
-      for (const sx of [-2.2, 2.2]) { _p.set(sx, 0, 2.6); m.group.localToWorld(_p); dropCircle(m.load, _p.x, _p.z, 1.1, spill / 2); }
+      for (const sx of [-2.2, 2.2]) {
+        _p.set(sx, 0, 2.6); m.group.localToWorld(_p); dropCircle(m.load, _p.x, _p.z, 1.1, spill / 2);
+        if (Math.random() < dt * 10) chunks(_p.x, _p.y + .8, _p.z, 2, loadMat(m.load) === 2);
+      }
     }
-    if (m.load.v > .3 && Math.random() < dt * 8) { _p.set(0, m.blade + .4, 3.3); m.group.localToWorld(_p); dust(_p.x, _p.y, _p.z, 2, M[cellOf(_p.x, _p.z)] === 2 ? GRAVEL_C : DIRT_C); }
+    if (m.load.v > .3 && Math.random() < dt * 9) { _p.set(0, m.blade + .4, 3.3); m.group.localToWorld(_p); dust(_p.x, _p.y, _p.z, 2, loadMat(m.load) === 2 ? GRAVEL_C : DIRT_C); }
+    if (m.load.v > 1.5 && Math.random() < dt * 7) { _p.set((Math.random() - .5) * 3, m.blade + 1.4, 3.0); m.group.localToWorld(_p); chunks(_p.x, _p.y, _p.z, 1, loadMat(m.load) === 2, Math.sin(m.yaw) * m.v, Math.cos(m.yaw) * m.v, .3); }
   } else if (m.v < -.05 && m.load.v > 0) {
     _p.set(0, 0, 3.2); m.group.localToWorld(_p);
-    dropCircle(m.load, _p.x, _p.z, 1.9, Math.min(m.load.v, 4 * dt));
+    m.pour += dropCircle(m.load, _p.x, _p.z, 1.9, Math.min(m.load.v, 4 * dt));
+    m.pourG = loadMat(m.load) === 2;
   }
   const v = m.load.v;
   m.pile.visible = v > .05;
@@ -776,7 +1046,7 @@ function toolDozer(m, dt, inp) {
     const sc = Math.cbrt(v) * .75;
     m.pile.scale.set(sc * 1.7, sc * .8, sc);
     m.pile.position.set(0, m.blade + sc * .45, .45 + sc * .7);
-    m.pile.material = loadMat(m.load) === 2 ? MAT.gravel : MAT.dirt;
+    m.pile.material = loadMat(m.load) === 2 ? LOADMAT.gravel : LOADMAT.dirt;
   }
 }
 function haulerNear(x, z, r) {
@@ -789,6 +1059,7 @@ function haulerNear(x, z, r) {
 function toolLoader(m, dt, inp) {
   const s = SPEC.loader;
   m.arm = clamp(m.arm + inp.tool * .55 * dt, -.15, 1);
+  m.hyd = Math.max(m.hyd, Math.abs(inp.tool), m.dumpT > 0 ? .8 : 0);
   const a = -.62 + m.arm * 1.57;
   m.arms.rotation.x = -a;
   let tilt = m.arm > .45 ? -.25 : 0;
@@ -804,9 +1075,17 @@ function toolLoader(m, dt, inp) {
       if (over > .02) {
         const room = s.cap - m.load.v;
         const amt = Math.min(over, rate, room, H[k] - BED[k]);
-        if (amt > 0) { takeFrom(m.load, k, amt); work = Math.max(work, .9); }
+        if (amt > 0) { if (M[k] === 2) m.digG += amt; takeFrom(m.load, k, amt); m.dig += amt; m.work = Math.max(m.work, .9); }
       }
     }
+    if (m.dig > 0 && Math.random() < dt * 8) { _p.set(0, 0, 1.2); m.bucket.localToWorld(_p); dust(_p.x, _p.y, _p.z, 2, m.digG > 0 ? GRAVEL_C : DIRT_C); }
+  }
+  // the stream of dirt falling out while the bucket tips
+  if (m.pourT > 0) {
+    m.pourT -= dt;
+    _p.set(0, -.3, 1.0); m.bucket.localToWorld(_p);
+    chunks(_p.x, _p.y, _p.z, Math.ceil(dt * 90), m.pourG, 0, 0, 1.6);
+    m.pour += dt * 4;
   }
   if (inp.act) {
     if (m.load.v < .05) toast('Lower the bucket (F) and drive into dirt to fill it');
@@ -814,26 +1093,30 @@ function toolLoader(m, dt, inp) {
       m.dumpT = .9;
       _p.set(0, -.45, .97); m.bucket.localToWorld(_p);
       const h = haulerNear(_p.x, _p.z, 3.4);
+      const vol = m.load.v, grav = loadMat(m.load) === 2;
+      m.pourT = .55; m.pourG = grav;
       if (h && m.arm > .55) {
         const got = transfer(m.load, h.load, SPEC.hauler.cap);
-        if (got <= 0) toast('The hauler is full'); else dust(_p.x, _p.y, _p.z, 14, loadMat(h.load) === 2 ? GRAVEL_C : DIRT_C);
+        if (got <= 0) toast('The hauler is full');
+        else { dust(_p.x, _p.y - 1, _p.z, 14, grav ? GRAVEL_C : DIRT_C); snd.dump(_p.x, _p.y - 1, _p.z, got, grav); snd.clang(_p.x, _p.y - 1, _p.z, 95, .25); }
       } else {
         if (h) toast('Raise the bucket higher (R) to reach the hauler bed');
-        const c = loadMat(m.load) === 2 ? GRAVEL_C : DIRT_C;
         dropCircle(m.load, _p.x, _p.z, 1.6, m.load.v);
-        dust(_p.x, hAt(_p.x, _p.z) + .5, _p.z, 16, c);
+        dust(_p.x, hAt(_p.x, _p.z) + .5, _p.z, 16, grav ? GRAVEL_C : DIRT_C);
+        snd.dump(_p.x, hAt(_p.x, _p.z), _p.z, vol, grav);
       }
     }
   }
   const f = m.load.v / s.cap;
   m.bucketLoad.visible = f > .02;
   m.bucketLoad.scale.set(1, Math.max(.05, f), 1);
-  m.bucketLoad.material = loadMat(m.load) === 2 ? MAT.gravel : MAT.dirt;
+  m.bucketLoad.material = loadMat(m.load) === 2 ? LOADMAT.gravel : LOADMAT.dirt;
 }
 function toolExcavator(m, dt, inp) {
   const s = SPEC.excavator;
   m.swing += inp.swing * 1.1 * dt;
   m.reach = clamp(m.reach + inp.tool * 2.4 * dt, 3.2, 7.6);
+  m.hyd = Math.max(m.hyd, Math.abs(inp.swing), Math.abs(inp.tool) * .8, m.act >= 0 ? .9 : 0);
   m.house.rotation.y = m.swing;
   const a = m.yaw + m.swing, R = m.reach + 1.0;
   const tx = m.x + Math.sin(a) * R, tz = m.z + Math.cos(a) * R;
@@ -849,27 +1132,34 @@ function toolExcavator(m, dt, inp) {
     y = hover + (low - hover) * dip;
     if (m.mode === 'dump' && p > .35) curlT = .95;
     if (m.mode === 'dig') curlT = p < .5 ? .5 : -.9;
-    work = Math.max(work, .7);
+    m.work = Math.max(m.work, m.mode === 'dig' ? .9 : .5);
     if (!m.did && p >= .5) {
       m.did = true;
       if (m.mode === 'dig') {
+        const gBefore = m.load.g;
         const got = cutCircle(m.load, tx, tz, 1.3, g - 1.0, s.cap);
         if (got < .05) toast('Nothing left to dig here: the ground is too hard below');
+        else { m.dig += got; m.digG += m.load.g - gBefore; snd.scoop(tx, g, tz, loadMat(m.load) === 2); }
         dust(tx, g + .3, tz, 12, loadMat(m.load) === 2 ? GRAVEL_C : DIRT_C);
-      } else if (truck) {
-        const got = transfer(m.load, truck.load, SPEC.hauler.cap);
-        if (got <= 0) toast('The hauler is full');
-        dust(tx, truck.y + 3, tz, 12, loadMat(truck.load) === 2 ? GRAVEL_C : DIRT_C);
       } else {
-        const c = loadMat(m.load) === 2 ? GRAVEL_C : DIRT_C;
-        dropCircle(m.load, tx, tz, 1.4, m.load.v);
-        dust(tx, g + .5, tz, 14, c);
+        const grav = loadMat(m.load) === 2, vol = m.load.v;
+        _p.set(0, .2, .5); m.bucket.localToWorld(_p);
+        chunks(_p.x, _p.y, _p.z, 26, grav, 0, 0, .9);
+        if (truck) {
+          const got = transfer(m.load, truck.load, SPEC.hauler.cap);
+          if (got <= 0) toast('The hauler is full');
+          else { snd.dump(tx, truck.y + 2.5, tz, got, grav); snd.clang(tx, truck.y + 2, tz, 90, .3); }
+          dust(tx, truck.y + 3, tz, 12, grav ? GRAVEL_C : DIRT_C);
+        } else {
+          dropCircle(m.load, tx, tz, 1.4, m.load.v);
+          dust(tx, g + .5, tz, 14, grav ? GRAVEL_C : DIRT_C);
+          snd.dump(tx, g, tz, vol, grav);
+        }
       }
     }
     if (m.act >= 1) m.act = -1;
   }
   m.curl = lerp(m.curl, curlT, 1 - Math.exp(-dt * 6));
-  // two-link arm reaching the bucket point
   const L1 = 4.6, L2 = 3.3;
   const ty = y + 1.0 - (m.y + 2.15), r = m.reach;
   let d = clamp(Math.hypot(r, ty), 1.6, L1 + L2 - .05);
@@ -883,30 +1173,36 @@ function toolExcavator(m, dt, inp) {
   const f = m.load.v / s.cap;
   m.bucketLoad.visible = f > .02;
   m.bucketLoad.scale.set(1, Math.max(.05, f), 1);
-  m.bucketLoad.material = loadMat(m.load) === 2 ? MAT.gravel : MAT.dirt;
+  m.bucketLoad.material = loadMat(m.load) === 2 ? LOADMAT.gravel : LOADMAT.dirt;
 }
 function toolHauler(m, dt, inp) {
   const s = SPEC.hauler;
   if (inp.act) { m.tipping = !m.tipping; if (m.tipping && m.load.v < .05) toast('The bed is empty: get loaded at the gravel pit or a dig site'); }
+  const before = m.tip;
   m.tip = clamp(m.tip + (m.tipping ? .45 : -.5) * dt, 0, 1);
+  if (m.tip !== before) m.hyd = Math.max(m.hyd, .85);
+  if (before > .02 && m.tip === 0) { _p.set(0, 1.8, -3); m.group.localToWorld(_p); snd.clang(_p.x, _p.y, _p.z, 70, .55); }
   m.bed.rotation.x = -m.tip * .9;
   if (m.tip > .45 && m.load.v > 0) {
     m.group.updateMatrixWorld();
     _p.set(0, 0, -5.4); m.group.localToWorld(_p);
-    const c = loadMat(m.load) === 2 ? GRAVEL_C : DIRT_C;
-    dropCircle(m.load, _p.x, _p.z, 1.7, Math.min(m.load.v, 3.5 * dt));
-    if (Math.random() < dt * 12) dust(_p.x, hAt(_p.x, _p.z) + .4, _p.z, 3, c);
-    work = Math.max(work, .5);
+    const grav = loadMat(m.load) === 2;
+    const put = dropCircle(m.load, _p.x, _p.z, 1.7, Math.min(m.load.v, 3.5 * dt));
+    m.pour += put; m.pourG = grav;
+    _p.set(0, 1.4, -4.9); m.group.localToWorld(_p);
+    chunks(_p.x, _p.y, _p.z, Math.ceil(dt * 70), grav, -Math.sin(m.yaw) * 1.2, -Math.cos(m.yaw) * 1.2, 2.2);
+    if (Math.random() < dt * 14) dust(_p.x, hAt(_p.x, _p.z) + .4, _p.z, 3, grav ? GRAVEL_C : DIRT_C);
+    m.work = Math.max(m.work, .5);
   }
   const f = m.load.v / s.cap;
   m.bedLoad.visible = f > .01;
   m.bedLoad.scale.set(1, Math.max(.03, f * 1.15), 1);
-  m.bedLoad.material = loadMat(m.load) === 2 ? MAT.gravel : MAT.dirt;
+  m.bedLoad.material = loadMat(m.load) === 2 ? LOADMAT.gravel : LOADMAT.dirt;
 }
 const TOOL = { dozer: toolDozer, loader: toolLoader, excavator: toolExcavator, hauler: toolHauler };
 
 // excavator aim ring
-const ring = new THREE.Mesh(new THREE.RingGeometry(1.15, 1.35, 28).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffd28a, transparent: true, opacity: .7, depthWrite: false }));
+const ring = new THREE.Mesh(new THREE.RingGeometry(1.15, 1.35, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffd28a, transparent: true, opacity: .7, depthWrite: false }));
 ring.renderOrder = 3; scene.add(ring);
 
 // ---------------------------------------------------------------- jobs
@@ -1013,6 +1309,7 @@ function updateJobs(dt) {
       const info = JOB[j.type];
       stats.money += info.reward; stats.done++;
       toast(`Job done: ${info.name}. +$${info.reward}`, 3500);
+      snd.chime();
       jobDispose(j);
       jobs.splice(jobs.indexOf(j), 1);
       const r = placeRect(info.w, info.d);
@@ -1084,7 +1381,6 @@ canvas.addEventListener('pointerup', endPtr); canvas.addEventListener('pointerca
 canvas.addEventListener('wheel', e => { e.preventDefault(); camDist = clamp(camDist * Math.exp(e.deltaY * .001), 6, 70); }, { passive: false });
 
 // touch controls
-const isTouch = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in window;
 if (isTouch) document.body.classList.add('touch');
 {
   const stick = $('stick'), knob = $('knob');
@@ -1169,44 +1465,17 @@ $('menuBtn').onclick = () => { $('menu').style.display = 'flex'; };
 $('mClose').onclick = () => { $('menu').style.display = 'none'; };
 $('mHelp').onclick = () => { $('menu').style.display = 'none'; showHelp(true); };
 $('mSound').onclick = () => toggleSound();
+$('mGfx').textContent = 'Graphics: ' + quality;
+$('mGfx').onclick = () => {
+  const next = { high: 'medium', medium: 'low', low: 'high' }[quality];
+  localStorage.setItem('groundwork.quality', next); save(); location.reload();
+};
 $('mNew').onclick = () => {
   if (!confirm('Start a brand new valley? Everything you dug here will be gone for good.')) return;
   try { localStorage.removeItem(SAVE_KEY); } catch (e) { }
   noSave = true;
   location.reload();
 };
-
-// ---------------------------------------------------------------- sound
-let AC = null, osc, osc2, gainN, filt, muted = localStorage.getItem('groundwork.muted') === '1';
-$('mSound').textContent = 'Sound: ' + (muted ? 'off' : 'on');
-function audioStart() {
-  if (AC) { if (AC.state === 'suspended') AC.resume(); return; }
-  try {
-    AC = new (window.AudioContext || window.webkitAudioContext)();
-    osc = AC.createOscillator(); osc.type = 'sawtooth';
-    osc2 = AC.createOscillator(); osc2.type = 'square';
-    filt = AC.createBiquadFilter(); filt.type = 'lowpass'; filt.frequency.value = 320;
-    gainN = AC.createGain(); gainN.gain.value = 0;
-    const g2 = AC.createGain(); g2.gain.value = .35;
-    osc.connect(filt); osc2.connect(g2).connect(filt); filt.connect(gainN).connect(AC.destination);
-    osc.start(); osc2.start();
-  } catch (e) { AC = null; }
-}
-function toggleSound() {
-  muted = !muted; localStorage.setItem('groundwork.muted', muted ? '1' : '0');
-  $('mSound').textContent = 'Sound: ' + (muted ? 'off' : 'on');
-}
-function updateSound(dt) {
-  work = Math.max(0, work - dt * 1.5);
-  if (!AC) return;
-  const m = machines[active];
-  const rev = Math.abs(m.v) / SPEC[m.type].vmax + Math.abs(inp.throttle) * .3 + work * .6;
-  const t = AC.currentTime;
-  osc.frequency.setTargetAtTime(34 + rev * 34, t, .1);
-  osc2.frequency.setTargetAtTime(17 + rev * 17, t, .1);
-  filt.frequency.setTargetAtTime(260 + rev * 420, t, .1);
-  gainN.gain.setTargetAtTime(muted || document.hidden ? 0 : .045 + rev * .04, t, .15);
-}
 
 // ---------------------------------------------------------------- saving (nothing ever resets)
 let noSave = false;
@@ -1228,7 +1497,8 @@ function save() {
       v: 1, seed, t: Date.now(), active, stats,
       H: b64(H), W: b64(W), M: b64(M), D: b64(D),
       gone: trees.map((t, i) => t.st > 0 ? i : -1).filter(i => i >= 0),
-      mach: machines.map(m => ({ type: m.type, x: +m.x.toFixed(3), z: +m.z.toFixed(3), yaw: +m.yaw.toFixed(4), load: m.load, blade: m.blade, arm: m.arm, swing: m.swing, reach: m.reach, tip: m.tip, tipping: m.tipping })),
+      rocks: rocks.map(r => [+r.x.toFixed(2), +r.z.toFixed(2), +r.rx.toFixed(2), +r.ry.toFixed(2)]),
+      mach: machines.map(m => ({ type: m.type, x: +m.x.toFixed(3), z: +m.z.toFixed(3), yaw: +m.yaw.toFixed(4), load: m.load, blade: m.blade, arm: m.arm, swing: m.swing, reach: m.reach, tip: m.tip, tipping: m.tipping, grime: +m.grime.toFixed(3) })),
       jobs: jobs.map(j => ({ type: j.type, x0: j.x0, z0: j.z0, x1: j.x1, z1: j.z1, target: j.target, base: j.base, goal: j.goal })),
     };
     localStorage.setItem(SAVE_KEY, JSON.stringify(data));
@@ -1246,10 +1516,11 @@ function load() {
     H.set(unb64(data.H, Float32Array)); W.set(unb64(data.W, Float32Array));
     M.set(unb64(data.M, Uint8Array)); D.set(unb64(data.D, Uint8Array));
     for (const i of data.gone || []) if (trees[i]) { trees[i].st = 3; trees[i].g = 0; treeGrid[trees[i].k] = -1; }
-    for (const t of trees) t.y = hAt(t.x, t.z) - .1;
+    for (const t of trees) t.y = hAt(t.x, t.z) - .15;
+    (data.rocks || []).forEach((r, i) => { if (rocks[i]) Object.assign(rocks[i], { x: r[0], z: r[1], rx: r[2], ry: r[3] }); });
     for (const s of data.mach) {
       const m = makeMachine(s.type, s.x, s.z, s.yaw);
-      Object.assign(m, { load: s.load || newLoad(), blade: s.blade ?? 0, arm: s.arm ?? .3, swing: s.swing ?? 0, reach: s.reach ?? 5, tip: s.tip ?? 0, tipping: !!s.tipping });
+      Object.assign(m, { load: s.load || newLoad(), blade: s.blade ?? 0, arm: s.arm ?? .3, swing: s.swing ?? 0, reach: s.reach ?? 5, tip: s.tip ?? 0, tipping: !!s.tipping, grime: s.grime ?? .2 });
     }
     Object.assign(stats, data.stats || {});
     for (const j of data.jobs || []) { const jj = { ...j, prog: 0 }; jobs.push(jj); jobVis(jj); }
@@ -1269,6 +1540,8 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) save(
 const _cam = new THREE.Vector3(), _look = new THREE.Vector3(), _qq = new THREE.Quaternion(), _e = new THREE.Euler();
 function updateCamera(dt) {
   const m = machines[active];
+  const near = cabView ? .05 : .1;
+  if (camera.near !== near) { camera.near = near; camera.updateProjectionMatrix(); }
   if (cabView) {
     m.cab.getWorldPosition(_cam);
     m.cab.getWorldQuaternion(_qq);
@@ -1317,15 +1590,82 @@ function updateTags() {
   }
 }
 
-// ---------------------------------------------------------------- main loop
-let last = performance.now(), waterAcc = 0, saveTimer = 5, relaxFlip = 0;
-function update(dt) {
+// ---------------------------------------------------------------- sound
+const snd = new Sound();
+let muted = localStorage.getItem('groundwork.muted') === '1';
+snd.muted = muted;
+$('mSound').textContent = 'Sound: ' + (muted ? 'off' : 'on');
+const ENGINE = {
+  dozer: { cyl: 6, idle: 640, max: 1900, tone: 240, vol: .55 },
+  loader: { cyl: 6, idle: 740, max: 2150, tone: 300, vol: .5 },
+  excavator: { cyl: 6, idle: 820, max: 1950, tone: 280, vol: .5 },
+  hauler: { cyl: 6, idle: 680, max: 2100, tone: 260, vol: .55 },
+};
+function audioStart() {
+  snd.start();
+  if (snd.ready) for (const m of machines) snd.machine(m.id, ENGINE[m.type]);
+}
+function toggleSound() {
+  muted = !muted; localStorage.setItem('groundwork.muted', muted ? '1' : '0');
+  snd.setMuted(muted);
+  $('mSound').textContent = 'Sound: ' + (muted ? 'off' : 'on');
+}
+document.addEventListener('visibilitychange', () => snd.pause(document.hidden));
+let riverTimer = 0, riverInfo = null;
+function riverNear(p) {
+  let sw = 0, sx = 0, sz = 0, sy = 0;
+  const i0 = Math.max(0, Math.floor(p.x - 45)), i1 = Math.min(N - 1, Math.ceil(p.x + 45)), j0 = Math.max(0, Math.floor(p.z - 45)), j1 = Math.min(N - 1, Math.ceil(p.z + 45));
+  for (let j = j0; j <= j1; j += 3) for (let i = i0; i <= i1; i += 3) {
+    const k = j * N + i; if (W[k] < .05) continue;
+    const sp = Math.hypot(FR[k] - FL[k], FD[k] - FU[k]) / Math.max(W[k], .1);
+    const w = Math.min(W[k], 1.5) * (.3 + Math.min(sp, 2)) / (1 + Math.hypot(i - p.x, j - p.z) / 8);
+    sw += w; sx += i * w; sz += j * w; sy += (H[k] + W[k]) * w;
+  }
+  if (sw <= 0) return { x: p.x, y: p.y, z: p.z, amount: 0 };
+  return { x: sx / sw, y: sy / sw, z: sz / sw, amount: clamp(sw / 6, 0, 1) };
+}
+function updateSound(dt) {
+  if (!snd.ready) return;
   const me = machines[active];
+  for (const m of machines) {
+    const s = SPEC[m.type], act = m === me, inpM = act ? inp : ZERO;
+    const rpm = clamp((act ? .06 + Math.abs(m.v) / s.vmax * .5 + Math.abs(inpM.throttle) * .3 : 0) + m.workSm * .45 + m.hydSm * .3, 0, 1);
+    const load = clamp(Math.abs(inpM.throttle) * .45 + m.workSm * .75 + m.hydSm * .2, 0, 1);
+    m.exhaust.getWorldPosition(_w);
+    snd.updateMachine(m.id, {
+      x: _w.x, y: _w.y, z: _w.z, rpm, load, hyd: m.hydSm, hydLoad: m.workSm * (m.hydSm > .1 ? 1 : .3),
+      dig: m.digSm, gravel: m.digSm > .01 ? clamp(m.digGSm / m.digSm, 0, 1) : (m.pourG ? 1 : 0), pour: m.pourSm,
+      track: m.trackSpeed, reverse: m.v < -.15, active: act,
+    }, dt);
+  }
+  snd.listener(camera);
+  riverTimer -= dt;
+  if (riverTimer <= 0) { riverTimer = .5; riverInfo = riverNear(camera.position); }
+  snd.updateAmbient(dt, camera, riverInfo);
+}
+
+// ---------------------------------------------------------------- main loop
+let last = performance.now(), waterAcc = 0, saveTimer = 5, relaxFlip = 0, ringTimer = 0;
+const _bs = new THREE.Vector2();
+function update(dt) {
+  simTime += dt;
+  const me = machines[active];
+  for (const m of machines) { m.dig = 0; m.digG = 0; m.pour = 0; m.hyd = 0; }
   drive(me, dt, inp);
   for (const m of machines) {
-    if (m !== me && m.v !== 0) { m.v = 0; }
-    TOOL[m.type](m, dt, m === me ? inp : ZERO);
-    poseMachine(m, dt);
+    const isMe = m === me;
+    if (!isMe && m.v !== 0) m.v = 0;
+    if (!isMe) m.trackSpeed = 0;
+    TOOL[m.type](m, dt, isMe ? inp : ZERO);
+    const k = 1 - Math.exp(-dt * 7);
+    m.workSm = lerp(m.workSm, m.work, k); m.work = Math.max(0, m.work - dt * 2.5);
+    m.hydSm = lerp(m.hydSm, m.hyd, k);
+    const idt = 1 / Math.max(dt, 1e-3);
+    m.digSm = lerp(m.digSm, m.dig * idt, k); m.digGSm = lerp(m.digGSm || 0, m.digG * idt, k);
+    m.pourSm = lerp(m.pourSm, m.pour * idt, k);
+    m.grime = clamp(m.grime + m.dig * .004 + m.pour * .001, .12, 1);
+    poseMachine(m, dt, isMe ? inp : ZERO);
+    machineFx(m, dt, isMe);
   }
   ring.visible = me.type === 'excavator' && !!me.target;
   if (ring.visible) ring.position.set(me.target[0], me.target[1] + .08, me.target[2]);
@@ -1337,25 +1677,34 @@ function update(dt) {
   relaxFlip ^= 1;
   if (relaxFlip) relax(false);
 
-  const changed = dMaxI >= dMinI;
   updateWater();
-  updateTerrain();
+  const changed = updateTerrain();
+  ringTimer -= dt;
+  if (ringDirty && ringTimer <= 0) { ringTimer = 1; updateRing(); }
   updateTrees(dt, changed);
-  updateDust(dt);
+  updateRocks(dt, changed);
+  updateParticles(dt);
+  updateChunks(dt);
   updateJobs(dt);
   updateCamera(dt);
-  sun.position.set(me.x + SUN_DIR.x * 120, me.y + SUN_DIR.y * 120, me.z + SUN_DIR.z * 120);
+  updateGrass(dt, me);
+  sun.position.set(me.x + SUN_DIR.x * 150, me.y + SUN_DIR.y * 150, me.z + SUN_DIR.z * 150);
   sun.target.position.set(me.x, me.y, me.z);
-  scene.userData.sky.position.copy(camera.position);
+  T.clouds.offset.x = simTime * .0012; T.clouds.offset.y = simTime * .0005;
+  waterMat.uniforms.uTime.value = simTime; grassU.uTime.value = simTime;
   updateHud(dt);
   updateSound(dt);
   saveTimer -= dt;
   if (saveTimer <= 0) { saveTimer = 5; save(); }
 }
+let paused = false;
 function frame(now) {
   const dt = Math.min(.05, (now - last) / 1000); last = now;
+  if (paused || dt <= 0) { requestAnimationFrame(frame); return; }
   readInput();
   update(dt);
+  renderer.getDrawingBufferSize(_bs);
+  pMat.uniforms.uScale.value = _bs.y * .5 * camera.projectionMatrix.elements[5];
   renderer.render(scene, camera);
   updateTags();
   requestAnimationFrame(frame);
@@ -1367,14 +1716,15 @@ function start() {
   const resumed = load();
   if (!resumed) {
     generate(seed, true);
-    for (const t of trees) t.y = hAt(t.x, t.z) - .1;
+    for (const t of trees) t.y = hAt(t.x, t.z) - .15;
     resetMachines();
     freshJobs();
   }
   buildTreeMeshes();
+  buildRocks();
   dMinI = 0; dMaxI = N - 1; dMinJ = 0; dMaxJ = N - 1;
-  updateTerrain(); updateSkirt(); updateWater();
-  for (const m of machines) poseMachine(m, 0);
+  updateWater(); updateTerrain(); updateRing(); buildFarForest();
+  for (const m of machines) poseMachine(m, 0, ZERO);
   select(active);
   for (const j of jobs) j.prog = jobProgress(j);
   renderJobs();
@@ -1386,8 +1736,10 @@ function start() {
   else if (resumed) toast('Welcome back. Your valley is just as you left it.', 3000);
   if (!resumed) save();
   // test hook: run the game forward without drawing (used by the automated checks)
-  window.GW = { machines, H, W, M, D, BED, stats, hAt, select, save, trees, get jobs() { return jobs; }, get active() { return active; },
-    step(n, input = {}) { for (let i = 0; i < n; i++) { Object.assign(inp, ZERO, input); if (i > 0) inp.act = false; update(1 / 30); } } };
+  window.GW = { snd, machines, H, W, M, D, BED, stats, hAt, select, save, trees, rocks, renderer, scene, camera, get jobs() { return jobs; }, get active() { return active; },
+    step(n, input = {}) { for (let i = 0; i < n; i++) { Object.assign(inp, ZERO, input); if (i > 0) inp.act = false; update(1 / 30); } },
+    pause(on) { paused = !!on; },
+    render() { updateCamera(1); camera.position.copy(_cam); renderer.getDrawingBufferSize(_bs); pMat.uniforms.uScale.value = _bs.y * .5 * camera.projectionMatrix.elements[5]; renderer.render(scene, camera); } };
   requestAnimationFrame(t => { last = t; frame(t); });
 }
 setTimeout(start, 30);

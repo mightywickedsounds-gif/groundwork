@@ -10,6 +10,9 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   const b = await chromium.launch();
   const ctx = await b.newContext({ viewport: { width: 1280, height: 760 } });
   const p = await ctx.newPage();
+  p.setDefaultTimeout(180000);
+  // the test browser has no graphics card: use the lightest graphics and pause the live loop while checking
+  await p.addInitScript(() => localStorage.setItem('groundwork.quality', 'low'));
   const errs = [];
   p.on('pageerror', e => errs.push('PAGEERR ' + e.message));
   p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
@@ -23,6 +26,7 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   await p.goto('http://game.test/');
   await p.waitForFunction(() => window.GW, null, { timeout: 90000 });
   await p.click('#helpGo');
+  await p.evaluate(() => GW.pause(true));
 
   // river
   const river = await p.evaluate(() => { let wet = 0, vol = 0; for (let k = 0; k < GW.W.length; k++) if (GW.W[k] > .05) { wet++; vol += GW.W[k]; } let east = 0; for (let j = 0; j < 160; j++) east = Math.max(east, GW.W[j * 160 + 150]); return { wet, vol: Math.round(vol), east: +east.toFixed(2) }; });
@@ -102,10 +106,14 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   await p.evaluate(() => { GW.select(0); GW.step(30); });
   await p.screenshot({ path: OUT + '/p1.png' });
 
+  const bad = await p.evaluate(() => window.__badSound ? [...window.__badSound] : []);
+  check('no broken numbers reach the sound', bad.length === 0, JSON.stringify(bad));
+
   // persistence
   const snap = await p.evaluate(() => { GW.save(); const m = GW.machines[0]; let s = 0; for (let k = 0; k < GW.H.length; k += 7) s += GW.H[k]; return { x: m.x, z: m.z, sum: s, money: GW.stats.money, gone: GW.trees.filter(t => t.st > 0).length }; });
   await p.reload();
   await p.waitForFunction(() => window.GW, null, { timeout: 90000 });
+  await p.evaluate(() => GW.pause(true));
   const back = await p.evaluate(() => { const m = GW.machines[0]; let s = 0; for (let k = 0; k < GW.H.length; k += 7) s += GW.H[k]; return { x: m.x, z: m.z, sum: s, money: GW.stats.money, gone: GW.trees.filter(t => t.st > 0).length }; });
   check('the valley is the same after reloading the page', Math.abs(back.sum - snap.sum) < 1 && Math.abs(back.x - snap.x) < .01 && back.money === snap.money && back.gone === snap.gone, JSON.stringify({ snap, back }));
   await p.waitForTimeout(1500);
@@ -114,6 +122,8 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   // phone layout
   const ph = await b.newContext({ ...require('playwright').devices['iPhone 13'] });
   const q = await ph.newPage();
+  q.setDefaultTimeout(180000);
+  await q.addInitScript(() => localStorage.setItem('groundwork.quality', 'low'));
   q.on('pageerror', e => errs.push('PHONE ' + e.message));
   await q.route('http://game.test/**', r => {
     const u = new URL(r.request().url());

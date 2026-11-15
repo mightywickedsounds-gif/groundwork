@@ -7,7 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <title>Groundwork</title>
 <meta name="theme-color" content="#1b1d21">
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js"}}</script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <style>
   :root { --ink:#f3efe6; --dim:#b9b3a6; --panel:rgba(22,24,28,.82); --line:rgba(255,255,255,.12); --acc:#e0772c; --ok:#7fc46a; }
   * { box-sizing:border-box; }
@@ -130,6 +130,7 @@
   <div class="card panel">
     <button class="btn" id="mHelp">How to play</button>
     <button class="btn" id="mSound">Sound: on</button>
+    <button class="btn" id="mGfx">Graphics: high</button>
     <button class="btn" id="mNew">Start a new valley</button>
     <button class="btn acc" id="mClose">Back to work</button>
   </div>
@@ -137,6 +138,6 @@
 
 <div id="loading">BUILDING THE VALLEY</div>
 
-<script type="module" src="game.js?v=1"></script>
+<script type="module" src="game.js?v=2"></script>
 </body>
 </html>

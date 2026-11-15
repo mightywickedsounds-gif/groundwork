@@ -19,6 +19,8 @@ Play it here (once GitHub Pages is on, see below): https://mightywickedsounds-gi
   - **Dig the pond:** dig down to the plane.
   - **Stockpile gravel:** bring gravel from the grey gravel pit.
   - Finish one and a new one opens somewhere else.
+- **Looks and sounds real:** textured ground (grass, dirt, gravel; darker and shiny where wet), a sky with clouds and sunlight, forest and hills out to the horizon, rippling water that follows the current, grass that sways, boulders the machines shove aside, exhaust smoke, dust and falling clods. Every machine has its own diesel engine, hydraulics, track clatter and backup beeper, placed in 3D where the machine is; plus scraping, dumping, tree cracks, the river, wind and birds.
+- **Graphics setting:** Menu → Graphics switches High / Medium / Low (phones start on Medium; Low turns off the grass and softer shadows for older devices).
 - **Saving:** the whole valley saves in your browser every 5 seconds and when you leave. "Start a new valley" in the menu is the only way to wipe it, and it asks first. Each browser or phone keeps its own valley.
 
 ## Controls
@@ -40,7 +42,10 @@ On GitHub, open this repository's **Settings, then Pages**. Under "Build and dep
 ## Files
 
 - `index.html`: the page (screen layout, menus, phone buttons)
-- `game.js`: the game (ground, water, machines, jobs, saving). Uses three.js 0.160 for the 3D, loaded from jsDelivr.
+- `game.js`: the game (ground, water, machines, jobs, saving, effects). Uses three.js 0.160 for the 3D, loaded from jsDelivr.
+- `models.js`: the 3D models (machines with track chains, tyres, hydraulic rams and cabs; trees, boulders, grass)
+- `textures.js`: all textures, drawn by code when the game starts (no image files)
+- `audio.js`: all sounds, synthesized live (no sound files)
 - `tests/play.cjs`: automatic gameplay checks (see below)
 
 ## Testing
@@ -55,11 +60,34 @@ On GitHub, open this repository's **Settings, then Pages**. Under "Build and dep
 - a tall pile crumbles until it can stand;
 - a finished job pays and a new one appears;
 - the valley is identical after a reload;
+- no broken numbers reach the sound engine;
 - the phone layout works;
 - no script errors.
+
+The test runs on the Low graphics setting, because the test browser has no graphics card.
 
 ## History
 
 ### Round 1: the game
 
 Built as a game in the same genre as a construction-sandbox reel the owner liked, with our own name, look and machines (it doesn't copy that game). All 10 gameplay checks pass.
+
+### Round 2: realistic graphics and sound
+
+**Graphics**
+- **Machines rebuilt in detail:** rounded panels, track chains that really move (each shoe runs round the idler and sprocket; the two tracks turn opposite ways when spinning on the spot), lugged tyres, hydraulic rams whose chrome rods slide in and out, cabs with glass, seats and controls, mirrors, ladders, handrails, lights, a flashing beacon on the machine you drive, and model plates. The loader and hauler bend in the middle when steering, like real articulated machines. Bodies rock back when pulling away and lean in turns. Machines get dirtier as they dig and wash off in the river.
+- **Ground:** real textures for grass, dirt and gravel, blended smoothly, with small bumps lit by the sun; shadows collect in holes; wet ground darkens and shines. Grass wears off where wheels and tracks keep running.
+- **Water:** ripples that move with the current, sky reflections and sun glints, deeper water darker, foam at the edges and in fast water.
+- **World:** a real sky with sun and drifting clouds, and a landscape that carries on past the work site (forest, hills, the river flowing in and out) instead of the old floating block.
+- **Nature:** pines and broadleaf trees, swaying grass near you, boulders the machines shove aside.
+- **Effects:** exhaust smoke (darker when the engine works hard), dust, spray in water, and clods that tumble out of buckets and the dump bed.
+
+**Sound:** all synthesized live, nothing downloaded.
+- Each machine has its own diesel engine: firing pulses, injector clatter, turbo whistle that rises with load, and exhaust.
+- Hydraulic pump whine when the blade, bucket, arm or bed moves.
+- Track clank as the shoes go round, a backup beeper when reversing, and digging and scraping that sound different for gravel.
+- Dumps that rumble or rattle, a clang when the bed drops back, tree crack, creak and thud, splashes, and a chime for a finished job.
+- Wind, leaves, birds, and the river getting louder as you get close. Sounds come from where they happen.
+
+**Tested:** all 11 gameplay checks pass (one new: no broken numbers reach the sound engine, which caught a real bug where a zero-length frame made a number invalid). I also measured the sound output: the engines are running, and they get louder under load. I haven't been able to listen to it or see it on a real phone; the test browser has no graphics card. If phones stutter, Menu → Graphics → Low.
+
