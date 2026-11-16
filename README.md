@@ -62,7 +62,7 @@ On GitHub, open this repository's **Settings, then Pages**. Under "Build and dep
 - the excavator digs and dumps;
 - a full bucket dumps as a heap about a metre tall;
 - fallen trees stay as logs and can be pushed;
-- the crew gets in, follows you (checked over 50 s), keeps working when you take one machine over, starts building when you stop at the river and has begun filling it within five minutes, and gets out when turned off;
+- the crew gets in, follows you (checked over 50 s), keeps working when you take one machine over, starts building when you stop at the river, has clearly moved the job on within five minutes, finishes the whole crossing within 30 minutes of game time, and gets out when turned off;
 - fast water washes loose dirt downstream, but the untouched riverbanks don't erode;
 - a tall pile crumbles until it can stand;
 - a finished job pays and a new one appears;
