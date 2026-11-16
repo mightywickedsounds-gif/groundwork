@@ -211,3 +211,22 @@ Tested: all 13 checks pass. The dam check now uses a wider dam and a little more
 - Bugs found while testing: two parts of the crew code had the same name, so the machines stood still during a job; the dozer could wedge itself against your machine; the crossing line could run along the bank instead of across. All fixed.
 - In the test runs, with you parked at the river, the crew built a crossing in about 8-9 minutes of game time, and when you drove 70 m away they caught up within a minute.
 
+
+### Round 8: a real crew on foot, machine damage, rivers that hold their water (owner: too slow, wants a full team)
+
+- **Game speed:** the 1X button top right (or T) cycles 1x / 2x / 4x.
+- **Crew stall fixed:** on a bridge job the crane and its delivery truck were dropped off on the same spot, locked into each other and the job froze. Machines caught inside each other now ease apart, and new equipment is dropped where there's room. The bridge now runs through all its stages.
+- **The building crew (new, comes on with Menu → Crew):** six workers on foot in hard hats and hi-vis vests (a foreman, two fallers, three framers) build timber buildings in the forest near the yard, one after another (a cabin, a shed, a workshop...):
+  1. Fallers with chainsaws walk to each tree, cut it (sawdust, chainsaw sound) and drop it into the clearing, step back, then strip the branches off the log. Stumps stay.
+  2. A self-loading log truck drives in, picks up each log with its crane and grapple, stacks it on its bunks and drives off (more trips if needed).
+  3. The dozer levels a gravel pad (if it's busy, the crew rakes it level by hand).
+  4. A flatbed drops off lumber, sheet board and roofing.
+  5. The framers carry every piece from the stacks and nail it in, with hammer sounds: concrete piers, sill beams, floor joists, floor, wall studs and plates with door and window openings, then ladders go up for the ceiling joists, ridge, rafters, roof boards and metal roofing, then wall boards, door, windows and trim. About 300 pieces per cabin.
+  6. They rake round the building and the grass comes back, then move to the next site.
+- **Machine damage (new):** hitting trees, rocks or another machine at speed, dropping off ledges, rolling on very steep side slopes and sitting in deep water wear a machine down. A damaged machine loses power, smokes grey then black, and shows scuffs and rust; at zero it breaks down. Its condition shows under the machine name. The crew's own driving is gentler on their machines.
+- **Mechanic (new):** when a machine breaks down or is badly damaged and stopped, the mechanic drives out in the service truck, kneels at it with a wrench and fixes it. Machines parked in the yard also slowly get fixed.
+- **Water:** the rivers were slowly draining (the main river lost half its depth in 10 minutes and the north creek almost dried up), which hid any backing-up behind a dam. River and creek inflow is now about double, so they hold their depth, and a dam makes a lake that rises steadily until it spills over the lowest point of the crest. Dirt dropped into water now pushes the water aside instead of lifting it up on top. Erosion of dumped dirt is a bit gentler so it matches the stronger rivers.
+- **Dirt and asphalt:** a full bucket now pours out and the pile builds over most of a second; finer soil grains instead of big clods; soil rolls off the face of the heap in front of a dozer blade; the paver steams and spills hot mix through its augers.
+- Tree bark is lighter (trunks and logs were showing nearly black).
+
+**Tested:** all 24 automatic checks pass. In the test runs the building crew cleared a site in 1.5-4 minutes, hauled the logs in about 2.5 minutes and framed a full cabin in about 12 minutes of game time (3 minutes at 4x). Bugs found and fixed while testing: the framers stopped at a quarter of the cabin (pieces out of order); the log truck got stuck among parked machines and couldn't reach logs felled outwards; the dozer's own blade cut the pad below level while grading. Not done this round: better-looking trees and grass. I can't see or hear it on a real screen from here, so please tell me what looks off.

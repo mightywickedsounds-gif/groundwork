@@ -27,6 +27,8 @@
   #mname { font-size:17px; font-weight:700; }
   #mspd { font-size:13px; color:var(--dim); }
   #mgauge { background:var(--acc); }
+  .gauge.hp { margin-top:6px; height:2px; }
+  #mcond { margin-top:3px; font-size:11px; color:var(--dim); }
   #mstat { margin-top:5px; font-size:12px; color:var(--dim); display:flex; justify-content:space-between; }
 
   /* money + objective, top right */
@@ -39,6 +41,8 @@
   #crewG { display:none; }
   #crewBar { background:#f2d24e; }
   #menuBtn { width:34px; height:34px; border:0; background:transparent; padding:6px; cursor:pointer; color:var(--ink); filter:drop-shadow(0 1px 2px rgba(0,0,0,.7)); }
+  #spdBtn { height:34px; min-width:40px; border:0; background:transparent; color:var(--dim); font:700 14px var(--font); letter-spacing:.06em; cursor:pointer; filter:drop-shadow(0 1px 2px rgba(0,0,0,.7)); }
+  #spdBtn.on { color:var(--acc); }
   #menuBtn svg { width:100%; height:100%; display:block; }
 
   /* minimap */
@@ -53,6 +57,7 @@
   #mbar button.on { color:var(--ink); background:rgba(12,13,15,.62); box-shadow:inset 0 -2px 0 var(--acc); }
   #mbar button b { position:absolute; left:5px; top:3px; font-size:10px; font-weight:600; opacity:.7; }
   #mbar button i { position:absolute; left:8px; right:8px; bottom:4px; height:2px; background:rgba(255,255,255,.15); }
+  #mbar button.broke { color:#e2483a; }
   #mbar button i u { display:block; height:100%; width:0; background:var(--acc); text-decoration:none; }
 
   /* short messages */
@@ -131,6 +136,8 @@
   <div class="row"><span id="mname" class="cap">-</span><span id="mspd" class="num"></span></div>
   <div class="gauge"><i id="mgauge"></i></div>
   <div id="mstat" class="cap num"><span id="mtool"></span><span id="mload"></span></div>
+  <div class="gauge hp" style="display:none"><i id="mhp"></i></div>
+  <div id="mcond" class="cap num"></div>
 </div>
 
 <div id="topr">
@@ -141,6 +148,7 @@
     <div id="crewSt" class="cap num"><span id="crewName"></span><span id="crewPct"></span></div>
     <div class="gauge" id="crewG"><i id="crewBar"></i></div>
   </div>
+  <button id="spdBtn" aria-label="Game speed">1X</button>
   <button id="menuBtn" aria-label="Pause"><svg viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/></svg></button>
 </div>
 
@@ -168,6 +176,7 @@
       <span class="kb"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span class="kb">Drive</span>
       <span class="kb"><kbd>R</kbd><kbd>F</kbd></span><span class="kb">Raise / lower blade or bucket (excavator: reach)</span>
       <span class="kb"><kbd>Q</kbd><kbd>E</kbd></span><span class="kb">Swing excavator</span>
+      <span class="kb"><kbd>T</kbd></span><span class="kb">Game speed 1x / 2x / 4x</span>
       <span class="kb"><kbd>Space</kbd></span><span class="kb">Dig, dump, tip bed</span>
       <span class="kb"><kbd>1</kbd>-<kbd>4</kbd></span><span class="kb">Switch machine</span>
       <span class="kb"><kbd>C</kbd></span><span class="kb">Cab view</span>

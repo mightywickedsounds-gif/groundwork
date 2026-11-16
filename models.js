@@ -21,21 +21,29 @@ function addGrime(mat, U) {
           vGWP = (modelMatrix * vec4(transformed, 1.0)).xyz;
         #endif`);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float uGround, uGrime; uniform sampler2D tGrime; varying vec3 vGWP;')
+      .replace('#include <common>', '#include <common>\nuniform float uGround, uGrime, uDmg; uniform sampler2D tGrime; varying vec3 vGWP;')
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         float gwHgt = vGWP.y - uGround;
         float gwN = texture2D(tGrime, vGWP.xz * .35 + vGWP.y * .21).r * .6 + texture2D(tGrime, vGWP.zy * .9).r * .4;
         float gwLow = clamp((1.8 - gwHgt) / 1.8, 0., 1.); gwLow *= gwLow;
         float gwAmt = clamp(gwLow * 1.3 * uGrime + uGrime * .22, 0., 1.) * smoothstep(.32, .66, gwN + gwLow * .3);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.29, .21, .14), gwAmt * .85);
-        roughnessFactor = mix(roughnessFactor, .95, gwAmt);`)
+        roughnessFactor = mix(roughnessFactor, .95, gwAmt);
+        // wear and damage: scuffs to bare steel, then rust streaks and dents' dark creases
+        float dmN = texture2D(tGrime, vGWP.xz * 1.9 + vGWP.y * 1.3).r;
+        float dmScuff = smoothstep(.76 - uDmg * .22, .8 - uDmg * .22, dmN) * step(.05, uDmg);
+        float dmRust = smoothstep(.62 - uDmg * .22, .7 - uDmg * .22, texture2D(tGrime, vGWP.zy * .7 + .37).r) * smoothstep(.35, .8, uDmg);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.38, .37, .36), dmScuff * .45);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.33, .17, .08), dmRust * .75);
+        diffuseColor.rgb *= 1. - smoothstep(.85, .9, dmN) * uDmg * .5;
+        roughnessFactor = mix(roughnessFactor, .9, dmRust);`)
       .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor *= 1. - gwAmt;');
   };
   mat.customProgramCacheKey = () => 'gw-grime';
   return mat;
 }
 export function machineMats(T, color) {
-  const U = { uGround: { value: 0 }, uGrime: { value: .2 }, tGrime: { value: T.macro } };
+  const U = { uGround: { value: 0 }, uGrime: { value: .2 }, uDmg: { value: 0 }, tGrime: { value: T.macro } };
   const g = o => addGrime(new THREE.MeshStandardMaterial(o), U);
   return {
     U,
@@ -796,6 +804,123 @@ export function buildTruck(m, M) {
   for (const s of [-1, 1]) { rbox(g, .2, .12, .05, M.light, s * .8, 1.3, 3.16, .02); rbox(g, .14, .1, .05, M.tail, s * .95, .9, -3.42, .02); }
   m.exhaust = new THREE.Object3D(); m.exhaust.position.set(-.9, .7, -3.3); g.add(m.exhaust);
   m.beacons = [beacon(g, -.7, 3.0, 1.5, M), beacon(g, .7, 3.0, 1.5, M)];
+  m.rams = [];
+  Object.assign(m, { group: g });
+}
+
+// ---------------------------------------------------------------- people on foot: a jointed figure that can walk, carry,
+// hammer, saw, climb and kneel. Every joint is an Object3D the animation turns; limbs hang down (-y) from their joint.
+// The root stands on the ground facing +z.
+const PERSON_SHIRTS = [0x2b3a55, 0x5a3b2a, 0x3d4a35, 0x6b6f75, 0x7a2f2a, 0x2f2f33];
+const PERSON_SKIN = [0xc08a68, 0x8d5a3b, 0xe0b090, 0x6b4430, 0xd49c78];
+function seg(p, len, r0, r1, mat) {   // a tapered limb hanging down from p's origin
+  const m = new THREE.Mesh(new THREE.CapsuleGeometry((r0 + r1) / 2, Math.max(.01, len - r0 - r1), 3, 8), mat);
+  m.position.y = -len / 2; m.castShadow = true; p.add(m); return m;
+}
+const joint = (p, x, y, z) => { const o = new THREE.Object3D(); o.position.set(x, y, z); p.add(o); return o; };
+export function buildPerson(i = 0, role = 'framer') {
+  const W = WORKER_MATS, root = new THREE.Group();
+  const shirt = new THREE.MeshStandardMaterial({ color: PERSON_SHIRTS[i % PERSON_SHIRTS.length], roughness: .92 });
+  const skin = new THREE.MeshStandardMaterial({ color: PERSON_SKIN[(i * 3 + 1) % PERSON_SKIN.length], roughness: .7 });
+  const pants = role === 'mechanic' ? new THREE.MeshStandardMaterial({ color: 0x23324a, roughness: .9 }) : W.pants;
+  const hips = joint(root, 0, .95, 0);
+  rbox(hips, .34, .16, .2, pants, 0, -.02, 0, .06);
+  const torso = joint(hips, 0, .04, 0);
+  rbox(torso, .36, .46, .21, role === 'mechanic' ? pants : shirt, 0, .25, 0, .08);
+  rbox(torso, .39, .36, .235, W.vest, 0, .3, 0, .07);                          // hi-vis vest
+  for (const y of [.22, .36]) rbox(torso, .4, .03, .24, W.band, 0, y, 0, .01);
+  rbox(torso, .06, .14, .05, W.band, .1, .38, .12, .01);                        // pencil and tape in the vest pocket
+  const neck = joint(torso, 0, .5, 0);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(.105, 14, 10), skin); head.scale.set(.95, 1.12, 1.05); head.position.y = .12; neck.add(head); head.castShadow = true;
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(.022, 6, 5), skin); nose.position.set(0, .1, .1); neck.add(nose);
+  const hm = new THREE.MeshStandardMaterial({ color: role === 'boss' ? 0xf2f2ec : role === 'faller' ? 0xe8792a : role === 'mechanic' ? 0x2d6ab0 : HAT_COLS[(i + 1) % 3], roughness: .35 });
+  const hat = new THREE.Mesh(new THREE.SphereGeometry(.128, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), hm); hat.position.y = .17; hat.castShadow = true; neck.add(hat);
+  const brim = new THREE.Mesh(new THREE.CylinderGeometry(.16, .16, .018, 16), hm); brim.position.set(0, .175, .03); brim.scale.set(1, 1, 1.15); neck.add(brim);
+  if (role === 'faller') {   // ear defenders and a face screen
+    for (const s of [-1, 1]) rbox(neck, .04, .08, .07, new THREE.MeshStandardMaterial({ color: 0xe8792a }), s * .12, .12, 0, .02);
+    const scr = new THREE.Mesh(new THREE.PlaneGeometry(.22, .1), new THREE.MeshStandardMaterial({ color: 0x222222, transparent: true, opacity: .45, side: THREE.DoubleSide, depthWrite: false })); scr.position.set(0, .1, .13); neck.add(scr);
+  }
+  const arms = [], legs = [];
+  for (const s of [-1, 1]) {
+    const sh = joint(torso, s * .215, .44, 0);
+    seg(sh, .29, .055, .048, shirt);
+    const el = joint(sh, 0, -.29, 0);
+    seg(el, .26, .045, .038, s > 0 && role !== 'mechanic' ? skin : shirt);
+    const hand = joint(el, 0, -.27, 0);
+    const hm2 = new THREE.Mesh(new THREE.BoxGeometry(.07, .09, .04), new THREE.MeshStandardMaterial({ color: 0x8a6a3a, roughness: .9 })); hand.add(hm2);   // gloves
+    arms.push({ sh, el, hand });
+    const hp = joint(hips, s * .1, -.05, 0);
+    seg(hp, .44, .072, .06, pants);
+    const kn = joint(hp, 0, -.44, 0);
+    seg(kn, .42, .058, .048, pants);
+    const ft = joint(kn, 0, -.42, 0);
+    rbox(ft, .1, .09, .24, W.boot, 0, -.02, .05, .03);
+    legs.push({ hp, kn, ft });
+  }
+  root.traverse(o => { if (o.isMesh) o.castShadow = true; });
+  return { root, hips, torso, neck, arms, legs, held: null, carry: null };
+}
+// what people hold
+const TOOL_MATS = {
+  wood: new THREE.MeshStandardMaterial({ color: 0xb48a58, roughness: .85 }),
+  steel: new THREE.MeshStandardMaterial({ color: 0x8d9298, roughness: .3, metalness: .85 }),
+  orange: new THREE.MeshStandardMaterial({ color: 0xe8662a, roughness: .5 }),
+  black: new THREE.MeshStandardMaterial({ color: 0x1d1d1f, roughness: .7 }),
+  red: new THREE.MeshStandardMaterial({ color: 0xb02a22, roughness: .5 }),
+};
+export function toolMesh(kind) {
+  const g = new THREE.Group(), T = TOOL_MATS;
+  if (kind === 'hammer') { rbox(g, .03, .32, .03, T.wood, 0, -.1, 0, .01); rbox(g, .05, .05, .14, T.steel, 0, .06, .02, .01); }
+  else if (kind === 'saw') {   // chainsaw: body, handle bar, guide bar and chain
+    rbox(g, .14, .2, .34, T.orange, 0, -.02, .04, .04); rbox(g, .03, .03, .2, T.black, 0, .12, .02, .01);
+    rbox(g, .02, .07, .55, T.steel, 0, -.06, .45, .01); rbox(g, .025, .085, .55, T.black, 0, -.06, .45, .005);
+  } else if (kind === 'rake') { rbox(g, .03, .03, 1.5, T.wood, 0, 0, .55, .01); rbox(g, .4, .04, .04, T.steel, 0, -.03, 1.3, .01); for (let i = -4; i <= 4; i++) rbox(g, .012, .08, .012, T.steel, i * .045, -.07, 1.3, .003); }
+  else if (kind === 'wrench') { rbox(g, .03, .28, .015, T.steel, 0, -.08, 0, .005); rbox(g, .07, .05, .02, T.steel, 0, .06, 0, .005); }
+  else if (kind === 'toolbox') { rbox(g, .42, .2, .18, T.red, 0, -.18, 0, .02); rbox(g, .2, .03, .03, T.black, 0, -.04, 0, .01); }
+  else if (kind === 'shovel') { rbox(g, .03, .03, 1.2, T.wood, 0, 0, .4, .01); rbox(g, .22, .02, .28, T.steel, 0, -.02, 1.1, .01); }
+  g.traverse(o => { if (o.isMesh) o.castShadow = true; });
+  return g;
+}
+
+// self-loading log truck: cab, bunks with stakes, and a knuckle-boom crane with a grapple behind the cab
+export function buildLogTruck(m, M) {
+  const g = new THREE.Group();
+  rbox(g, 1.1, .35, 8.2, M.frame, 0, .85, -1.2);
+  m.wheels = [];
+  for (const s of [-1, 1]) { m.wheels.push(wheel(g, .52, .4, M, s * 1.0, .52, 2.3)); for (const z of [-2.6, -3.9]) m.wheels.push(wheel(g, .52, .52, M, s * .95, .52, z)); }
+  rbox(g, 2.3, 1.2, 1.7, M.paint, 0, 1.65, 2.9, .16);
+  m.cabG = buildCab(g, 2.1, 1.05, 1.6, 0, 2.05, 1.85, M);
+  m.cab = new THREE.Object3D(); m.cab.position.set(.45, 2.7, 1.9); g.add(m.cab);
+  rbox(g, 2.4, .9, .2, M.frame, 0, 2.3, .85, .03);                              // headache rack
+  for (const z of [-.9, -2.6, -4.3]) {                                          // bunks and stakes
+    rbox(g, 2.5, .16, .25, M.steel, 0, 1.15, z, .02);
+    for (const s of [-1, 1]) rbox(g, .1, 1.4, .1, M.steel, s * 1.2, 1.85, z, .02);
+  }
+  const logMat = new THREE.MeshStandardMaterial({ color: 0x6e5a44, roughness: .95 }), endMat = new THREE.MeshStandardMaterial({ color: 0xd8b77f, roughness: .9 });
+  m.logMeshes = [];
+  for (let i = 0; i < 9; i++) {
+    const r = .2 + (i * 7 % 5) * .02, row = Math.floor(i / 4), col = i % 4;
+    const lg = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 1.08, 6.4, 10).rotateX(Math.PI / 2), [logMat, endMat, endMat]);
+    lg.position.set((col - 1.5) * .52 + (row % 2) * .26, 1.45 + row * .4, -2.6 + (i % 3 - 1) * .12); lg.visible = false; lg.castShadow = true; g.add(lg); m.logMeshes.push(lg);
+  }
+  // knuckle boom: post turns (slew), main boom and jib fold, the grapple hangs from the jib tip
+  const post = new THREE.Group(); post.position.set(0, 1.2, .35); g.add(post);
+  cylY(post, .18, .22, 1.6, M.paint, 0, .8, 0, 12);
+  const b1 = new THREE.Group(); b1.position.set(0, 1.6, 0); post.add(b1);
+  rbox(b1, .26, .3, 4.2, M.paint, 0, 0, 2.1, .05);
+  const b2 = new THREE.Group(); b2.position.set(0, 0, 4.2); b1.add(b2);
+  rbox(b2, .2, .24, 3.8, M.paint, 0, 0, 1.9, .04);
+  const grap = new THREE.Group(); b2.add(grap); grap.position.set(0, 0, 3.8);
+  cylY(grap, .05, .05, .5, M.steel, 0, -.25, 0, 6);
+  rbox(grap, .4, .2, .3, M.paint, 0, -.55, 0, .04);
+  m.tongs = [];
+  for (const s of [-1, 1]) { const t = new THREE.Group(); t.position.set(s * .15, -.62, 0); grap.add(t); rbox(t, .06, .6, .22, M.steel, s * .14, -.3, 0, .02); m.tongs.push(t); }
+  const held = new THREE.Mesh(new THREE.CylinderGeometry(.22, .24, 6.4, 10).rotateZ(Math.PI / 2), [logMat, endMat, endMat]); held.position.y = -1.0; held.visible = false; grap.add(held);
+  m.kb = { post, b1, b2, grap, held };
+  m.exhaust = new THREE.Object3D(); m.exhaust.position.set(-1.0, 2.9, 1.95); g.add(m.exhaust);
+  cylY(g, .07, .07, 1.5, M.chrome, -1.0, 2.3, 1.95, 8);
+  for (const s of [-1, 1]) { rbox(g, .2, .12, .05, M.light, s * .8, 1.35, 3.78, .02); rbox(g, .14, .1, .05, M.tail, s * .95, .9, -5.32, .02); }
+  m.beacons = [beacon(g, -.7, 3.15, 1.75, M), beacon(g, .7, 3.15, 1.75, M)];
   m.rams = [];
   Object.assign(m, { group: g });
 }

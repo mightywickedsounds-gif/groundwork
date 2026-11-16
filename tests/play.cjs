@@ -175,7 +175,7 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
     const takeover = { dozerAI: !!ms[0].ai, othersAI: !!ms[2].ai && !!ms[3].ai };
     return { playerType, inCab, workers: ms.filter(m => m.worker.visible).length, dozMoved: +dozMoved.toFixed(1), takeover };
   });
-  check('turning the crew on puts workers in the dozer, excavator and hauler', cr.playerType === 'loader' && cr.inCab.length === 3 && cr.workers >= 3, JSON.stringify(cr));
+  check('turning the crew on puts workers in the dozer, excavator and hauler', cr.playerType === 'loader' && cr.inCab.length >= 3 && cr.workers >= 3, JSON.stringify(cr));
   check('taking a machine over leaves the rest of the crew working', !cr.takeover.dozerAI && cr.takeover.othersAI, JSON.stringify(cr));
 
   // the crew follows the player across the valley
@@ -197,7 +197,7 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   check('stopping at the river sets the crew building a crossing', build.site, JSON.stringify(build));
   check('in five minutes the crew has started filling the river', build.added > 15, JSON.stringify(build));
 
-  const off = await p.evaluate(() => { GW.setCrew(false); GW.step(5); return { ai: GW.machines.filter(m => m.ai).length, workers: GW.machines.filter((m, i) => i !== GW.active && m.worker.visible).length }; });
+  const off = await p.evaluate(() => { GW.setCrew(false); GW.step(5); return { ai: GW.machines.filter(m => m.ai && !m.service).length, workers: GW.machines.filter((m, i) => i !== GW.active && !m.service && m.worker.visible).length }; });
   check('turning the crew off empties the cabs', off.ai === 0 && off.workers === 0, JSON.stringify(off));
 
   // fast water washes a loose heap out of the river

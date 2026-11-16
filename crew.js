@@ -18,6 +18,7 @@
 export function makeCrew(G) {
   const { clamp, angWrap } = G;
   const ROLES = ['dozer', 'excavator', 'hauler'];
+  let driveGrid = -1;
   let on = false, headT = 0, site = null, waitT = 0, coolT = 0, gridT = 0, lastDone = null;
   const roads = [];        // every project (finished ones stay, they're part of the valley)
   const equip = [];        // equipment brought in for the current stage
@@ -100,7 +101,7 @@ export function makeCrew(G) {
       for (let o = -hw - 5; o <= hw + 5; o += .5) {
         const [x, z] = pt(S, s, o), i = Math.round(x), j = Math.round(z); if (i < 1 || j < 1 || i > 254 || j > 254) continue;
         const k = j * 256 + i, h = y - Math.max(0, Math.abs(o) - hw) / 1.8;
-        if (G.H[k] < h) { G.H[k] = h; G.D[k] = 1; if (G.M[k] === 0) G.M[k] = 1; G.dirty(k); }
+        if (G.H[k] < h) { const up = h - G.H[k]; G.H[k] = h; G.displace(k, up); G.D[k] = 1; if (G.M[k] === 0) G.M[k] = 1; G.dirty(k); }
       }
     }
   }
@@ -506,7 +507,7 @@ export function makeCrew(G) {
   function syncEquip(P) {
     const want = P && !P.done ? stageEquip(P) : [];
     for (const t of want) if (!equip.some(m => m.type === t && !m.leaving)) {
-      const [x, z] = spawnPoint(P), m = G.makeMachine(t, x + (Math.random() - .5) * 4, z + (Math.random() - .5) * 4, Math.atan2(P.u[0], P.u[1]), true);
+      const yw = Math.atan2(P.u[0], P.u[1]), [x0, z0] = spawnPoint(P), [x, z] = G.freeSpot(t, x0, z0, yw), m = G.makeMachine(t, x, z, yw, true);
       equip.push(m); stOf(m).state = 'start';
     }
     for (const m of equip) if (!want.includes(m.type) && !m.leaving && !(P && !P.done && stillNeeded(P, m.type))) { m.leaving = true; stOf(m).state = 'leave'; m.leaveAt = P ? spawnPoint(P) : [m.x, m.z]; }
@@ -786,7 +787,7 @@ export function makeCrew(G) {
         if (proj) unlock(proj, m);
         continue;
       }
-      m.ai = proj ? brain(m, st, dt, proj) : convoy(m, st, dt, player);
+      m.ai = proj ? brain(m, st, dt, proj) : (G.lend && G.lend(m, st, dt)) || convoy(m, st, dt, player);
     }
     for (const m of [...equip]) { const st = stOf(m); st.dt = dt; m.ai = m.leaving ? leave(m, st, dt) : proj ? brain(m, st, dt, proj) : leave(m, st, dt); }
   }
@@ -826,5 +827,7 @@ export function makeCrew(G) {
     findPath: (m, x1, z1) => { buildGrid(); return findPath(m, m.x, m.z, x1, z1); },
     skipStage() { if (proj) nextStage(proj); },
     findHead, sOf, pt,
+    // drive any machine somewhere with the crew's route finding (used by the trucks of the building crew)
+    drive(m, x, z, tol = 3, speed = .8) { const st = stOf(m), c = ctl(); st.dt = G.dt(); if (G.time() - driveGrid > 2 || driveGrid < 0) { if (!on) buildGrid(); driveGrid = G.time(); } const there = travel(m, st, c, x, z, tol, speed); unstick(m, st, c, st.dt); return { c, there }; },
   };
 }

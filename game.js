@@ -8,6 +8,7 @@ import * as MOD from './models.js?v=7';
 import { Sound } from './audio.js?v=7';
 import { makeCrew } from './crew.js?v=7';
 import { makeWorks } from './construct.js?v=7';
+import { makePeople } from './people.js?v=8';
 
 const N = 256, NN = N * N;           // 256 x 256 cells, 1 m each
 const SAVE_KEY = 'groundwork.save.v3';   // v1 (the first, smaller valley) is left untouched in the browser
@@ -62,9 +63,9 @@ let seed = 1 + Math.floor(Math.random() * 1e6);
 
 // rivers: control points [x, z, bed level]; hw = half width of the water, bank = how far the valley sides reach
 const RIVERS = [
-  { name: 'river', hw: 5.5, bank: 15, depth: 1.8, q: 6, pts: [[-12, 100, 9.2], [30, 92, 8.9], [62, 110, 8.6], [96, 128, 8.3], [130, 119, 8.0], [165, 100, 7.6], [200, 108, 7.2], [234, 124, 6.8], [268, 120, 6.4]] },
-  { name: 'north creek', hw: 3.2, bank: 9, depth: .9, q: 5, pts: [[152, -12, 10.4], [160, 24, 9.8], [146, 56, 9.2], [153, 84, 8.6], [141, 113, 7.9]] },
-  { name: 'south creek', hw: 3, bank: 9, depth: .85, q: 4.5, pts: [[72, 268, 10.2], [60, 232, 9.7], [76, 196, 9.2], [64, 158, 8.7], [86, 125, 8.3]] },
+  { name: 'river', hw: 5.5, bank: 15, depth: 1.8, q: 11, pts: [[-12, 100, 9.2], [30, 92, 8.9], [62, 110, 8.6], [96, 128, 8.3], [130, 119, 8.0], [165, 100, 7.6], [200, 108, 7.2], [234, 124, 6.8], [268, 120, 6.4]] },
+  { name: 'north creek', hw: 3.2, bank: 9, depth: .9, q: 10, pts: [[152, -12, 10.4], [160, 24, 9.8], [146, 56, 9.2], [153, 84, 8.6], [141, 113, 7.9]] },
+  { name: 'south creek', hw: 3, bank: 9, depth: .85, q: 9, pts: [[72, 268, 10.2], [60, 232, 9.7], [76, 196, 9.2], [64, 158, 8.7], [86, 125, 8.3]] },
 ];
 for (const r of RIVERS) {
   const curve = new THREE.CatmullRomCurve3(r.pts.map(([x, z]) => new THREE.Vector3(x, 0, z)));
@@ -285,7 +286,7 @@ function scanWater() {
   }
 }
 const CULVERTS = [];   // {a, b (end cells), inv (pipe bottom), r, area}
-const ERODE_V = 1.3, ERODE_K = .025;   // speed (m/s) above which loose dirt washes away, and how fast
+const ERODE_V = 1.9, ERODE_K = .02;   // speed (m/s) above which loose dirt washes away, and how fast
 let eroded = 0;
 function waterStep(dt) {
   const K = dt * 9.81, damp = .996;
@@ -400,14 +401,34 @@ function takeFrom(L, k, amount) {
   if (treeGrid[k] >= 0) treeFallAt(k);
   return loose;
 }
-function giveTo(L, k, amount) {
+// dirt dropped into water pushes the water aside (into the neighbouring cells) instead of lifting it up on top
+function displace(k, amt) {
+  const d = Math.min(W[k], amt); if (d <= 0) return;
+  const i = k % N, j = (k / N) | 0, nb = [];
+  if (i > 0) nb.push(k - 1); if (i < N - 1) nb.push(k + 1); if (j > 0) nb.push(k - N); if (j < N - 1) nb.push(k + N);
+  const s0 = H[k] + W[k] - d, low = nb.filter(n => H[n] + W[n] < s0), to = low.length ? low : nb;
+  W[k] -= d; for (const n of to) W[n] += d / to.length;
+  FL[k] = FR[k] = FU[k] = FD[k] = 0;
+}
+// a whole bucket or bed tipped at once lands over most of a second (the pile builds as the dirt pours out)
+const pourQ = [];
+function updatePour(dt) {
+  for (let i = pourQ.length - 1; i >= 0; i--) {
+    const q = pourQ[i], a = Math.min(q.rem, q.rate * dt);
+    H[q.k] += a; q.rem -= a; displace(q.k, a); dirty(q.k);
+    if (q.rem <= 1e-5) { pourQ[i] = pourQ[pourQ.length - 1]; pourQ.pop(); }
+  }
+}
+function giveTo(L, k, amount, defer = 0) {
   amount = Math.min(amount, L.v);
   if (amount <= 0) return 0;
   const g = L.g * (amount / L.v);
   const mat = loadMat(L);
   L.v -= amount; L.g -= g;
   if (L.v < 1e-4) { L.v = 0; L.g = 0; }
-  H[k] += amount; if (amount > .05) COMP[k] = 0;
+  if (defer > 0) pourQ.push({ k, rem: amount, rate: amount / defer });
+  else { H[k] += amount; displace(k, amount); }
+  if (amount > .05) COMP[k] = 0;
   if (amount > .02 || M[k] === 0) M[k] = mat;
   D[k] = 1;
   dirty(k);
@@ -446,7 +467,7 @@ function cutCircle(L, x, z, r, floorY, maxV) {
   return got;
 }
 // tip out a load: it lands as a cone (as tall as loose soil stands) and then slumps on its own if it is too steep
-function dropCircle(L, x, z, r, vol) {
+function dropCircle(L, x, z, r, vol, defer = 0) {
   vol = Math.min(vol, L.v);
   if (vol <= 0) return 0;
   const list = []; let sw = 0;
@@ -454,7 +475,7 @@ function dropCircle(L, x, z, r, vol) {
   cellsInCircle(x, z, R, (k, f) => { const w = Math.max(.04, 1 - f); list.push([k, w]); sw += w; });
   if (!list.length) { list.push([cellOf(x, z), 1]); sw = 1; }
   let put = 0; const total = vol;
-  for (const [k, w] of list) put += giveTo(L, k, total * w / sw);
+  for (const [k, w] of list) put += giveTo(L, k, total * w / sw, defer);
   return put;
 }
 
@@ -891,7 +912,7 @@ function updateRing() {
 // ---------------------------------------------------------------- trees, rocks, grass
 const folMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: T.foliage, alphaTest: .42, side: THREE.DoubleSide, roughness: .88, alphaToCoverage: true });
 const barkTex = T.bark.clone(); barkTex.repeat.set(2, 5); barkTex.needsUpdate = true;
-const barkMat = new THREE.MeshStandardMaterial({ map: barkTex, roughness: .95, color: 0x8a7a68 });
+const barkMat = new THREE.MeshStandardMaterial({ map: barkTex, roughness: .95, color: 0xd2c2ac });
 const TREE_GEOS = [MOD.spruceGeo(1, 12), MOD.spruceGeo(2, 14.5), MOD.spruceGeo(3, 16.5), MOD.leafyGeo(1, 10), MOD.leafyGeo(2, 12)];
 const TREE_H = [12, 14.5, 16.5, 10, 12];
 // trees in the valley thin out (a dithered fade) when they stand between the camera and the machine you're watching
@@ -948,10 +969,25 @@ function updateTrees(dt, terrainChanged) {
       const sc = t.s * t.g;
       _m4.compose(_v.set(t.x, t.y, t.z), _q, _s.set(sc, sc, sc));
     }
-    treeIMs[t.v].fol.setMatrixAt(t.slot, _m4); treeIMs[t.v].trunk.setMatrixAt(t.slot, _m4);
+    treeIMs[t.v].trunk.setMatrixAt(t.slot, _m4);
+    if (t.lim && t.st !== 0) _m4.makeScale(0, 0, 0);   // branches cut off: just the log
+    treeIMs[t.v].fol.setMatrixAt(t.slot, _m4);
   }
   for (const v of touched) { treeIMs[v].fol.instanceMatrix.needsUpdate = true; treeIMs[v].trunk.instanceMatrix.needsUpdate = true; }
-  treeFade(dt);
+  if (touched.size || stumpDirty) drawStumps();
+}
+// stumps where the fallers cut trees down
+let stumpIM = null, stumpDirty = true;
+function drawStumps() {
+  stumpDirty = false;
+  if (!stumpIM) {
+    const g = new THREE.CylinderGeometry(.2, .27, .5, 9); g.translate(0, .2, 0);
+    const top = new THREE.MeshStandardMaterial({ color: 0xd8b77f, roughness: .9 });
+    stumpIM = new THREE.InstancedMesh(g, [barkMat, top, top], trees.length); stumpIM.castShadow = true; stumpIM.receiveShadow = true; stumpIM.frustumCulled = false; scene.add(stumpIM);
+  }
+  let n = 0;
+  for (const t of trees) if (t.cut && t.stump !== 0) { _m4.compose(_v.set(t.sx, hAt(t.sx, t.sz) - .05, t.sz), _q.identity(), _s.set(t.s, t.s, t.s)); stumpIM.setMatrixAt(n++, _m4); }
+  stumpIM.count = n; stumpIM.instanceMatrix.needsUpdate = true;
 }
 // how a log lies: its foot on the ground, tipped to follow the slope towards its crown
 const logLen = t => TREE_H[t.v] * t.s * .82;
@@ -1131,7 +1167,7 @@ function buildFarForest() {
 }
 
 // ---------------------------------------------------------------- dust, smoke and spray
-const PMAX = 3000;
+const PMAX = 6000;
 const pPos = new Float32Array(PMAX * 3), pVel = new Float32Array(PMAX * 3), pCol = new Float32Array(PMAX * 4), pSize = new Float32Array(PMAX);
 const pLand = new Uint8Array(PMAX), pLife = new Float32Array(PMAX), pMax = new Float32Array(PMAX), pS0 = new Float32Array(PMAX), pS1 = new Float32Array(PMAX), pA0 = new Float32Array(PMAX), pG = new Float32Array(PMAX), pDrag = new Float32Array(PMAX);
 const pGeo = new THREE.BufferGeometry();
@@ -1168,6 +1204,7 @@ const PK = {
   smoke: { life: [1.6, 2.6], s0: .3, s1: 2.4, a: .45, up: [1.4, 2.2], spread: .3, g: -.25, drag: .6 },
   splash: { life: [.5, .9], s0: .35, s1: .7, a: .7, up: [1.5, 3.2], spread: 1.8, g: 9, drag: .2 },
   leaf: { life: [1.5, 2.5], s0: .25, s1: .25, a: .9, up: [.2, 1.2], spread: 2.4, g: 1.2, drag: 1.5 },
+  spark: { life: [.25, .5], s0: .07, s1: .03, a: 1, up: [1.5, 4], spread: 5, g: 9.8, drag: .4 },
   grain: { life: [1.2, 2], s0: .11, s1: .09, a: 1, up: [-.5, .4], spread: .6, g: 9.8, drag: .15, land: true },
 };
 function spawn(kind, x, y, z, n, col, opts = {}) {
@@ -1213,13 +1250,13 @@ let cNext = 0, chunksLive = 0;
 { const col = new THREE.Color(); for (let i = 0; i < CMAX; i++) { chunkIM.setMatrixAt(i, _m4.makeScale(0, 0, 0)); chunkIM.setColorAt(i, col.setRGB(.4, .3, .2)); } }
 const CHUNK_DIRT = new THREE.Color(0x5e4029), CHUNK_GRAVEL = new THREE.Color(0x8c8880), _cc = new THREE.Color();
 function chunks(x, y, z, n, gravel, vx = 0, vz = 0, spread = 1) {
-  spawn('grain', x, y, z, n * 5, gravel ? [.55, .53, .5] : [.34, .24, .16], { jitter: spread, vx, vz });
-  n = Math.ceil(n * .5);
+  spawn('grain', x, y, z, n * 9, gravel ? [.55, .53, .5] : [.34, .24, .16], { jitter: spread, vx, vz, size: .75 });
+  n = Math.ceil(n * .3);
   for (let q = 0; q < n; q++) {
     const i = cNext; cNext = (cNext + 1) % CMAX;
     cPos[i * 3] = x + (Math.random() - .5) * spread; cPos[i * 3 + 1] = y + (Math.random() - .5) * .3; cPos[i * 3 + 2] = z + (Math.random() - .5) * spread;
     cVel[i * 3] = vx + (Math.random() - .5) * 1.2; cVel[i * 3 + 1] = Math.random() * 1.2; cVel[i * 3 + 2] = vz + (Math.random() - .5) * 1.2;
-    cLife[i] = 1.6 + Math.random(); cRot[i * 2] = Math.random() * 6; cRot[i * 2 + 1] = Math.random() * 6; cS[i] = .6 + Math.random() * 1.3;
+    cLife[i] = 1.6 + Math.random(); cRot[i * 2] = Math.random() * 6; cRot[i * 2 + 1] = Math.random() * 6; cS[i] = .3 + Math.random() * Math.random() * .8;
     _cc.copy(gravel ? CHUNK_GRAVEL : CHUNK_DIRT).multiplyScalar(.75 + Math.random() * .5);
     chunkIM.setColorAt(i, _cc);
   }
@@ -1267,9 +1304,10 @@ Object.assign(SPEC, {
   mixer: { name: 'Mixer', ford: .6, vmax: 9, acc: 2.6, wb: 5, len: 8, wid: 2.5, circ: [[2.6, 1.4], [-.4, 1.4], [-3, 1.4]], cap: 8, tool: 'Drum', paint: 0xd9701c },
   crane: { name: 'Crane', ford: .7, vmax: 7, acc: 2, wb: 6, len: 9.4, wid: 2.6, circ: [[3.2, 1.5], [0, 1.5], [-3.2, 1.5]], cap: 1, tool: 'Hook', paint: 0xe8c21a },
   truck: { name: 'Truck', ford: .5, vmax: 10, acc: 3, wb: 4, len: 7, wid: 2.4, circ: [[2, 1.3], [-1.6, 1.3]], cap: 1, tool: 'Bed', paint: 0xf2f0ea },
+  logtruck: { name: 'Log truck', ford: .55, vmax: 9, acc: 2.6, wb: 5.2, len: 10.4, wid: 2.6, circ: [[2.6, 1.4], [-.6, 1.4], [-3.8, 1.4]], cap: 1, tool: 'Crane', paint: 0x2f5d8a },
 });
 const BUILD = { dozer: MOD.buildDozer, loader: MOD.buildLoader, excavator: MOD.buildExcavator, hauler: MOD.buildHauler,
-  roller: MOD.buildRoller, paver: MOD.buildPaver, mixer: MOD.buildMixer, crane: MOD.buildCrane, truck: MOD.buildTruck };
+  roller: MOD.buildRoller, paver: MOD.buildPaver, mixer: MOD.buildMixer, crane: MOD.buildCrane, truck: MOD.buildTruck, logtruck: MOD.buildLogTruck };
 const PAINT = 0xd9701c;
 const machines = [];
 let machineSeq = 0;
@@ -1279,7 +1317,7 @@ function makeMachine(type, x, z, yaw, equip = false) {
   const m = { type, x, z, yaw, v: 0, y: gAt(x, z), pitch: 0, roll: 0, load: newLoad(), mats, id: machineSeq++, equip,
     blade: 0, arm: .3, dumpT: 0, swing: 0, reach: 5, act: -1, did: false, mode: 'dig', curl: .2, tip: 0, tipping: false,
     work: 0, workSm: 0, hyd: 0, hydSm: 0, dig: 0, digG: 0, digSm: 0, pour: 0, pourSm: 0, trackSpeed: 0, steerVis: 0,
-    sPitch: 0, sRoll: 0, lastV: 0, grime: .2, smokeAcc: 0, pourT: 0, pourG: false, splashT: 0 };
+    sPitch: 0, sRoll: 0, lastV: 0, grime: .2, hp: 1, hurtT: 0, smokeAcc: 0, pourT: 0, pourG: false, splashT: 0 };
   BUILD[type](m, mats, LOADMAT);
   m.group.traverse(o => { if (o.isMesh && !o.isInstancedMesh) { o.castShadow = true; o.receiveShadow = true; } });
   m.worker = MOD.buildWorker(m.id); m.worker.position.set(0, 0, -.02); m.cabG.add(m.worker); m.worker.visible = false;
@@ -1316,6 +1354,29 @@ function overlap(m, x, z, yaw) {
   }
   return pen;
 }
+function separate(m, dt) {
+  let px = 0, pz = 0;
+  for (const o of machines) {
+    if (o === m) continue;
+    for (const b of circlesOf(o, o.x, o.z, o.yaw)) for (const a of circlesOf(m, m.x, m.z, m.yaw)) {
+      const dx = a[0] - b[0], dz = a[1] - b[1], d = Math.hypot(dx, dz) || .01, pen = a[2] + b[2] - d;
+      if (pen > 0) { px += dx / d * pen; pz += dz / d * pen; }
+    }
+  }
+  const l = Math.hypot(px, pz); if (l < 1e-4) return;
+  const st = Math.min(l, 1.2 * dt);
+  m.x = clamp(m.x + px / l * st, 3, N - 4); m.z = clamp(m.z + pz / l * st, 3, N - 4);
+}
+// somewhere near x, z where a machine of this type fits without touching another
+function freeSpot(type, x, z, yaw) {
+  const probe = { type };
+  for (let r = 0; r < 30; r += 3) for (let a = 0; a < 8; a++) {
+    const px = clamp(x + Math.cos(a * .785) * r, 6, N - 7), pz = clamp(z + Math.sin(a * .785) * r, 6, N - 7);
+    if (wetAt(px, pz) < .05 && overlap(probe, px, pz, yaw) === 0) return [px, pz];
+    if (r === 0) break;
+  }
+  return [x, z];
+}
 function poseMachine(m, dt, inp) {
   const s = SPEC[m.type];
   const fx = fwdX(m.yaw), fz = fwdZ(m.yaw), lx = Math.cos(m.yaw), lz = -Math.sin(m.yaw);
@@ -1324,6 +1385,16 @@ function poseMachine(m, dt, inp) {
   const hl = gAt(m.x + lx * Wd, m.z + lz * Wd), hr = gAt(m.x - lx * Wd, m.z - lz * Wd), hc = gAt(m.x, m.z);
   const y = Math.max((hf + hb + hl + hr) / 4, hc - .1);
   const k = dt > 0 ? 1 - Math.exp(-dt * 12) : 1;
+  if (dt > 0) {
+    // dropping off a ledge, rolling on a side slope or sitting in deep water wears the machine
+    if (m.y - y > .7) hurt(m, (m.y - y - .7) * .05, m.x, y + .3, m.z, 'fall');
+    const tilt = Math.max(Math.abs(Math.atan2(hl - hr, Wd * 2)), Math.abs(Math.atan2(hf - hb, L * 2)) * .7);
+    if (tilt > .52) hurt(m, (tilt - .52) * .08 * dt, m.x, m.y + 1, m.z, 'tilt');
+    const wet = wetAt(m.x, m.z);
+    if (wet > s.ford + .25) { hurt(m, (wet - s.ford) * .006 * dt, m.x, m.y + 1, m.z, 'water'); if (Math.random() < dt * 3) spawn('splash', m.x, m.y + s.ford + .4, m.z, 1, [.75, .8, .82], { jitter: s.wid * .6, up: .3 }); }
+    // the yard's workshop slowly fixes whatever is parked there
+    if (inYard(m.x, m.z) && Math.abs(m.v) < .1 && m.hp < 1) m.hp = Math.min(1, m.hp + dt * .01);
+  }
   m.y = lerp(m.y, y, k);
   m.pitch = lerp(m.pitch, Math.atan2(hf - hb, L * 2), k);
   m.roll = lerp(m.roll, Math.atan2(hl - hr, Wd * 2), k);
@@ -1341,7 +1412,7 @@ function poseMachine(m, dt, inp) {
   if (m.front) m.front.rotation.y = m.steerVis * .5;
   m.group.updateMatrixWorld(true);
   for (const r of m.rams) r.update();
-  m.mats.U.uGround.value = m.y; m.mats.U.uGrime.value = m.grime;
+  m.mats.U.uGround.value = m.y; m.mats.U.uGrime.value = m.grime; m.mats.U.uDmg.value = 1 - m.hp;
 }
 const _w = new THREE.Vector3();
 function machineFx(m, dt, isActive) {
@@ -1354,6 +1425,15 @@ function machineFx(m, dt, isActive) {
     const g = lerp(.55, .16, load);
     spawn('smoke', _w.x, _w.y, _w.z, n, [g, g, g * .98], { jitter: .1, size: .7 + load * .8, alpha: .35 + load * .5 });
   }
+  // a damaged engine smokes grey, then black; a broken one just smoulders
+  if (m.hp < .6) {
+    m.dmgSmoke = (m.dmgSmoke || 0) + dt * (m.hp <= 0 ? 3 : (.6 - m.hp) * 14);
+    if (m.dmgSmoke >= 1) {
+      m.dmgSmoke = 0; m.exhaust.getWorldPosition(_w);
+      const g = m.hp < .25 ? .08 : .3;
+      spawn('smoke', _w.x, _w.y, _w.z, 1, [g, g, g], { jitter: .5, size: 1.1, alpha: .6 });
+    }
+  }
   for (const b of m.beacons) b.material.emissiveIntensity = isActive ? (Math.sin(simTime * 9) > .55 ? 4 : .25) : .1;
   // driving through water throws spray
   if (Math.abs(m.v) > .8 && wetAt(m.x, m.z) > .15) {
@@ -1364,6 +1444,22 @@ function machineFx(m, dt, isActive) {
   }
 }
 
+// ---------------------------------------------------------------- damage: knocks, falls, rolling and flooding wear a machine
+// out. Below half it loses power and smokes; at nothing it breaks down until the mechanic fixes it.
+function hurt(m, amt, x = m.x, y = m.y + 1, z = m.z, why = '?') {
+  if (amt <= 0 || m.hp <= 0) return;
+  if (window.GW_DMG) { const l = m.dmgLog || (m.dmgLog = {}); l[why] = (l[why] || 0) + amt; }
+  const was = m.hp; m.hp = Math.max(0, m.hp - amt);
+  if (amt > .006 && simTime - m.hurtT > .25) {
+    m.hurtT = simTime;
+    snd.clang(x, y, z, 70 + Math.random() * 90, clamp(amt * 12, .12, .6));
+    spawn('spark', x, y, z, Math.ceil(clamp(amt * 400, 3, 18)), [1, .72, .32], { jitter: .4 });
+  }
+  const name = SPEC[m.type].name;
+  if (was > .5 && m.hp <= .5) say(m, name + ' damaged');
+  if (was > .2 && m.hp <= .2) say(m, name + ' badly damaged');
+  if (was > 0 && m.hp <= 0) { toast(name + ' broken down', 2600); m.v = 0; }
+}
 const _p = new THREE.Vector3(), _p2 = new THREE.Vector3();
 function drive(m, dt, inp) {
   const s = SPEC[m.type];
@@ -1380,7 +1476,7 @@ function drive(m, dt, inp) {
   lim *= Math.max(.15, 1 - wetAt(m.x, m.z) / (s.ford * 2.2));
   if (m.type === 'dozer') lim *= 1 - .35 * m.load.v / s.cap;
   if (m.type === 'hauler') lim *= 1 - .25 * m.load.v / s.cap;
-  target *= lim;
+  target *= lim * (m.hp <= 0 ? 0 : .55 + .45 * Math.min(1, m.hp / .5));   // a damaged machine loses power
   if (grade > .2 && Math.abs(inp.throttle) > 0) m.work = Math.max(m.work, clamp(grade * 1.5, 0, .8));
   m.v += clamp(target - m.v, -s.acc * dt * (inp.throttle === 0 ? 1.6 : 1), s.acc * dt);
   if (Math.abs(m.v) < .01 && inp.throttle === 0) m.v = 0;
@@ -1388,8 +1484,19 @@ function drive(m, dt, inp) {
   if (s.tracks) yaw += inp.steer * s.turn * dt;
   else yaw += (m.v / s.wb) * Math.tan(inp.steer * .55) * dt;
   let nx = clamp(m.x + fwdX(yaw) * m.v * dt, 3, N - 4), nz = clamp(m.z + fwdZ(yaw) * m.v * dt, 3, N - 4);
-  const before = overlap(m, m.x, m.z, m.yaw), after = overlap(m, nx, nz, yaw);
-  if (after > before + 1e-4) { m.v = 0; m.trackSpeed = 0; m.blocked = 'machine'; return; }
+  const before = overlap(m, m.x, m.z, m.yaw);
+  // two machines already caught inside each other (dropped off together, or shoved) ease apart instead of locking up
+  if (before > .05) separate(m, dt);
+  const after = overlap(m, nx, nz, yaw);
+  if (after > before + 1e-4) {
+    if (Math.abs(m.v) > 1.3) {   // ran into another machine
+      const o = machines.reduce((a, q) => q !== m && Math.hypot(q.x - m.x, q.z - m.z) < Math.hypot(a.x - m.x, a.z - m.z) ? q : a, machines.find(q => q !== m) || m);
+      // the crew drive carefully (their bumps are the planner's, not real crashes): only the player's knocks count
+      const imp = (m === machines[active] || o === machines[active]) ? (Math.abs(m.v) - 1.3) * .035 : 0, hx = (m.x + o.x) / 2, hz = (m.z + o.z) / 2;
+      hurt(m, imp, hx, m.y + 1, hz, 'bump'); if (o !== m) hurt(o, imp * .6, hx, o.y + 1, hz, 'bumped');
+    }
+    m.v = 0; m.trackSpeed = 0; m.blocked = 'machine'; return;
+  }
   m.blocked = '';
   // too deep: the machine won't move its nose (or tail, backing up) into water deeper than it can ford
   if (m.v !== 0) {
@@ -1417,7 +1524,13 @@ function drive(m, dt, inp) {
   if (Math.abs(m.v) > .15 || Math.abs(dyaw) > .002) {
     for (const t of trees) {
       if (t.st !== 0) continue;
-      for (const c of cs) if (Math.abs(t.x - c[0]) < c[2] + .6 && Math.abs(t.z - c[1]) < c[2] + .6 && Math.hypot(t.x - c[0], t.z - c[1]) < c[2] + .5) { treeFall(t, m.x, m.z); break; }
+      for (const c of cs) if (Math.abs(t.x - c[0]) < c[2] + .6 && Math.abs(t.z - c[1]) < c[2] + .6 && Math.hypot(t.x - c[0], t.z - c[1]) < c[2] + .5) {
+        treeFall(t, m.x, m.z);
+        // a tree is hard on a machine; a dozer with its blade down is built for it
+        const guard = (m.type === 'dozer' && m.blade < .6 ? .25 : 1) * (m.ai ? .3 : 1);   // the crew pick their way through
+        hurt(m, (.004 + Math.abs(m.v) * .006) * t.s * guard, t.x, t.y + 1.5, t.z, 'tree');
+        break;
+      }
     }
   }
   pushLogs(m, cs);
@@ -1431,6 +1544,7 @@ function drive(m, dt, inp) {
         const push = need - d;
         rk.x = clamp(rk.x + dx / d * push, 2, N - 3); rk.z = clamp(rk.z + dz / d * push, 2, N - 3);
         rk.rx += push / rk.s; rk.ry += push * .3 / rk.s; rk.dirty = true;
+        if (Math.abs(m.v) > 2.2 && !(m.type === 'dozer' && m.blade < .6)) hurt(m, (Math.abs(m.v) - 2.2) * .01 * rk.s * dt * 30, rk.x, hAt(rk.x, rk.z) + .5, rk.z, 'rock');
         m.work = Math.max(m.work, .5);
       }
     }
@@ -1456,6 +1570,7 @@ function toolDozer(m, dt, inp) {
   m.hyd = Math.max(m.hyd, Math.abs(inp.tool));
   m.blade3.position.y = m.blade;
   m.group.updateMatrixWorld();
+  if (simTime - (m.noCut ?? -9) < .5) return;   // lent out to grade a building pad: the grading is done for it
   if (m.v > .1) {
     const rate = 1.4 * m.v * dt;
     for (let sx = -1.75; sx <= 1.76; sx += .5) {
@@ -1485,6 +1600,12 @@ function toolDozer(m, dt, inp) {
         _p.set(sx, 0, 2.6); m.group.localToWorld(_p); dropCircle(m.load, _p.x, _p.z, 1.1, spill / 2);
         if (Math.random() < dt * 10) chunks(_p.x, _p.y + .8, _p.z, 2, loadMat(m.load) === 2);
       }
+    }
+    // soil rolls and tumbles off the face of the heap in front of the blade
+    if (m.load.v > .4) {
+      const n = Math.min(6, Math.floor(m.v * dt * 25 * Math.min(1, m.load.v / 3) + Math.random()));
+      const top = Math.cbrt(m.load.v / 1.25) * .8;
+      for (let q = 0; q < n; q++) { _p.set((Math.random() - .5) * 3.2, m.blade + top * (.5 + Math.random() * .5), 2.9 + top * .5); m.group.localToWorld(_p); spawn('grain', _p.x, _p.y, _p.z, 1, loadMat(m.load) === 2 ? [.55, .53, .5] : [.36, .26, .17], { jitter: .2, vx: Math.sin(m.yaw) * (m.v + .8), vz: Math.cos(m.yaw) * (m.v + .8), up: .3, size: .8 }); }
     }
     if (m.load.v > .3 && Math.random() < dt * 9) { _p.set(0, m.blade + .4, 3.3); m.group.localToWorld(_p); dust(_p.x, _p.y, _p.z, 2, loadMat(m.load) === 2 ? GRAVEL_C : DIRT_C); }
     if (m.load.v > 1.5 && Math.random() < dt * 7) { _p.set((Math.random() - .5) * 3, m.blade + 1.4, 3.0); m.group.localToWorld(_p); chunks(_p.x, _p.y, _p.z, 1, loadMat(m.load) === 2, Math.sin(m.yaw) * m.v, Math.cos(m.yaw) * m.v, .3); }
@@ -1555,7 +1676,7 @@ function toolLoader(m, dt, inp) {
         else { dust(_p.x, _p.y - 1, _p.z, 14, grav ? GRAVEL_C : DIRT_C); snd.dump(_p.x, _p.y - 1, _p.z, got, grav); snd.clang(_p.x, _p.y - 1, _p.z, 95, .25); }
       } else {
         if (h) say(m, isTouch ? 'Raise bucket higher' : 'Raise bucket higher <kbd>R</kbd>');
-        dropCircle(m.load, _p.x, _p.z, 1.6, m.load.v);
+        dropCircle(m.load, _p.x, _p.z, 1.6, m.load.v, .7);
         dust(_p.x, hAt(_p.x, _p.z) + .5, _p.z, 16, grav ? GRAVEL_C : DIRT_C);
         snd.dump(_p.x, hAt(_p.x, _p.z), _p.z, vol, grav);
       }
@@ -1606,7 +1727,7 @@ function toolExcavator(m, dt, inp) {
           else { snd.dump(tx, truck.y + 2.5, tz, got, grav); snd.clang(tx, truck.y + 2, tz, 90, .3); }
           dust(tx, truck.y + 3, tz, 12, grav ? GRAVEL_C : DIRT_C);
         } else {
-          dropCircle(m.load, tx, tz, 1.4, m.load.v);
+          dropCircle(m.load, tx, tz, 1.4, m.load.v, .6);
           dust(tx, g + .5, tz, 14, grav ? GRAVEL_C : DIRT_C);
           snd.dump(tx, g, tz, vol, grav);
         }
@@ -1656,7 +1777,14 @@ function toolHauler(m, dt, inp) {
 }
 // the equipment's moving parts (driven by the crew's scripts through m.work and m.cr)
 function toolRoller(m, dt) { m.drum.rotation.x += m.v * dt / .78; if (Math.abs(m.v) > .1) m.work = Math.max(m.work, .6); }
-function toolPaver(m, dt) { m.screed.position.y = .35 + Math.sin(simTime * 9) * .01 * (m.paving ? 1 : 0); m.hopperLoad.visible = !!m.paving; if (m.paving) m.work = Math.max(m.work, .7); }
+function toolPaver(m, dt) {
+  m.screed.position.y = .35 + Math.sin(simTime * 9) * .01 * (m.paving ? 1 : 0); m.hopperLoad.visible = !!m.paving;
+  if (!m.paving) return;
+  m.work = Math.max(m.work, .7);
+  // hot mix: steam off the fresh mat behind the screed, and black chips spilling through the augers
+  if (Math.random() < dt * 10) { _p.set((Math.random() - .5) * 3.4, .3, -2.4 - Math.random() * 1.5); m.group.localToWorld(_p); spawn('smoke', _p.x, _p.y, _p.z, 1, [.82, .82, .8], { jitter: .6, size: .9, alpha: .18, up: .4 }); }
+  if (Math.random() < dt * 30) { _p.set((Math.random() - .5) * 3, .45, -1.5); m.group.localToWorld(_p); spawn('grain', _p.x, _p.y, _p.z, 2, [.07, .066, .062], { jitter: .2, vx: (Math.random() - .5) * 2, vz: 0, up: .2, size: .7 }); }
+}
 function toolMixer(m, dt) { m.drum.rotation.z += dt * (m.pouring ? 3.5 : 1.2); m.chute.rotation.y = lerp(m.chute.rotation.y, m.pouring ? .6 : 0, 1 - Math.exp(-dt * 2)); if (m.pouring) { m.work = Math.max(m.work, .6); m.pour = Math.max(m.pour, dt * 2); m.pourG = false; } }
 function toolTruck() { }
 // crane: m.cr = { sw (turn), el (boom angle), ext (telescope), drop (cable), out (outriggers 0..1), load (an object on the hook) }
@@ -1689,8 +1817,8 @@ const works = makeWorks({
 const pipeMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a4, roughness: .35, metalness: .85 });
 const crew = makeCrew({
   clamp, angWrap, YARD, RIVERS, SPEC, machines, hAt, wAt, gAt, wetAt, H, W, D, M, dirty, scene, THREE, pipeMat, works,
-  h0At: (x, z) => H0[cellOf(x, z)],
-  makeMachine, removeMachine,
+  h0At: (x, z) => H0[cellOf(x, z)], displace,
+  makeMachine, removeMachine, freeSpot,
   status: (t, f) => { const e = $('crewSt'); e.style.display = t ? 'flex' : 'none'; $('crewG').style.display = t ? 'block' : 'none'; if (t) { $('crewName').textContent = 'Crew · ' + t; $('crewPct').textContent = f === undefined ? '' : Math.round(f * 100) + '%'; $('crewBar').style.width = Math.round((f || 0) * 100) + '%'; } },
   addCulvert: (P, cv) => {
     const e = o => { const x = P.P[0] + P.u[0] * cv.s + P.p[0] * o, z = P.P[1] + P.u[1] * cv.s + P.p[1] * o; return cellOf(x, z); };
@@ -1703,11 +1831,32 @@ const crew = makeCrew({
   bedPoint: h => { _p.set(0, 2.3, -1.5); h.group.localToWorld(_p); return [_p.x, _p.z]; },
   crossed: () => { toast('Crossing ready', 3200); snd.chime(); save(); },
   say: msg => toast(msg, 2600),
+  dt: () => curDt,
+  lend: (m, st, dt) => people.lend(m, st, dt),
+});
+// the building crew on foot (people.js), and the mechanic
+const people = makePeople({
+  clamp, angWrap, scene, YARD, inYard, hAt, wAt, H, W, M, D, dirty, trees, machines, SPEC, TOOL,
+  h0At: (x, z) => H0[cellOf(x, z)],
+  nearRoad: (x, z, r) => crew.roads.some(P => { const s = clamp((x - P.P[0]) * P.u[0] + (z - P.P[1]) * P.u[1], P.sA ?? -20, P.sB ?? 20), px = P.P[0] + P.u[0] * s, pz = P.P[1] + P.u[1] * s; return Math.hypot(x - px, z - pz) < r + (P.w || 6) / 2; }),
+  freeSpot, makeMachine, removeMachine,
+  crewDrive: (m, x, z, tol, sp) => crew.drive(m, x, z, tol, sp),
+  saw: (id, x, y, z, on, cut) => snd.saw(id, x, y, z, on, cut),
+  tok: (x, y, z, a) => snd.tok(x, y, z, a),
+  clang: (x, y, z) => snd.clang(x, y, z, 120, .3),
+  thud: (x, y, z) => snd.clang(x, y, z, 48, .4),
+  chime: () => snd.chime(),
+  spawn, treeFall, logLen,
+  treeLimb: t => { t.lim = 1; t.dirty = true; },
+  treeGone: t => { t.st = 3; t.g = 0; t.dirty = true; },
+  stumpOut: t => { t.stump = 0; stumpDirty = true; },
+  cellsAround: cellsInCircle,
+  toast: (m, ms) => toast(m, ms || 2200), say: (m, msg) => say(m, msg), time: () => simTime,
 });
 function setCrew(v, quiet) {
   // the crew's fifth machine: a second excavator, parked in the yard the first time the crew comes on
   if (v && machines.filter(m => m.type === 'excavator' && !m.equip).length < 2) { const m = makeMachine('excavator', YARD.x1 - 4, YARD.z1 - 6, Math.PI); poseMachine(m, 0, ZERO); renderBar(); }
-  crew.setOn(v);
+  crew.setOn(v); people.setOn(crew.on);
   localStorage.setItem('groundwork.crew', crew.on ? '1' : '0');
   $('mCrew').textContent = 'Crew: ' + (crew.on ? 'on' : 'off');
   // with the crew on, hand the player the loader so all three workers have a machine
@@ -1975,6 +2124,7 @@ addEventListener('keydown', e => {
   if (k === 'c') cabView = !cabView;
   if (k >= '1' && k <= '9' && +k <= driveCount()) select(+k - 1);
   if (k === 'm') toggleMap();
+  if (k === 't') setSpeed(speed === 1 ? 2 : speed === 2 ? 4 : 1);
   if (k === 'h' || k === '?') showHelp(true);
   if (k === 'escape') { const open = $('menu').style.display === 'flex' || $('help').style.display === 'flex' || $('worlds').style.display === 'flex'; showHelp(false); $('worlds').style.display = 'none'; $('menu').style.display = open ? 'none' : 'flex'; }
   audioStart();
@@ -2090,11 +2240,15 @@ function updateHud(dt) {
   const m = machines[active], s = SPEC[m.type], f = Math.min(1, m.load.v / s.cap);
   $('mspd').textContent = Math.abs(m.v) > .3 ? `${(Math.abs(m.v) * 3.6).toFixed(0)} km/h` : '';
   $('mgauge').style.width = (f * 100).toFixed(0) + '%';
+  const hp = $('mhp'); hp.parentNode.style.display = m.hp < .995 ? 'block' : 'none';
+  hp.style.width = (m.hp * 100).toFixed(0) + '%'; hp.style.background = m.hp > .5 ? '#9ccf5a' : m.hp > .2 ? '#f2b33d' : '#e2483a';
+  $('mcond').textContent = m.hp <= 0 ? 'broken down' : m.hp < .995 ? `condition ${Math.round(m.hp * 100)}%` : '';
   $('mtool').textContent = toolText(m);
   $('mload').textContent = m.load.v > .05 ? `${m.load.v.toFixed(1)} m³ ${loadName(m.load)}` : 'empty';
   document.querySelectorAll('#mbar button').forEach((b, i) => {
     const mm = machines[i]; if (!mm) return;
     b.querySelector('u').style.width = Math.min(100, Math.round(100 * mm.load.v / SPEC[mm.type].cap)) + '%';
+    b.classList.toggle('broke', mm.hp <= 0);
   });
   if (m.type === 'excavator') $('actBtn').textContent = m.load.v > .05 ? 'DUMP' : 'DIG';
   else $('actBtn').textContent = { loader: 'DUMP', hauler: 'TIP' }[m.type] || '';
@@ -2103,6 +2257,7 @@ function updateHud(dt) {
 function showHelp(on) { $('help').style.display = on ? 'flex' : 'none'; }
 $('helpGo').onclick = () => { showHelp(false); audioStart(); localStorage.setItem('groundwork.seenHelp', '1'); };
 $('menuBtn').onclick = () => { $('menu').style.display = 'flex'; };
+$('spdBtn').onclick = () => setSpeed(speed === 1 ? 2 : speed === 2 ? 4 : 1);
 $('mClose').onclick = () => { $('menu').style.display = 'none'; };
 $('mHelp').onclick = () => { $('menu').style.display = 'none'; showHelp(true); };
 $('mSound').onclick = () => toggleSound();
@@ -2165,7 +2320,7 @@ $('wNew').onclick = async () => {
 };
 
 // ---------------------------------------------------------------- saving (nothing ever resets)
-let noSave = false, crewSave = null;
+let noSave = false, crewSave = null, peopleSave = null;
 function b64(arr) {
   const u = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength); let s = '';
   for (let i = 0; i < u.length; i += 32768) s += String.fromCharCode.apply(null, u.subarray(i, i + 32768));
@@ -2186,8 +2341,9 @@ function saveData() {
       gone: trees.map((t, i) => t.st === 3 ? i : -1).filter(i => i >= 0),
       logs: trees.map((t, i) => t.st === 1 || t.st === 2 ? [i, +t.x.toFixed(2), +t.z.toFixed(2), +t.dx.toFixed(3), +t.dz.toFixed(3)] : null).filter(Boolean),
       rocks: rocks.map(r => [+r.x.toFixed(2), +r.z.toFixed(2), +r.rx.toFixed(2), +r.ry.toFixed(2)]),
-      mach: machines.filter(m => !m.equip).map(m => ({ type: m.type, x: +m.x.toFixed(3), z: +m.z.toFixed(3), yaw: +m.yaw.toFixed(4), load: m.load, blade: m.blade, arm: m.arm, swing: m.swing, reach: m.reach, tip: m.tip, tipping: m.tipping, grime: +m.grime.toFixed(3) })),
-      crew: crew.serialize(),
+      mach: machines.filter(m => !m.equip).map(m => ({ type: m.type, x: +m.x.toFixed(3), z: +m.z.toFixed(3), yaw: +m.yaw.toFixed(4), load: m.load, blade: m.blade, arm: m.arm, swing: m.swing, reach: m.reach, tip: m.tip, tipping: m.tipping, grime: +m.grime.toFixed(3), hp: +m.hp.toFixed(3) })),
+      crew: crew.serialize(), people: people.serialize(),
+      cut: trees.map((t, i) => t.cut ? [i, +t.sx.toFixed(2), +t.sz.toFixed(2), t.lim ? 1 : 0, t.stump === 0 ? 0 : 1] : null).filter(Boolean),
       jobs: jobs.map(j => ({ type: j.type, x0: j.x0, z0: j.z0, x1: j.x1, z1: j.z1, target: j.target, base: j.base, goal: j.goal })),
     };
     return JSON.stringify(data);
@@ -2216,14 +2372,15 @@ function load() {
     (data.rocks || []).forEach((r, i) => { if (rocks[i]) Object.assign(rocks[i], { x: r[0], z: r[1], rx: r[2], ry: r[3] }); });
     for (const s of data.mach) {
       const m = makeMachine(s.type, s.x, s.z, s.yaw);
-      Object.assign(m, { load: s.load || newLoad(), blade: s.blade ?? 0, arm: s.arm ?? .3, swing: s.swing ?? 0, reach: s.reach ?? 5, tip: s.tip ?? 0, tipping: !!s.tipping, grime: s.grime ?? .2 });
+      Object.assign(m, { load: s.load || newLoad(), blade: s.blade ?? 0, arm: s.arm ?? .3, swing: s.swing ?? 0, reach: s.reach ?? 5, tip: s.tip ?? 0, tipping: !!s.tipping, grime: s.grime ?? .2, hp: s.hp ?? 1 });
     }
     Object.assign(stats, data.stats || {});
     for (const j of data.jobs || []) { const jj = { ...j, prog: 0 }; jobs.push(jj); jobVis(jj); }
     if (data.goal) { goal.i = data.goal.i | 0; goal.marsh0 = data.goal.marsh0 || 0; }
     if (data.goalJob >= 0 && jobs[data.goalJob]) goal.job = jobs[data.goalJob];
     active = clamp(data.active | 0, 0, machines.length - 1);
-    crewSave = data.crew || null;
+    crewSave = data.crew || null; peopleSave = data.people || null;
+    for (const [i, sx, sz, lim, st] of data.cut || []) { const t = trees[i]; if (t) Object.assign(t, { cut: 1, sx, sz, lim, stump: st ? 1 : 0 }); }
     return true;
   } catch (e) {
     console.warn('save unreadable, starting a new valley', e);
@@ -2304,6 +2461,7 @@ const ENGINE = {
   mixer: { cyl: 6, idle: 650, max: 2000, tone: 250, vol: .45 },
   crane: { cyl: 6, idle: 620, max: 1900, tone: 230, vol: .45 },
   truck: { cyl: 6, idle: 720, max: 2600, tone: 340, vol: .35 },
+  logtruck: { cyl: 6, idle: 680, max: 2400, tone: 300, vol: .4 },
 };
 function audioStart() {
   snd.start();
@@ -2351,13 +2509,15 @@ function updateSound(dt) {
 // ---------------------------------------------------------------- main loop
 let last = performance.now(), waterAcc = 0, saveTimer = 5, relaxFlip = 0, ringTimer = 0, scanTimer = 0;
 const _bs = new THREE.Vector2();
-function update(dt) {
-  simTime += dt;
+let curDt = 1 / 30;
+function update(dt, draw = true) {
+  simTime += dt; curDt = dt;
   const me = machines[active];
   for (const m of machines) { m.dig = 0; m.digG = 0; m.pour = 0; m.hyd = 0; }
   crew.update(dt);
+  people.update(dt);
   for (const m of machines) {
-    m.ctl = m === me ? inp : (m.ai || ZERO);
+    m.ctl = m.hp <= 0 ? ZERO : m === me ? inp : (m.ai || ZERO);
     drive(m, dt, m.ctl);
   }
   for (const m of machines) {
@@ -2386,6 +2546,15 @@ function update(dt) {
   relaxFlip ^= 1;
   if (relaxFlip) relax();
 
+  updatePour(dt);
+  updateTrees(dt, anyDirty && draw);
+  updateParticles(dt);
+  updateChunks(dt);
+  updateJobs(dt);
+  updateGoal(dt);
+  saveTimer -= dt;
+  if (saveTimer <= 0) { saveTimer = 5; save(); }
+  if (!draw) return;   // fast-forward: the in-between steps only run the world, the last one draws it
   const changed = anyDirty; anyDirty = false;
   if (dirtBox && grassAt && dirtBox[1] > grassAt[0] - Q.grassR && dirtBox[0] < grassAt[0] + Q.grassR && dirtBox[3] > grassAt[1] - Q.grassR && dirtBox[2] < grassAt[1] + Q.grassR) grassDirty = true;
   dirtBox = null;
@@ -2393,12 +2562,8 @@ function update(dt) {
   if (edgeDirty) { ringDirty = true; edgeDirty = false; }
   ringTimer -= dt;
   if (ringDirty && ringTimer <= 0) { ringTimer = 2; updateRing(); }
-  updateTrees(dt, changed);
   updateRocks(dt, changed);
-  updateParticles(dt);
-  updateChunks(dt);
-  updateJobs(dt);
-  updateGoal(dt);
+  treeFade(dt);
   updateMap(dt);
   updateCamera(dt);
   updateGrass(dt, me);
@@ -2408,15 +2573,16 @@ function update(dt) {
   waterMat.uniforms.uTime.value = simTime; grassU.uTime.value = simTime;
   updateHud(dt);
   updateSound(dt);
-  saveTimer -= dt;
-  if (saveTimer <= 0) { saveTimer = 5; save(); }
 }
-let paused = false;
+let paused = false, speed = 1;
+function setSpeed(v) {
+  speed = v; const b = $('spdBtn'); if (b) { b.textContent = speed + 'X'; b.classList.toggle('on', speed > 1); }
+}
 function frame(now) {
   const dt = Math.min(.05, (now - last) / 1000); last = now;
   if (paused || dt <= 0) { requestAnimationFrame(frame); return; }
   readInput();
-  update(dt);
+  for (let i = 0; i < speed; i++) update(dt, i === speed - 1);
   renderer.getDrawingBufferSize(_bs);
   pMat.uniforms.uScale.value = _bs.y * .5 * camera.projectionMatrix.elements[5];
   renderer.render(scene, camera);
@@ -2442,6 +2608,7 @@ function start() {
   if (mapCv) mapCv.style.display = mapOn ? 'block' : 'none';
   for (const m of machines) poseMachine(m, 0, ZERO);
   crew.restore(crewSave);
+  people.restore(peopleSave);
   setCrew(localStorage.getItem('groundwork.crew') === '1', true);
   select(active);
   for (const j of jobs) j.prog = jobProgress(j);
@@ -2453,7 +2620,7 @@ function start() {
   if (!resumed && !localStorage.getItem('groundwork.seenHelp')) showHelp(true);
   if (!resumed) save();
   // test hook: run the game forward without drawing (used by the automated checks)
-  window.GW = { works, CULVERTS, DECK, get eroded() { return eroded; }, flux: { FL, FR, FU, FD }, H0, crew, setCrew, dirty, snd, goal, GOALS, RIVERS, YARD, GRAVEL, CAMP, MARSH, SPEC, riverAt, tchunks, machines, H, W, M, D, BED, stats, hAt, select, save, trees, rocks, renderer, scene, camera, get jobs() { return jobs; }, get active() { return active; },
+  window.GW = { SPRINGS, drop: (x, z, v) => dropCircle({ v, g: 0 }, x, z, 6, v), people, works, CULVERTS, DECK, get eroded() { return eroded; }, flux: { FL, FR, FU, FD }, H0, crew, setCrew, dirty, snd, goal, GOALS, RIVERS, YARD, GRAVEL, CAMP, MARSH, SPEC, riverAt, tchunks, machines, H, W, M, D, BED, stats, hAt, select, save, trees, rocks, renderer, scene, camera, get jobs() { return jobs; }, get active() { return active; },
     step(n, input = {}) { for (let i = 0; i < n; i++) { Object.assign(inp, ZERO, input); if (i > 0) inp.act = false; update(1 / 30); } },
     pause(on) { paused = !!on; },
     cab(on) { cabView = !!on; },

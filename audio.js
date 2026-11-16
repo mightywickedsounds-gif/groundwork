@@ -332,6 +332,38 @@ export class Sound {
       this.burst(this.crackle, p, { gain: .5, attack: .01, decay: .5, type: 'highpass', f: 1500 });
     }, 1250);
   }
+  // a hammer driving a nail into timber: a dull wooden knock with a little ring from the steel head
+  tok(x, y, z, amp = .5) {
+    if (!this.c || !isFinite(x + y + z + amp)) return;
+    const c = this.c, t = c.currentTime, p = this.at(x, y, z, 6);
+    for (const [f, a, d] of [[620 + Math.random() * 120, 1, .07], [1450, .35, .04], [2900 + Math.random() * 400, .12, .12]]) {
+      const o = c.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(f * 1.15, t); o.frequency.exponentialRampToValueAtTime(f, t + .015);
+      const g = this.gain(0); g.gain.setValueAtTime(amp * a * .35, t); g.gain.exponentialRampToValueAtTime(.0001, t + d);
+      o.connect(g).connect(p); o.start(t); o.stop(t + d + .03);
+    }
+    this.burst(this.white, p, { gain: amp * .4, attack: .001, decay: .03, type: 'bandpass', f: 1800, q: .8 });
+  }
+  // chainsaws: a buzzing two-stroke that bogs down when the chain is in the wood. One voice per saw (id).
+  saw(id, x, y, z, on, cutting) {
+    if (!this.c || !isFinite(x + y + z)) return;
+    this.saws = this.saws || new Map();
+    let v = this.saws.get(id);
+    if (!v && !on) return;
+    if (!v) {
+      const c = this.c, o = c.createOscillator(), o2 = c.createOscillator(); o.type = 'sawtooth'; o2.type = 'square';
+      const sh = c.createWaveShaper(), cv = new Float32Array(256); for (let i = 0; i < 256; i++) { const q = i / 128 - 1; cv[i] = Math.tanh(q * 3); } sh.curve = cv;
+      const bp = this.filt('bandpass', 1400, .8), hp = this.filt('highpass', 180), g = this.gain(0), pan = this.panner(7);
+      const n = this.loop(this.white), ng = this.gain(.05), nb = this.filt('bandpass', 3500, .6);
+      o.connect(sh); o2.connect(this.gain(.3)).connect(sh); sh.connect(bp).connect(hp).connect(g); n.connect(nb).connect(ng).connect(g);
+      g.connect(pan).connect(this.bus); o.start(); o2.start();
+      v = { o, o2, g, pan, n, f: 120 }; this.saws.set(id, v);
+    }
+    const t = this.c.currentTime, f = !on ? 0 : cutting ? 155 + Math.sin(t * 7) * 6 : 210;
+    v.f += (f - v.f) * .2;
+    v.o.frequency.setTargetAtTime(Math.max(40, v.f), t, .05); v.o2.frequency.setTargetAtTime(Math.max(40, v.f) * .5, t, .05);
+    v.g.gain.setTargetAtTime(on ? (cutting ? .1 : .055) : 0, t, .08);
+    this.setPos(v.pan, x, y, z);
+  }
   splash(x, y, z, amt = 1) {
     if (!this.c) return;
     const p = this.at(x, y, z, 8);
