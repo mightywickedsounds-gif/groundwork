@@ -2,12 +2,12 @@
 // water flows over it (a "virtual pipes" shallow-water model), and the whole valley is saved in the
 // browser so nothing ever resets.
 import * as THREE from 'three';
-import { makeTextures } from './textures.js?v=8';
-import * as MOD from './models.js?v=8';
-import { Sound } from './audio.js?v=8';
-import { makeCrew } from './crew.js?v=8';
-import { makeWorks } from './construct.js?v=8';
-import { makePeople } from './people.js?v=8';
+import { makeTextures } from './textures.js?v=9';
+import * as MOD from './models.js?v=9';
+import { Sound } from './audio.js?v=9';
+import { makeCrew } from './crew.js?v=9';
+import { makeWorks } from './construct.js?v=9';
+import { makePeople } from './people.js?v=9';
 
 const N = 256, NN = N * N;           // 256 x 256 cells, 1 m each
 const SAVE_KEY = 'groundwork.save.v3';   // v1 (the first, smaller valley) is left untouched in the browser
@@ -2973,7 +2973,6 @@ function start() {
     draw(n = 1) { for (let i = 0; i < n; i++) { Object.assign(inp, ZERO); update(1 / 30, true); } drawFrame(); },   // tests: one drawn frame while paused
     step(n, input = {}) { for (let i = 0; i < n; i++) { Object.assign(inp, ZERO, input); if (i > 0) inp.act = false; update(1 / 30); } },
     pause(on) { paused = !!on; },
-    draw(n = 1) { for (let i = 0; i < n; i++) update(1 / 30, true); drawFrame(); },
     cab(on) { cabView = !!on; },
     camSet(off, pitch, dist) { camOff = off; camPitch = pitch; camDist = dist; lastDrag = performance.now(); },
     render() { updateCamera(1); camera.position.copy(_cam); drawFrame(); } };

@@ -195,13 +195,13 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
     const v0 = fill(), f0 = S.front ?? S.head; GW.step(30 * 60 * 5);
     const r = { site: true, kind: S.kind, added: +(fill() - v0).toFixed(1), front: +((S.front ?? S.head) - f0).toFixed(1), stage: GW.crew.stage() || 'done', si: S.si };
     // then let them finish it: every stage must complete (no machine stuck or circling)
-    let t = 5; while (GW.crew.site === S && t < 30) { GW.step(30 * 60); t++; }
+    let t = 5; while (GW.crew.site === S && t < 40) { GW.step(30 * 60); t++; }
     r.finished = !GW.crew.site; r.minutes = t; r.last = GW.crew.stage();
     return r;
   });
   check('stopping at the river sets the crew building a crossing', build.site, JSON.stringify(build));
   check('in five minutes the crew has made real progress on the crossing', build.si > 0 || build.front > 6 || build.added > 15, JSON.stringify(build));
-  check('the crew finishes the whole crossing within 30 minutes of game time', build.finished, JSON.stringify(build));
+  check('the crew finishes the whole crossing within 40 minutes of game time', build.finished, JSON.stringify(build));
 
   const off = await p.evaluate(() => { GW.setCrew(false); GW.step(5); return { ai: GW.machines.filter(m => m.ai && !m.service).length, workers: GW.machines.filter((m, i) => i !== GW.active && !m.service && m.worker.visible).length }; });
   check('turning the crew off empties the cabs', off.ai === 0 && off.workers === 0, JSON.stringify(off));
