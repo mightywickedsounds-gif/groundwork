@@ -95,12 +95,36 @@
   #help .sub { color:var(--dim); margin:0 0 20px; font-size:14px; }
   #help .keys { display:grid; grid-template-columns:auto 1fr; gap:9px 18px; font-size:14px; align-items:center; }
   #help .keys > span:nth-child(odd) { text-align:right; white-space:nowrap; }
+  #help .keys .hr { height:1px; background:rgba(244,241,234,.18); }
+  #help .wrap { max-height:calc(100vh - 20px); overflow-y:auto; }
   #help .note { color:var(--dim); font-size:13px; margin:20px 0 0; line-height:1.45; }
   #help .go { margin-top:22px; border:0; background:var(--acc); color:#16120e; font:700 15px var(--font); letter-spacing:.12em; text-transform:uppercase; padding:11px 26px; cursor:pointer; }
   body.touch #help .keys .kb { display:none; }
   body:not(.touch) #help .keys .tc { display:none; }
 
   #loading { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:#111214; z-index:30; font-weight:700; letter-spacing:.3em; font-size:14px; color:var(--dim); }
+
+  /* boss view: crew list (top left), orders (bottom right), a hint line, the BOSS button while driving */
+  #crewList { position:fixed; left:max(18px, env(safe-area-inset-left)); top:max(16px, env(safe-area-inset-top)); width:230px; display:none; }
+  #crewList .h { font-size:17px; font-weight:700; margin-bottom:6px; }
+  #crewList button { display:flex; width:100%; justify-content:space-between; gap:10px; padding:5px 0; border:0; border-bottom:1px solid rgba(244,241,234,.14); background:none; color:var(--ink); font:600 12px var(--font); letter-spacing:.08em; text-transform:uppercase; cursor:pointer; text-shadow:var(--shadow); }
+  #crewList button span:last-child { color:#f2d24e; font-weight:500; white-space:nowrap; }
+  #crewList button.idle span:last-child { color:var(--dim); }
+  #orders { position:fixed; right:max(16px, env(safe-area-inset-right)); bottom:max(16px, env(safe-area-inset-bottom)); display:none; flex-direction:column; gap:8px; align-items:flex-end; }
+  #orders button { min-width:150px; padding:13px 18px; border:0; border-radius:4px; background:rgba(12,13,15,.55); color:var(--ink); font:700 14px var(--font); letter-spacing:.12em; text-transform:uppercase; cursor:pointer; box-shadow:inset 0 -2px 0 var(--acc); }
+  #orders button.on { background:var(--acc); color:#16120e; }
+  #orders button.quiet { box-shadow:none; color:var(--dim); min-width:0; padding:9px 14px; font-size:12px; }
+  #hint { position:fixed; left:0; right:0; bottom:22%; text-align:center; pointer-events:none; display:none; font-size:18px; font-weight:700; color:#f2d24e; letter-spacing:.14em; }
+  #bossBtn { height:34px; border:0; border-radius:4px; background:rgba(12,13,15,.45); color:var(--ink); font:700 13px var(--font); letter-spacing:.12em; padding:0 12px; cursor:pointer; }
+  body.boss #hud, body.boss #touch, body.boss #bossBtn { display:none !important; }
+  body.boss #crewList { display:block; }
+  body.boss #orders { display:flex; }
+  body.boss #minimap { bottom:auto; top:calc(max(14px, env(safe-area-inset-top)) + 70px); width:180px; height:180px; }
+  body.touch.boss #minimap { display:none !important; }
+  @media (max-width:640px), (max-height:500px) {
+    #crewList { width:168px; } #crewList .h { font-size:13px; margin-bottom:2px; } #crewList button { font-size:10px; padding:3px 0; }
+    #orders button { min-width:128px; padding:11px 14px; font-size:13px; }
+  }
 
   /* touch controls */
   #touch { display:none; }
@@ -148,10 +172,18 @@
     <div id="crewSt" class="cap num"><span id="crewName"></span><span id="crewPct"></span></div>
     <div class="gauge" id="crewG"><i id="crewBar"></i></div>
   </div>
+  <button id="bossBtn" aria-label="Back to the boss view">BOSS</button>
   <button id="spdBtn" aria-label="Game speed">1X</button>
   <button id="menuBtn" aria-label="Pause"><svg viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/></svg></button>
 </div>
 
+<div id="crewList" class="t"></div>
+<div id="orders">
+  <button data-o="cross">Build crossing</button>
+  <button data-o="build">Build cabin</button>
+  <button data-o="stop" class="quiet">Stop job</button>
+</div>
+<div id="hint" class="t"></div>
 <div id="mbar"></div>
 <canvas id="minimap" width="400" height="400"></canvas>
 <div id="toast" class="t cap"></div>
@@ -171,9 +203,15 @@
 <div id="help" class="over">
   <div class="wrap t">
     <h1>GROUND<span>WORK</span></h1>
-    <p class="sub">Every cut and pile stays where you leave it.</p>
+    <p class="sub">You run the crew. Give orders, get paid, jump in when you want.</p>
     <div class="keys">
-      <span class="kb"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span class="kb">Drive</span>
+      <span class="tc">Drag / pinch</span><span class="tc">Move and zoom the view</span>
+      <span class="kb"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> wheel</span><span class="kb">Move and zoom the view</span>
+      <span>Order button</span><span>Then tap the river, or where to build</span>
+      <span>Tap a machine</span><span>Drive it yourself</span>
+      <span>Boss <kbd class="kb">B</kbd></span><span>Back to giving orders</span>
+      <span class="hr"></span><span class="hr"></span>
+      <span class="kb"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span class="kb">Drive (in a machine)</span>
       <span class="kb"><kbd>R</kbd><kbd>F</kbd></span><span class="kb">Raise / lower blade or bucket (excavator: reach)</span>
       <span class="kb"><kbd>Q</kbd><kbd>E</kbd></span><span class="kb">Swing excavator</span>
       <span class="kb"><kbd>T</kbd></span><span class="kb">Game speed 1x / 2x / 4x</span>
@@ -188,7 +226,7 @@
       <span class="tc">Orange button</span><span class="tc">Dig, dump, tip bed</span>
       <span class="tc">Bottom bar</span><span class="tc">Switch machine</span>
     </div>
-    <p class="note">The yellow beam marks your next goal. Rivers are too deep to drive through: push dirt or gravel in to build a crossing, or dam them. Water runs downhill and fills whatever you dig. Dirt slides if piled too steep.</p>
+    <p class="note">The yellow beam marks the next contract. Rivers are too deep to drive through; your crew can bridge them.</p>
     <button class="go" id="helpGo">Play</button>
   </div>
 </div>
