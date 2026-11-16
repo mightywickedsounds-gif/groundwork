@@ -55,6 +55,8 @@ On GitHub, open this repository's **Settings, then Pages**. Under "Build and dep
 
 `node tests/play.cjs` opens the game in a hidden Chromium browser (needs Playwright) and checks:
 
+- the game starts in the boss view with the crew on; an order at a creek starts a crossing and the crew get going; tapping a machine gets you in and BOSS gets you out;
+
 - the river reaches the far side;
 - the dozer cuts and leaves its pile;
 - the loader fills and dumps into the hauler;
@@ -248,3 +250,19 @@ Tested: all 13 checks pass. The dam check now uses a wider dam and a little more
 - **Trees and grass:** trees sway in the wind, each in its own rhythm, and leaves glow when the sun is behind them; grass grows in thick and thin patches with dry yellow areas; meadow colour varies; damp dark soil along the water.
 
 **Tested:** all 25 automatic checks pass. That includes a new check that the crew finishes the whole crossing (it took 25-27 minutes in the test runs; the check allows 40, because the time varies from run to run). The old crew check failed at the start of this round. Screenshots on High/Medium were checked for water, clods, cabs and lighting. I can't check the frame rate on a real graphics card or phone from here; if it runs slowly, switch to Medium or Low in the menu, and please tell me.
+
+### Round 10: boss mode (owner: buggy, unrealistic, confusing, feels like a simulation not a game; plays on a phone)
+
+The owner chose "boss mode": you run the crew and give orders, and jump into a machine when you want. The full crew stays.
+
+- **The game now starts looking down on the valley.** Drag to move the view, pinch to zoom (on a computer: WASD or arrows, mouse wheel, Q/E to turn).
+- **Orders, bottom right:** BUILD CROSSING, then tap a river or creek; BUILD CABIN, then tap where. STOP JOB cancels a crossing. The view moves to the new job.
+- **Crew list, top left:** every machine and the builders, with what they're doing in a word or two (PUSHING DIRT, LOADING, HAULING, FRAMING 40%, WAITING...). Tap a row to look at that machine.
+- **Drive any machine:** tap it (or its button in the bottom bar). The worker gets out and you drive it as before; BOSS (top right, or B) takes you back. While you drive, the crew follow you and build where you stop at water, as before; in the boss view they wait for orders and go back to the yard if they're far out.
+- **Contracts, top right:** bridge the river ($2,500), build a cabin ($1,500), cross the south creek, cross the north creek ($1,500 each), build three buildings ($2,500). A yellow beam marks the river ones. Every finished bridge, crossing or building also pays.
+- **Seeing the work:** from above, trees over a working machine or the building site thin out.
+- **Phones:** the minimap is hidden in the boss view (the view is the map). Far-away water is refreshed a few times a second instead of every frame (that and the water simulation were most of the work per frame). The picture resolution now drops automatically when the phone can't keep up and comes back when it can.
+- **Machine feel:** bodies settled with a boat-like wobble after every bump and stop; they now settle in one small dip like heavy equipment. Less camera rumble.
+- **Help screen** rewritten for boss mode.
+
+**Tested:** all 29 automatic checks pass (25 old, 4 new for boss mode). Screenshots on an iPhone-sized screen were checked for the layout. I can't measure the frame rate on a real phone from here, so please tell me if it's still laggy, and on which phone.

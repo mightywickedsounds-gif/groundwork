@@ -2,12 +2,12 @@
 // water flows over it (a "virtual pipes" shallow-water model), and the whole valley is saved in the
 // browser so nothing ever resets.
 import * as THREE from 'three';
-import { makeTextures } from './textures.js?v=9';
-import * as MOD from './models.js?v=9';
-import { Sound } from './audio.js?v=9';
-import { makeCrew } from './crew.js?v=9';
-import { makeWorks } from './construct.js?v=9';
-import { makePeople } from './people.js?v=9';
+import { makeTextures } from './textures.js?v=10';
+import * as MOD from './models.js?v=10';
+import { Sound } from './audio.js?v=10';
+import { makeCrew } from './crew.js?v=10';
+import { makeWorks } from './construct.js?v=10';
+import { makePeople } from './people.js?v=10';
 
 const N = 256, NN = N * N;           // 256 x 256 cells, 1 m each
 const SAVE_KEY = 'groundwork.save.v3';   // v1 (the first, smaller valley) is left untouched in the browser
@@ -2682,6 +2682,9 @@ function doOrder(o, x, z) {
   const why = o === 'cross' ? crew.orderAt(x, z) : people.orderAt(x, z, 'cabin');
   if (why) { toast(why, 2200); return; }
   order = null; refreshOrders();
+  // look at the whole job: from the dirt pit to the water (or the building site), a little up from the bottom bar
+  if (o === 'cross' && crew.site) { const [x, zz] = crew.pt(crew.site, crew.site.Ls * .55); bossCam.x = x; bossCam.z = zz + 6; }
+  else if (people.site) { bossCam.x = people.site.x; bossCam.z = people.site.z + 6; }
 }
 let crewHtml = '';
 function bossHud() {
