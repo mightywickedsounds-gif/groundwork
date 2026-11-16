@@ -36,8 +36,8 @@ function addGrime(mat, U) {
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.29, .21, .14), gwAmt * .85);
         roughnessFactor = mix(roughnessFactor, .95, gwAmt);
         // wear and damage: scuffs to bare steel, then rust streaks and dents' dark creases
-        float dmN = texture2D(tGrime, vec2(vGLP.x + vGLP.y * .7, vGLP.z - vGLP.y * .6) * 1.3).r;
-        float dmScuff = smoothstep(.76 - uDmg * .22, .8 - uDmg * .22, dmN) * step(.05, uDmg);
+        float dmN = texture2D(tGrime, vec2(vGLP.x + vGLP.y * .7, vGLP.z - vGLP.y * .6) * 3.1).r;
+        float dmScuff = smoothstep(.84 - uDmg * .2, .88 - uDmg * .2, dmN) * step(.05, uDmg);
         float dmRust = smoothstep(.62 - uDmg * .22, .7 - uDmg * .22, texture2D(tGrime, vGLP.zy * .7 + .37).r) * smoothstep(.35, .8, uDmg);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.34, .33, .32), dmScuff * .3);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.33, .17, .08), dmRust * .75);
