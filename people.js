@@ -470,17 +470,21 @@ export function makePeople(G) {
   const kbThere = m => m.kbA && Math.abs(angWrap(m.kbT.slew - m.kbA.slew)) < .04 && Math.abs(m.kbT.a1 - m.kbA.a1) < .04 && Math.abs(m.kbT.a2 - m.kbA.a2) < .04;
   function logJob(dt, S) {
     const m = logTruck, st = m.ppl; st.t += dt;
-    const logs = siteTrees(S).map(i => G.trees[i]).filter(t => t.st === 2 && t.cut);
+    // logs the truck has tried and failed to get alongside twice are left lying (the fallers buck them up by hand)
+    const logs = siteTrees(S).map(i => G.trees[i]).filter(t => t.st === 2 && t.cut && (t.tries || 0) < 2);
     let c = null;
     if (st.st === 'go') {
-      const tgt = logs[0] ? nearestSpot(S, logs) : null;
-      if (!tgt || m.loaded >= 9) { st.st = 'leave'; return; }
+      // pick the spot once per trip (the free spot near a log shifts as the truck itself moves)
+      if (!st.tgt && logs[0]) st.tgt = nearestSpot(S, logs);
+      const tgt = logs[0] ? st.tgt : null;
+      if (!tgt || m.loaded >= 9) { st.st = 'leave'; st.tgt = null; return; }
       const r = G.crewDrive(m, tgt[0], tgt[1], 3, .6); c = r.c;
-      if (r.there || st.t > 60) { st.st = 'load'; st.t = 0; m.kbT = { ...KB, open: 1 }; }
+      if (r.there || st.t > 60) { st.st = 'load'; st.t = 0; st.tgt = null; m.kbT = { ...KB, open: 1 }; }
     } else if (st.st === 'load') {
       c = { throttle: 0, steer: 0, tool: 0, swing: 0, act: false };
       const reach = logs.filter(t => { const [cx, cz] = logMid(t); return Math.hypot(cx - m.x, cz - m.z) < 9; });
       if (!st.log) {
+        if (!reach.length && logs[0]) logs[0].tries = (logs[0].tries || 0) + 1;
         if (!reach.length || m.loaded >= 9) { st.st = logs.length > reach.length && m.loaded < 9 ? 'go' : 'leave'; st.t = 0; m.kbT = { ...KB, open: 1 }; return c; }
         st.log = reach[0]; st.ph = 'reach'; st.t = 0;
       }
@@ -731,8 +735,11 @@ export function makePeople(G) {
       const left = siteTrees(S).map(i => G.trees[i]).filter(t => t.st === 0 || t.st === 1 || (t.st === 2 && t.cut && !t.lim));
       if (!left.length) { setPhase(S, 'haul'); G.toast('Crew: logs to haul', 2000); }
     } else if (S.phase === 'haul') {
-      const logs = siteTrees(S).map(i => G.trees[i]).filter(t => t.st === 2 && t.cut);
-      if (!logs.length && !logTruck) setPhase(S, 'grade');
+      const logs = siteTrees(S).map(i => G.trees[i]).filter(t => t.st === 2 && t.cut && (t.tries || 0) < 2);
+      if (!logs.length && !logTruck) {
+        for (const i of siteTrees(S)) { const t = G.trees[i]; if (t.st === 2 && t.cut) G.treeGone(t); }   // the leftovers, cut up and carried off
+        setPhase(S, 'grade');
+      }
       else if (!logTruck && logs.length) { logTruck = spawnTruck('logtruck', S); logTruck.loaded = 0; }
     } else if (S.phase === 'grade') {
       // stumps on the pad come out as it's levelled
