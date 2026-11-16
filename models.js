@@ -36,10 +36,10 @@ function addGrime(mat, U) {
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.29, .21, .14), gwAmt * .85);
         roughnessFactor = mix(roughnessFactor, .95, gwAmt);
         // wear and damage: scuffs to bare steel, then rust streaks and dents' dark creases
-        float dmN = texture2D(tGrime, vGLP.xz * 1.9 + vGLP.y * 1.3).r;
+        float dmN = texture2D(tGrime, vec2(vGLP.x + vGLP.y * .7, vGLP.z - vGLP.y * .6) * 1.3).r;
         float dmScuff = smoothstep(.76 - uDmg * .22, .8 - uDmg * .22, dmN) * step(.05, uDmg);
         float dmRust = smoothstep(.62 - uDmg * .22, .7 - uDmg * .22, texture2D(tGrime, vGLP.zy * .7 + .37).r) * smoothstep(.35, .8, uDmg);
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.38, .37, .36), dmScuff * .45);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.34, .33, .32), dmScuff * .3);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.33, .17, .08), dmRust * .75);
         diffuseColor.rgb *= 1. - smoothstep(.85, .9, dmN) * uDmg * .5;
         roughnessFactor = mix(roughnessFactor, .9, dmRust);`)
@@ -60,9 +60,10 @@ export function machineMats(T, color) {
     rubber: g({ color: 0x1b1b1c, roughness: .9, metalness: 0 }),
     hose: g({ color: 0x101012, roughness: .55, metalness: 0 }),
     chrome: new THREE.MeshStandardMaterial({ color: 0xdfe4ea, roughness: .1, metalness: 1 }),
-    glass: new THREE.MeshStandardMaterial({ color: 0x1a2731, roughness: .03, metalness: .9, transparent: true, opacity: .42, envMapIntensity: 1.6, depthWrite: false }),
+    glass: new THREE.MeshStandardMaterial({ color: 0x34454f, roughness: .02, metalness: 1, transparent: true, opacity: .32, envMapIntensity: 2.2, depthWrite: false }),
     interior: new THREE.MeshStandardMaterial({ color: 0x252525, roughness: .85 }),
     seat: new THREE.MeshStandardMaterial({ color: 0x3b3d40, roughness: .9 }),
+    screen: new THREE.MeshStandardMaterial({ color: 0x0c1a14, emissive: 0x1f6a55, emissiveIntensity: .55, roughness: .2 }),
     light: new THREE.MeshStandardMaterial({ color: 0xfffaf0, emissive: 0xfff3d6, emissiveIntensity: .7, roughness: .15 }),
     tail: new THREE.MeshStandardMaterial({ color: 0x8a1010, emissive: 0x7a0808, emissiveIntensity: .5, roughness: .2 }),
     beacon: new THREE.MeshStandardMaterial({ color: 0xffa31a, emissive: 0xff8800, emissiveIntensity: .15, transparent: true, opacity: .9, roughness: .2 }),
@@ -351,6 +352,12 @@ function detailCab(g, w, h, d, M) {
     rbox(s, .06, .05, .03, M.frame, -.02, .28, d / 2 + .0, .01);
     cylY(s, .012, .012, .5, M.frame, -w * .38, h + .5, -d * .38, 5);                                    // aerial
     rbox(s, w * .9, .025, d * .9, M.frame, 0, .105, 0, .005);                                           // floor mat
+    rbox(s, w * .92, .02, d * .92, M.interior, 0, h + .085, 0, .005);                                   // headliner
+    rbox(s, .3, .16, .1, M.seat, 0, 1.3, -d * .12 - .27, .04);                                          // headrest
+    for (const sx of [-1, 1]) { rbox(s, .07, .05, .36, M.seat, sx * .3, .78, -d * .12 - .04, .02); rbox(s, .11, .03, .2, M.frame, sx * .16, .16, d / 2 - .22, .01).rotation.x = -.5; }
+    const scr = rbox(s, .16, .11, .03, M.interior, w * .3, .98, d / 2 - .13, .01); scr.rotation.y = -.5;
+    const scrOn = rbox(s, .13, .08, .012, M.screen, w * .3 - .008, .98, d / 2 - .146, .004); scrOn.rotation.y = -.5;
+    for (let i = 0; i < 4; i++) rbox(s, .03, .012, .03, i === 1 ? M.tail : M.light, -w * .22 + i * .07, .79, d / 2 - .2, .004);
     cylY(s, .02, .02, .34, M.interior, 0, .72, d * .2, 6); const sw = new THREE.Mesh(new THREE.TorusGeometry(.15, .018, 6, 16), M.interior); sw.position.set(0, .9, d * .2); sw.rotation.x = -1.1; s.add(sw);
   });
 }

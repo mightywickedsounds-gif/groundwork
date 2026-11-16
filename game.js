@@ -743,7 +743,7 @@ function waterMaterial() {
     uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
       uTime: { value: 0 }, tN: { value: null }, uSun: { value: SUN_DIR.clone() }, uSunCol: { value: new THREE.Color(1, .92, .8) },
       uSky: { value: new THREE.Color(.13, .3, .68) }, uHor: { value: FOG.clone().multiplyScalar(1.05) },
-      uDeep: { value: new THREE.Color(.015, .07, .075) }, uShallow: { value: new THREE.Color(.11, .2, .15) },
+      uDeep: { value: new THREE.Color(.008, .045, .05) }, uShallow: { value: new THREE.Color(.1, .17, .12) },
     }]),
     vertexShader: `
       #include <common>
@@ -765,26 +765,38 @@ function waterMaterial() {
       void main() {
         if (vW < 0.008) discard;
         vec2 fl = vFlow, uv = vWP.xz * .16;
+        float speed = length(fl), dist = length(cameraPosition - vWP), calm = 1. / (1. + dist * .018);
         float ph = fract(uTime * .12), w1 = abs(ph - .5) * 2.;
         vec4 a1 = texture2D(tN, uv - fl * ph * .9 + vec2(uTime * .006, 0.));
         vec4 a2 = texture2D(tN, uv - fl * fract(ph + .5) * .9 + vec2(.37, .21));
         vec4 b1 = texture2D(tN, uv * 2.3 + vec2(-uTime * .011, uTime * .014));
-        vec3 n1 = mix(a1.xyz, a2.xyz, w1) * 2. - 1., n2 = b1.xyz * 2. - 1.;
-        vec3 nt = normalize(vec3(n1.xy * .9 + n2.xy * .5, 1.6));
+        vec4 b2 = texture2D(tN, uv * 5.1 - fl * uTime * .12 + vec2(uTime * .02, -uTime * .017));
+        vec3 n1 = mix(a1.xyz, a2.xyz, w1) * 2. - 1., n2 = b1.xyz * 2. - 1., n3 = b2.xyz * 2. - 1.;
+        // still water is nearly a mirror; the faster it runs the more it is broken up (and less so far away, where
+        // fine ripples would only sparkle)
+        float chop = (.16 + min(speed, 2.5) * .5) * mix(.3, 1., calm);
+        vec3 nt = normalize(vec3((n1.xy * .9 + n2.xy * .5 + n3.xy * .35 * calm) * chop, 1.));
         vec3 N = normalize(vec3(nt.x, nt.z, nt.y));
         vec3 V = normalize(cameraPosition - vWP);
         float fres = .02 + .98 * pow(1. - max(dot(N, V), 0.), 5.);
-        vec3 R = reflect(-V, N);
-        vec3 skyc = mix(uHor, uSky, clamp(R.y * 1.8, 0., 1.));
-        float spec = pow(max(dot(R, uSun), 0.), 350.) * 9. + pow(max(dot(R, uSun), 0.), 40.) * .25;
-        float depthF = 1. - exp(-vW * 1.1);
-        vec3 body = mix(uShallow, uDeep, depthF) * (.75 + .25 * max(dot(N, uSun), 0.));
+        vec3 R = reflect(-V, N); R.y = abs(R.y);
+        // what it mirrors: sky overhead, haze lower down, and the dark line of the forest along the banks
+        vec3 skyc = mix(uHor, uSky, clamp(R.y * 1.7, 0., 1.));
+        skyc = mix(vec3(.018, .04, .022), skyc, smoothstep(.04, .3, R.y + (n2.x + n1.y) * .05));
+        float sd = max(dot(R, uSun), 0.);
+        float spec = pow(sd, 420.) * 14. + pow(sd, 48.) * .3;
+        // depth: the bed shows through the shallows, then green, then near-black water
+        float depthF = 1. - exp(-vW * 1.5);
+        vec3 body = mix(uShallow, uDeep, depthF) * (.7 + .3 * max(dot(N, uSun), 0.));
+        body = mix(body, uDeep * .45, smoothstep(.9, 2.4, vW));
         vec3 col = mix(body, skyc, fres) + uSunCol * spec;
-        float speed = length(fl);
+        // foam: a line along the edge, streaks where the current is fast, white water where it is fast and shallow
         float fn = mix(a1.a, a2.a, w1) * .6 + texture2D(tN, uv * 3.7 - fl * uTime * .3).a * .4;
-        float foam = smoothstep(.58, .88, fn) * (smoothstep(.2, .0, vW) * .8 + clamp(speed * .22, 0., .4));
-        col = mix(col, vec3(.85, .88, .86), foam * .75);
-        float alpha = clamp(.38 + depthF * .58 + fres * .3 + foam * .5, 0., .97) * smoothstep(.008, .07, vW);
+        float rush = smoothstep(.7, 2.2, speed), rapid = rush * smoothstep(.7, .12, vW);
+        float foam = smoothstep(.6 - rapid * .25, .86 - rapid * .2, fn) * (smoothstep(.16, .0, vW) * .85 + rush * .45 + rapid * .5);
+        foam = clamp(foam, 0., 1.);
+        col = mix(col, vec3(.86, .89, .87) * (.75 + .25 * max(dot(N, uSun), 0.)), foam * .8);
+        float alpha = clamp(.3 + depthF * .66 + fres * .45 + foam * .5, 0., .98) * smoothstep(.008, .07, vW);
         gl_FragColor = vec4(col, alpha);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -1067,15 +1079,40 @@ function updateRing() {
 }
 
 // ---------------------------------------------------------------- trees, rocks, grass
+const windU = { uTime: { value: 0 } };
+// card trees: the crowns sway in the wind (more toward the top and the branch tips), each tree in its own time, and
+// leaves glow when the sun is behind them
+function leafy(sh, trunk) {
+  sh.uniforms.uTime = windU.uTime;
+  sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;')
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+      #ifdef USE_INSTANCING
+        { vec4 gIP = instanceMatrix * vec4(0., 0., 0., 1.);
+          float gph = gIP.x * .37 + gIP.z * .29, gh = max(position.y, 0.);
+          float gsw = sin(uTime * .9 + gph) + .45 * sin(uTime * 2.1 + gph * 1.7);
+          float gtip = ${trunk ? '0.' : 'length(position.xz)'};
+          transformed.x += gsw * gh * gh * .0011 + sin(uTime * 2.7 + gph + position.y * .8) * gtip * .012;
+          transformed.z += gsw * gh * gh * .0007 + cos(uTime * 2.3 + gph + position.y * .6) * gtip * .012;
+          transformed.y += sin(uTime * 3.1 + gph + position.x + position.z) * gtip * .008; }
+      #endif`);
+  if (!trunk) sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      #if NUM_DIR_LIGHTS > 0
+        { float gback = max(dot(-normalize(vViewPosition), directionalLights[0].direction), 0.);
+          totalEmissiveRadiance += diffuseColor.rgb * vec3(1.1, 1.25, .55) * pow(gback, 3.) * .55; }
+      #endif`);
+}
 const folMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: T.foliage, alphaTest: .42, side: THREE.DoubleSide, roughness: .88, alphaToCoverage: true });
 const barkTex = T.bark.clone(); barkTex.repeat.set(2, 5); barkTex.needsUpdate = true;
 const barkMat = new THREE.MeshStandardMaterial({ map: barkTex, roughness: .95, color: 0xd2c2ac });
+folMat.onBeforeCompile = sh => leafy(sh, false); folMat.customProgramCacheKey = () => 'gw-fol';
+barkMat.onBeforeCompile = sh => leafy(sh, true); barkMat.customProgramCacheKey = () => 'gw-bark';
 const TREE_GEOS = [MOD.spruceGeo(1, 12), MOD.spruceGeo(2, 14.5), MOD.spruceGeo(3, 16.5), MOD.leafyGeo(1, 10), MOD.leafyGeo(2, 12)];
 const TREE_H = [12, 14.5, 16.5, 10, 12];
 // trees in the valley thin out (a dithered fade) when they stand between the camera and the machine you're watching
 function fadeable(mat, key) {
   const m = mat.clone();
   m.onBeforeCompile = sh => {
+    leafy(sh, key === 'bark');
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float aFade; varying float vFade;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFade = aFade;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
@@ -1265,6 +1302,7 @@ if (Q.grass > 0) {
   grassIM = new THREE.InstancedMesh(MOD.tuftGeo(), grassMat, Q.grass);
   grassIM.receiveShadow = true; grassIM.frustumCulled = false; grassIM.count = 0; scene.add(grassIM);
 }
+const _gc = new THREE.Color();
 const hashf = (a, b) => { const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return s - Math.floor(s); };
 function updateGrass(dt, me) {
   if (!grassIM) return;
@@ -1286,13 +1324,17 @@ function updateGrass(dt, me) {
     for (let q = 0; q < (bank ? 3 : 2) && n < Q.grass; q++) {
       const hx = hashf(i + q * .37, j), hz = hashf(j + q * .51, i + 3.1);
       if (dd > R * R * .55 && hx < .5) continue;
-      const x = i + hx - .5, z = j + hz - .5, s = .7 + hashf(i, j + q) * .7;
+      const patch = vnoise(i * .11 + 3.3, j * .11 - 1.7) + .5 * vnoise(i * .37, j * .37);   // about -.75 .. .75
+      if (!bank && patch < -.18 && hz < .55) continue;
+      const x = i + hx - .5, z = j + hz - .5, s = (.7 + hashf(i, j + q) * .7) * clamp(1 + patch * .9, .55, 1.7);
+      { const dryp = clamp(vnoise(i * .07 - 9.1, j * .07 + 4.2) * 2.2 + .25, 0, 1), sh = .72 + hashf(j * 1.3 + q, i * .7) * .56;
+        _gc.setRGB(sh * (1 + dryp * .55), sh * (1 + dryp * .22), sh * (1 - dryp * .3)); grassIM.setColorAt(n, _gc); }
       _q.setFromAxisAngle(_ax.set(0, 1, 0), hx * 6.28);
       _m4.compose(_v.set(x, hAt(x, z) - .03, z), _q, _s.set(s * (bank ? .8 : 1), s * (.8 + hz * .5) * (bank ? 2.6 + hz * 1.4 : 1), s * (bank ? .8 : 1)));
       grassIM.setMatrixAt(n++, _m4);
     }
   }
-  grassIM.count = n; grassIM.instanceMatrix.needsUpdate = true;
+  grassIM.count = n; grassIM.instanceMatrix.needsUpdate = true; if (grassIM.instanceColor) grassIM.instanceColor.needsUpdate = true;
 }
 
 // the forest beyond the work site (fixed scenery)
@@ -1453,22 +1495,22 @@ function leavePrints(m, dist, dyaw) {
 }
 
 // clods and stones that tumble out of buckets and beds (just for show: the ground has already been changed)
-const CMAX = 360;
+const CMAX = quality === 'low' ? 360 : 900;
 const clodGeo = (() => { const g = new THREE.IcosahedronGeometry(.11, 1), p = g.attributes.position; for (let i = 0; i < p.count; i++) { const k = .75 + .45 * Math.abs(Math.sin(p.getX(i) * 41 + p.getY(i) * 23 + p.getZ(i) * 17)); p.setXYZ(i, p.getX(i) * k, p.getY(i) * k * .8, p.getZ(i) * k); } g.computeVertexNormals(); return g; })();
 const chunkIM = new THREE.InstancedMesh(clodGeo, new THREE.MeshStandardMaterial({ roughness: 1, map: T.dirt }), CMAX);
 chunkIM.castShadow = true; chunkIM.frustumCulled = false; scene.add(chunkIM);
 const cPos = new Float32Array(CMAX * 3), cVel = new Float32Array(CMAX * 3), cLife = new Float32Array(CMAX), cRot = new Float32Array(CMAX * 2), cS = new Float32Array(CMAX);
 let cNext = 0, chunksLive = 0;
 { const col = new THREE.Color(); for (let i = 0; i < CMAX; i++) { chunkIM.setMatrixAt(i, _m4.makeScale(0, 0, 0)); chunkIM.setColorAt(i, col.setRGB(.4, .3, .2)); } }
-const CHUNK_DIRT = new THREE.Color(0x5e4029), CHUNK_GRAVEL = new THREE.Color(0x8c8880), _cc = new THREE.Color();
+const CHUNK_DIRT = new THREE.Color(0x9a7352), CHUNK_GRAVEL = new THREE.Color(0x8c8880), _cc = new THREE.Color();
 function chunks(x, y, z, n, gravel, vx = 0, vz = 0, spread = 1) {
   spawn('grain', x, y, z, n * 9, gravel ? [.55, .53, .5] : [.34, .24, .16], { jitter: spread, vx, vz, size: .75 });
-  n = Math.ceil(n * .3);
+  n = Math.ceil(n * .55);
   for (let q = 0; q < n; q++) {
     const i = cNext; cNext = (cNext + 1) % CMAX;
     cPos[i * 3] = x + (Math.random() - .5) * spread; cPos[i * 3 + 1] = y + (Math.random() - .5) * .3; cPos[i * 3 + 2] = z + (Math.random() - .5) * spread;
     cVel[i * 3] = vx + (Math.random() - .5) * 1.2; cVel[i * 3 + 1] = Math.random() * 1.2; cVel[i * 3 + 2] = vz + (Math.random() - .5) * 1.2;
-    cLife[i] = 1.6 + Math.random(); cRot[i * 2] = Math.random() * 6; cRot[i * 2 + 1] = Math.random() * 6; cS[i] = .3 + Math.random() * Math.random() * .8;
+    cLife[i] = 1.6 + Math.random(); cRot[i * 2] = Math.random() * 6; cRot[i * 2 + 1] = Math.random() * 6; cS[i] = .4 + Math.random() * Math.random() * 1.3;
     _cc.copy(gravel ? CHUNK_GRAVEL : CHUNK_DIRT).multiplyScalar(.75 + Math.random() * .5);
     chunkIM.setColorAt(i, _cc);
   }
@@ -1484,10 +1526,13 @@ function updateChunks(dt) {
     cVel[i * 3 + 1] -= 9.8 * dt;
     let x = cPos[i * 3] + cVel[i * 3] * dt, y = cPos[i * 3 + 1] + cVel[i * 3 + 1] * dt, z = cPos[i * 3 + 2] + cVel[i * 3 + 2] * dt;
     const g = hAt(x, z) + .05;
-    if (y < g) { y = g; cVel[i * 3] *= .4; cVel[i * 3 + 2] *= .4; cVel[i * 3 + 1] = -cVel[i * 3 + 1] * .25; cLife[i] = Math.min(cLife[i], .6); }
+    if (y < g) {   // lands: a puff of dust for the big ones, a short roll, then it settles into the heap
+      if (cVel[i * 3 + 1] < -2.5 && cS[i] > .9 && Math.random() < .5) spawn('dust', x, g + .1, z, 1, DIRT_C, { alpha: .3, size: .55 });
+      y = g; cVel[i * 3] *= .45; cVel[i * 3 + 2] *= .45; cVel[i * 3 + 1] = -cVel[i * 3 + 1] * .22; cLife[i] = Math.min(cLife[i], 1.1);
+    }
     cPos[i * 3] = x; cPos[i * 3 + 1] = y; cPos[i * 3 + 2] = z;
     cRot[i * 2] += dt * 6; cRot[i * 2 + 1] += dt * 4;
-    const s = cLife[i] > 0 ? cS[i] * Math.min(1, cLife[i] * 3) : 0;
+    const s = cLife[i] > 0 ? cS[i] * Math.min(1, cLife[i] * 2.5) : 0;
     _q.setFromEuler(new THREE.Euler(cRot[i * 2], cRot[i * 2 + 1], 0));
     chunkIM.setMatrixAt(i, _m4.compose(_v.set(x, y, z), _q, _s.set(s, s, s)));
   }
@@ -1679,6 +1724,22 @@ function machineFx(m, dt, isActive) {
       spawn('smoke', _w.x, _w.y, _w.z, 1, [g, g, g], { jitter: .5, size: 1.1, alpha: .6 });
     }
   }
+  // soil boils off the ends of a cutting blade, and a full bucket on the move sheds a little
+  if (m.type === 'dozer' && m.digSm > .25 && m.v > .3) {
+    const grav = m.digGSm > m.digSm * .5, col = grav ? [.55, .53, .5] : [.33, .23, .15], n = Math.min(4, Math.floor(m.digSm * dt * 14 + Math.random()));
+    for (let q = 0; q < n; q++) {
+      const sx = Math.random() < .5 ? -1 : 1, out = (1.5 + Math.random() * 2) * sx;
+      _w.set(sx * 1.95, m.blade + .15 + Math.random() * .5, 2.85); m.group.localToWorld(_w);
+      spawn('grain', _w.x, _w.y, _w.z, 2, col, { jitter: .25, vx: Math.cos(m.yaw) * out + Math.sin(m.yaw) * m.v, vz: -Math.sin(m.yaw) * out + Math.cos(m.yaw) * m.v, up: -3.5, size: .9 });
+      if (Math.random() < .25) chunks(_w.x, _w.y + .2, _w.z, 1, grav, Math.cos(m.yaw) * out * .7 + Math.sin(m.yaw) * m.v, -Math.sin(m.yaw) * out * .7 + Math.cos(m.yaw) * m.v, .3);
+    }
+    if (Math.random() < dt * 6) { _w.set(0, m.blade + .2, 3.0); m.group.localToWorld(_w); spawn('dust', _w.x, _w.y, _w.z, 1, grav ? GRAVEL_C : DIRT_C, { jitter: 3, alpha: .4, size: 1.1 }); }
+  }
+  if ((m.type === 'excavator' || m.type === 'loader') && m.load.v > .3 && m.bucket && Math.random() < dt * (m.type === 'excavator' ? 5 + Math.abs(m.swingRate || 0) * 14 : Math.abs(m.v) * 1.6)) {
+    _w.set((Math.random() - .5) * (m.type === 'loader' ? 2.4 : .8), 0, m.type === 'loader' ? .8 : .7); m.bucket.localToWorld(_w);
+    spawn('grain', _w.x, _w.y, _w.z, 2, m.load.g > m.load.v * .5 ? [.55, .53, .5] : [.33, .23, .15], { jitter: .3, size: .8 });
+  }
+  m.mats.glass.opacity = cabView && m === machines[active] ? .06 : .32;
   for (const b of m.beacons) b.material.emissiveIntensity = isActive ? (Math.sin(simTime * 9) > .55 ? 4 : .25) : .1;
   // driving through water throws spray
   if (Math.abs(m.v) > .8 && wetAt(m.x, m.z) > .15) {
@@ -2025,7 +2086,7 @@ function toolHauler(m, dt, inp) {
     m.pour += put; m.pourG = grav;
     _p.set(0, 1.4, -4.9); m.group.localToWorld(_p);
     chunks(_p.x, _p.y, _p.z, Math.ceil(dt * 70), grav, -Math.sin(m.yaw) * 1.2, -Math.cos(m.yaw) * 1.2, 2.2);
-    if (Math.random() < dt * 14) dust(_p.x, hAt(_p.x, _p.z) + .4, _p.z, 3, grav ? GRAVEL_C : DIRT_C);
+    if (Math.random() < dt * 22) spawn('dust', _p.x, hAt(_p.x, _p.z) + .4, _p.z, 3, grav ? GRAVEL_C : DIRT_C, { jitter: 2.4, size: 1.5, alpha: .8 });
     m.work = Math.max(m.work, .5);
   }
   const f = m.load.v / s.cap;
@@ -2860,7 +2921,7 @@ function update(dt, draw = true) {
   updateGrass(dt, me);
   aimSun(me.x, me.y, me.z);
   T.clouds.offset.x = simTime * .0012; T.clouds.offset.y = simTime * .0005;
-  waterMat.uniforms.uTime.value = simTime; grassU.uTime.value = simTime;
+  waterMat.uniforms.uTime.value = simTime; grassU.uTime.value = simTime; windU.uTime.value = simTime;
   updateHud(dt);
   updateSound(dt);
 }
@@ -2912,6 +2973,7 @@ function start() {
     draw(n = 1) { for (let i = 0; i < n; i++) { Object.assign(inp, ZERO); update(1 / 30, true); } drawFrame(); },   // tests: one drawn frame while paused
     step(n, input = {}) { for (let i = 0; i < n; i++) { Object.assign(inp, ZERO, input); if (i > 0) inp.act = false; update(1 / 30); } },
     pause(on) { paused = !!on; },
+    draw(n = 1) { for (let i = 0; i < n; i++) update(1 / 30, true); drawFrame(); },
     cab(on) { cabView = !!on; },
     camSet(off, pitch, dist) { camOff = off; camPitch = pitch; camDist = dist; lastDrag = performance.now(); },
     render() { updateCamera(1); camera.position.copy(_cam); drawFrame(); } };
