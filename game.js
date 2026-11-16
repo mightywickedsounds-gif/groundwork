@@ -2909,6 +2909,7 @@ function start() {
   if (!resumed) save();
   // test hook: run the game forward without drawing (used by the automated checks)
   window.GW = { prints: treadIM, post: POST, SPRINGS, drop: (x, z, v) => dropCircle({ v, g: 0 }, x, z, 6, v), people, works, CULVERTS, DECK, get eroded() { return eroded; }, flux: { FL, FR, FU, FD }, H0, crew, setCrew, dirty, snd, goal, GOALS, RIVERS, YARD, GRAVEL, CAMP, MARSH, SPEC, riverAt, tchunks, machines, H, W, M, D, BED, stats, hAt, select, save, trees, rocks, renderer, scene, camera, get jobs() { return jobs; }, get active() { return active; },
+    draw(n = 1) { for (let i = 0; i < n; i++) { Object.assign(inp, ZERO); update(1 / 30, true); } drawFrame(); },   // tests: one drawn frame while paused
     step(n, input = {}) { for (let i = 0; i < n; i++) { Object.assign(inp, ZERO, input); if (i > 0) inp.act = false; update(1 / 30); } },
     pause(on) { paused = !!on; },
     cab(on) { cabView = !!on; },
