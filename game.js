@@ -3,11 +3,11 @@
 // browser so nothing ever resets.
 import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
-import { makeTextures } from './textures.js?v=7';
-import * as MOD from './models.js?v=7';
-import { Sound } from './audio.js?v=7';
-import { makeCrew } from './crew.js?v=7';
-import { makeWorks } from './construct.js?v=7';
+import { makeTextures } from './textures.js?v=8';
+import * as MOD from './models.js?v=8';
+import { Sound } from './audio.js?v=8';
+import { makeCrew } from './crew.js?v=8';
+import { makeWorks } from './construct.js?v=8';
 import { makePeople } from './people.js?v=8';
 
 const N = 256, NN = N * N;           // 256 x 256 cells, 1 m each
