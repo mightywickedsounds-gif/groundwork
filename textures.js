@@ -186,6 +186,26 @@ function puff(S) {
   const t = new THREE.DataTexture(arr, S, S, THREE.RGBAFormat); t.needsUpdate = true; t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter; t.magFilter = THREE.LinearFilter;
   return t;
 }
+// the prints machines leave: left half a crawler track (grouser bars pressed into the ground), right half a lugged tyre
+function tread() {
+  const [c, g] = canvas(128, 64);
+  g.clearRect(0, 0, 128, 64);
+  const edge = (x0, a) => { const gr = g.createLinearGradient(x0, 0, x0 + 64, 0); gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(.12, `rgba(0,0,0,${a})`); gr.addColorStop(.88, `rgba(0,0,0,${a})`); gr.addColorStop(1, 'rgba(0,0,0,0)'); return gr; };
+  g.fillStyle = edge(0, .42); g.fillRect(0, 0, 64, 64);
+  g.fillStyle = edge(0, .85);
+  for (let i = 0; i < 2; i++) { g.fillRect(0, 6 + i * 32, 64, 9); }
+  g.fillStyle = edge(0, .45);
+  for (let i = 0; i < 2; i++) { g.fillRect(0, 15 + i * 32, 64, 3); }
+  g.fillStyle = edge(64, .4); g.fillRect(64, 0, 64, 64);
+  g.strokeStyle = 'rgba(0,0,0,.8)'; g.lineWidth = 6; g.lineCap = 'round';
+  for (let i = -1; i < 5; i++) {
+    const y = i * 16;
+    g.beginPath(); g.moveTo(72, y + 12); g.lineTo(93, y); g.stroke();
+    g.beginPath(); g.moveTo(120, y + 20); g.lineTo(99, y + 8); g.stroke();
+  }
+  const t = canvasTex(c, false); t.wrapS = THREE.ClampToEdgeWrapping; t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
 function stripes() {
   const [c, g] = canvas(128, 32);
   g.fillStyle = '#e8b320'; g.fillRect(0, 0, 128, 32);
@@ -265,7 +285,7 @@ export function makeTextures(quality) {
     macro: grey(256, 4, 91, 5),
     rock: canvasTex(rock(256)[0]), bark: canvasTex(bark(128)[0]), needles: canvasTex(needles(256)[0]),
     water: normalTex(256, 8, 101, 9),
-    clouds: clouds(512), puff: puff(64), stripes: stripes(), foliage: foliage(quality === 'low' ? 256 : 512),
+    clouds: clouds(512), puff: puff(64), stripes: stripes(), tread: tread(), foliage: foliage(quality === 'low' ? 256 : 512),
   };
   return T;
 }

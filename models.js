@@ -13,26 +13,32 @@ function addGrime(mat, U) {
   mat.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, U);
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vGWP;')
+      .replace('#include <common>', '#include <common>\nvarying vec3 vGWP; varying vec3 vGLP;')
       .replace('#include <project_vertex>', `#include <project_vertex>
+        vGLP = position;
         #ifdef USE_INSTANCING
           vGWP = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;
         #else
           vGWP = (modelMatrix * vec4(transformed, 1.0)).xyz;
         #endif`);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float uGround, uGrime, uDmg; uniform sampler2D tGrime; varying vec3 vGWP;')
+      .replace('#include <common>', '#include <common>\nuniform float uGround, uGrime, uDmg; uniform sampler2D tGrime; varying vec3 vGWP; varying vec3 vGLP;')
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         float gwHgt = vGWP.y - uGround;
-        float gwN = texture2D(tGrime, vGWP.xz * .35 + vGWP.y * .21).r * .6 + texture2D(tGrime, vGWP.zy * .9).r * .4;
+        float gwN = texture2D(tGrime, vGLP.xz * .35 + vGLP.y * .21).r * .6 + texture2D(tGrime, vGLP.zy * .9).r * .4;
         float gwLow = clamp((1.8 - gwHgt) / 1.8, 0., 1.); gwLow *= gwLow;
+        #ifndef FLAT_SHADED
+          vec3 gwWN = inverseTransformDirection(normalize(vNormal), viewMatrix);
+          diffuseColor.rgb *= mix(1., .5, clamp(-gwWN.y, 0., 1.)) * mix(.7, 1., smoothstep(.1, 1.5, gwHgt));
+        #endif
+        diffuseColor.rgb *= .88 + .24 * texture2D(tGrime, vGLP.xy * .23 + vGLP.z * .17).r;
         float gwAmt = clamp(gwLow * 1.3 * uGrime + uGrime * .22, 0., 1.) * smoothstep(.32, .66, gwN + gwLow * .3);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.29, .21, .14), gwAmt * .85);
         roughnessFactor = mix(roughnessFactor, .95, gwAmt);
         // wear and damage: scuffs to bare steel, then rust streaks and dents' dark creases
-        float dmN = texture2D(tGrime, vGWP.xz * 1.9 + vGWP.y * 1.3).r;
+        float dmN = texture2D(tGrime, vGLP.xz * 1.9 + vGLP.y * 1.3).r;
         float dmScuff = smoothstep(.76 - uDmg * .22, .8 - uDmg * .22, dmN) * step(.05, uDmg);
-        float dmRust = smoothstep(.62 - uDmg * .22, .7 - uDmg * .22, texture2D(tGrime, vGWP.zy * .7 + .37).r) * smoothstep(.35, .8, uDmg);
+        float dmRust = smoothstep(.62 - uDmg * .22, .7 - uDmg * .22, texture2D(tGrime, vGLP.zy * .7 + .37).r) * smoothstep(.35, .8, uDmg);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.38, .37, .36), dmScuff * .45);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.33, .17, .08), dmRust * .75);
         diffuseColor.rgb *= 1. - smoothstep(.85, .9, dmN) * uDmg * .5;
@@ -47,11 +53,12 @@ export function machineMats(T, color) {
   const g = o => addGrime(new THREE.MeshStandardMaterial(o), U);
   return {
     U,
-    paint: g({ color, roughness: .4, metalness: .2 }),
+    paint: g({ color, roughness: .36, metalness: .25 }),
     frame: g({ color: 0x2a2c2f, roughness: .6, metalness: .4 }),
     steel: g({ color: 0x8d9298, roughness: .32, metalness: .85 }),
     track: g({ color: 0x3a3836, roughness: .7, metalness: .6 }),
     rubber: g({ color: 0x1b1b1c, roughness: .9, metalness: 0 }),
+    hose: g({ color: 0x101012, roughness: .55, metalness: 0 }),
     chrome: new THREE.MeshStandardMaterial({ color: 0xdfe4ea, roughness: .1, metalness: 1 }),
     glass: new THREE.MeshStandardMaterial({ color: 0x1a2731, roughness: .03, metalness: .9, transparent: true, opacity: .42, envMapIntensity: 1.6, depthWrite: false }),
     interior: new THREE.MeshStandardMaterial({ color: 0x252525, roughness: .85 }),
@@ -164,6 +171,13 @@ function buildTrack(p, x, len, R, w, M) {
   const im = new THREE.InstancedMesh(shoeG, M.track, n);
   im.castShadow = true; im.receiveShadow = true; im.frustumCulled = false; p.add(im);
   rbox(p, w * .5, R * .9, 2 * a + .2, M.frame, x, cy, 0, .06);
+  const sgn = Math.sign(x) || 1;
+  weld(p, s => {
+    rbox(s, .05, R * .62, 2 * a * .96, M.paint, x + sgn * w * .28, cy - .03, 0, .02);
+    rbox(s, .07, .1, 2 * a * .9, M.frame, x + sgn * w * .3, .3, 0, .02);
+    for (let i = 0; i < 6; i++) cylX(s, .03, .04, M.steel, x + sgn * w * .31, cy - .03, -a * .8 + i * a * .32, 6);
+    for (const z of [-a, a]) { cylX(s, R * .42, .05, M.paint, x + sgn * w * .29, cy, z, 14); for (let i = 0; i < 6; i++) { const q = i / 6 * Math.PI * 2; cylX(s, .025, .04, M.steel, x + sgn * w * .31, cy + Math.cos(q) * R * .28, z + Math.sin(q) * R * .28, 6); } }
+  });
   const idler = roller(p, R - .07, w * .55, M, x, cy, a);
   const sprocket = roller(p, R - .05, w * .55, M, x, cy, -a);
   for (let i = 0; i < 10; i++) { const t = rbox(sprocket, w * .4, .09, .11, M.steel, 0, R - .05, 0, .01); t.position.set(0, Math.cos(i / 10 * Math.PI * 2) * (R - .03), Math.sin(i / 10 * Math.PI * 2) * (R - .03)); t.rotation.x = -i / 10 * Math.PI * 2; }
@@ -177,7 +191,7 @@ function buildTrack(p, x, len, R, w, M) {
     s -= 2 * a;
     if (s < Math.PI * R) { const f = s / R, dy = -Math.cos(f) * R, dz = -Math.sin(f) * R; return [cy + dy, -a + dz, Math.atan2(-dz, -dy)]; }
     s -= Math.PI * R;
-    if (s < 2 * a) return [cy + R, -a + s, Math.PI];
+    if (s < 2 * a) { const u = s / (2 * a), t = u < .3 ? u / .3 : u < .7 ? (u - .3) / .4 : (u - .7) / .3; return [cy + R - (u < .3 || u > .7 ? .05 : .035) * 4 * t * (1 - t), -a + s, Math.PI]; }
     s -= 2 * a;
     const f = s / R, dy = Math.cos(f) * R, dz = Math.sin(f) * R; return [cy + dy, a + dz, Math.atan2(-dz, -dy)];
   }
@@ -240,6 +254,7 @@ function buildCab(p, w, h, d, x, y, z, M) {
     cylX(g, .015, .3, M.frame, sx * (w / 2 + .12), h * .7, d / 2 - .05, 5);
     rbox(g, .03, .26, .16, M.frame, sx * (w / 2 + .27), h * .7, d / 2 - .05, .01);
   }
+  detailCab(g, w, h, d, M);
   return g;
 }
 function beacon(p, x, y, z, M) {
@@ -267,6 +282,236 @@ export function moundGeo(w, h, d) {
   }
   g.computeVertexNormals();
   return g;
+}
+
+// ---------------------------------------------------------------- fine detail (hoses, guards, ribs, panel seams, lamps)
+// Detail parts are built into a scratch group and then welded into one mesh per material, so a machine gains a lot of
+// detail for only a handful of extra draw calls.
+function weld(parent, build) {
+  const scratch = new THREE.Group();
+  build(scratch);
+  scratch.updateMatrixWorld(true);
+  const by = new Map();
+  scratch.traverse(o => {
+    if (!o.isMesh) return;
+    let g = o.geometry.clone(); g.applyMatrix4(o.matrixWorld);
+    if (g.index) g = g.toNonIndexed();
+    for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'uv') g.deleteAttribute(k);
+    if (!g.attributes.uv) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+    if (!by.has(o.material)) by.set(o.material, []);
+    by.get(o.material).push(g);
+  });
+  for (const [mat, list] of by) {
+    const m = new THREE.Mesh(mergeGeometries(list), mat); m.castShadow = true; m.receiveShadow = true; parent.add(m);
+  }
+}
+function hose(p, pts, r, mat) {
+  const c = new THREE.CatmullRomCurve3(pts.map(q => V(q[0], q[1], q[2])));
+  const m = new THREE.Mesh(new THREE.TubeGeometry(c, Math.max(6, pts.length * 5), r, 6), mat); p.add(m); return m;
+}
+function bar(p, a, b, r, mat) {
+  const A = V(a[0], a[1], a[2]), B = V(b[0], b[1], b[2]), d = B.clone().sub(A);
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, d.length(), 7), mat);
+  m.position.copy(A).add(B).multiplyScalar(.5); m.quaternion.setFromUnitVectors(Y, d.normalize()); p.add(m); return m;
+}
+// a work lamp in a housing, facing along +z (dir 1) or -z (dir -1)
+function lamp(p, x, y, z, dir, M, s = 1) {
+  rbox(p, .17 * s, .13 * s, .1 * s, M.frame, x, y, z, .02);
+  rbox(p, .13 * s, .09 * s, .03 * s, M.light, x, y, z + dir * .05 * s, .01);
+  rbox(p, .04 * s, .08 * s, .04 * s, M.frame, x, y - .1 * s, z, .01);
+}
+// a door or access panel outline on a side wall at x: thin dark seams with a handle
+function panel(p, x, z0, z1, y0, y1, M) {
+  const s = Math.sign(x) || 1, t = .014;
+  rbox(p, t, t, z1 - z0, M.frame, x, y0, (z0 + z1) / 2, .003); rbox(p, t, t, z1 - z0, M.frame, x, y1, (z0 + z1) / 2, .003);
+  rbox(p, t, y1 - y0, t, M.frame, x, (y0 + y1) / 2, z0, .003); rbox(p, t, y1 - y0, t, M.frame, x, (y0 + y1) / 2, z1, .003);
+  rbox(p, .03, .035, .14, M.steel, x + s * .012, (y0 + y1) / 2, z1 - .12, .01);
+  for (const y of [y0 + (y1 - y0) * .2, y0 + (y1 - y0) * .8]) rbox(p, .02, .07, .05, M.frame, x + s * .006, y, z0 + .03, .006);
+}
+function bolts(p, pts, r, M, axis = 'x') {
+  for (const q of pts) { const b = axis === 'x' ? cylX(p, r, .03, M.steel, q[0], q[1], q[2], 6) : axis === 'z' ? cylZ(p, r, .03, M.steel, q[0], q[1], q[2], 6) : cylY(p, r, r, .03, M.steel, q[0], q[1], q[2], 6); b.castShadow = false; }
+}
+function liftEye(p, x, y, z, M) { const t = new THREE.Mesh(new THREE.TorusGeometry(.055, .018, 6, 10), M.steel); t.position.set(x, y, z); t.rotation.y = Math.PI / 2; p.add(t); }
+
+function detailCab(g, w, h, d, M) {
+  weld(g, s => {
+    const t = .07;
+    for (const sx of [-1, 1]) {
+      rbox(s, .035, .045, d - 2 * t, M.paint, sx * (w / 2 - .025), h * .42 + .1, 0, .01);            // waist rail
+      rbox(s, .02, .02, d * .9, M.frame, sx * (w / 2 + .045), h + .1, 0, .005);                         // rain gutter
+      bar(s, [sx * (w / 2 + .03), .45, d / 2 - .04], [sx * (w / 2 + .03), h * .8, d / 2 - .04], .016, M.frame);   // grab handle
+    }
+    rbox(s, .03, .05, .16, M.steel, w / 2 + .012, h * .36, -d * .1, .01);                               // door handle
+    rbox(s, .012, h * .92, .012, M.frame, w / 2 + .004, h / 2 + .12, d * .05 + .03, .003);              // door seam
+    rbox(s, w * .56, .11, d * .42, M.paint, 0, h + .29, -d * .2, .03);                                  // air conditioner
+    for (let i = 0; i < 5; i++) rbox(s, w * .46, .012, .03, M.frame, 0, h + .35, -d * .34 + i * .06, .004);
+    const v = rbox(s, w + .04, .03, .24, M.frame, 0, h + .1, d / 2 + .16, .01); v.rotation.x = .28;     // sun visor
+    bar(s, [-.02, .3, d / 2 - .015], [.2, h * .78, d / 2 - .015], .009, M.frame);                       // wipers
+    bar(s, [.1, .3, -d / 2 + .015], [-.12, h * .7, -d / 2 + .015], .009, M.frame);
+    rbox(s, .06, .05, .03, M.frame, -.02, .28, d / 2 + .0, .01);
+    cylY(s, .012, .012, .5, M.frame, -w * .38, h + .5, -d * .38, 5);                                    // aerial
+    rbox(s, w * .9, .025, d * .9, M.frame, 0, .105, 0, .005);                                           // floor mat
+    cylY(s, .02, .02, .34, M.interior, 0, .72, d * .2, 6); const sw = new THREE.Mesh(new THREE.TorusGeometry(.15, .018, 6, 16), M.interior); sw.position.set(0, .9, d * .2); sw.rotation.x = -1.1; s.add(sw);
+  });
+}
+
+function detailDozer(g, blade, M) {
+  weld(g, s => {
+    // roll-over frame behind the cab, with sweeps running forward to the nose (they shed branches)
+    for (const sx of [-1, 1]) {
+      rbox(s, .11, 2.5, .13, M.frame, sx * .87, 2.32, -2.14, .02);
+      beam(s, V(sx * .87, 3.56, -2.14), V(sx * .87, 3.56, -.5), .08, .09, M.frame, .02);
+      bar(s, [sx * .87, 3.56, -.5], [sx * .74, 1.98, 1.78], .035, M.frame);
+      lamp(s, sx * .6, 3.66, -.52, 1, M); lamp(s, sx * .6, 3.66, -2.12, -1, M);
+      // grip plates on the fenders, access panel and hood latch on each side of the engine
+      rbox(s, .62, .018, 1.25, M.frame, sx * 1.2, 1.062, -1.25, .004);
+      panel(s, sx * .714, .02, 1.25, 1.1, 1.84, M);
+      rbox(s, .05, .05, .22, M.frame, sx * .5, 1.955, 1.5, .012);
+      // hydraulic lines to the lift rams
+      hose(s, [[sx * .42, 1.92, 1.25], [sx * .52, 2.04, 1.42], [sx * .61, 1.9, 1.58]], .022, M.hose);
+      hose(s, [[sx * .36, 1.92, 1.25], [sx * .48, 2.09, 1.46], [sx * .64, 1.94, 1.63]], .022, M.hose);
+      rbox(s, .1, .26, .5, M.frame, sx * .78, .82, 1.75, .02);                                          // final-drive guard
+      bolts(s, [[sx * 1.52, .5, -1.73], [sx * 1.52, .42, -1.65], [sx * 1.52, .42, -1.81], [sx * 1.52, .34, -1.73]], .022, M);
+    }
+    rbox(s, 1.86, .12, .13, M.frame, 0, 3.56, -2.14, .02);
+    rbox(s, .5, .045, 1.75, M.paint, 0, 1.95, .86, .015);                                               // hood rib
+    liftEye(s, 0, 2.0, .2, M); liftEye(s, 0, 2.0, 1.5, M);
+    cylY(s, .1, .1, .5, M.steel, .42, 2.2, 1.3, 10);                                                    // exhaust heat shield
+    const flap = rbox(s, .2, .015, .2, M.frame, .42, 2.97, 1.24, .004); flap.rotation.x = -.7;
+    rbox(s, 1.3, .12, .1, M.frame, 0, 1.06, 1.93, .02);                                                 // nose guard
+    for (const sx of [-1, 0, 1]) rbox(s, .06, .8, .05, M.frame, sx * .56, 1.46, 1.93, .01);
+    rbox(s, .4, .16, .12, M.steel, 0, .58, 1.9, .03);                                                   // tow hook
+  });
+  weld(blade, s => {
+    for (const x of [-1.25, -.42, .42, 1.25]) { beam(s, V(x, .06, .2), V(x, .68, -.01), .07, .12, M.paint, .01); beam(s, V(x, .68, -.01), V(x, 1.3, .2), .07, .12, M.paint, .01); }
+    for (const sx of [-1, 1]) {
+      rbox(s, .12, .3, .13, M.steel, sx * 1.86, .15, .33, .02);                                         // corner bits
+      beam(s, V(sx * 1.62, .5, -1.25), V(sx * 1.25, 1.05, .0), .09, .1, M.frame, .02);                  // tilt braces
+      cylX(s, .11, .16, M.steel, sx * 1.62, .43, -2.6, 10);                                             // trunnions
+    }
+    for (let i = 0; i < 9; i++) cylZ(s, .028, .03, M.frame, -1.6 + i * .4, .07, .385, 6);               // cutting-edge bolts
+  });
+}
+
+function detailLoader(g, front, arms, bucket, M) {
+  weld(g, s => {
+    rbox(s, .6, .045, 1.9, M.paint, 0, 2.245, -1.85, .015);                                             // hood rib
+    cylY(s, .13, .13, .26, M.frame, .45, 2.37, -2.3, 12); cylY(s, .16, .13, .1, M.steel, .45, 2.55, -2.3, 12);   // air pre-cleaner
+    const flap = rbox(s, .18, .015, .18, M.frame, -.45, 3.07, -2.3, .004); flap.rotation.x = .7;
+    cylY(s, .095, .095, .4, M.steel, -.45, 2.45, -2.25, 10);
+    for (const sx of [-1, 1]) {
+      for (let i = 0; i < 6; i++) rbox(s, .03, .5, .07, M.frame, sx * .865, 1.78, -2.75 + i * .16, .008);
+      panel(s, sx * .864, -1.7, -.95, 1.38, 2.16, M);
+      rbox(s, .6, .018, 1.3, M.frame, sx * 1.18, 1.842, -1.6, .004);
+      const fl = rbox(s, .66, .5, .03, M.rubber, sx * 1.18, 1.5, -2.42, .01); fl.rotation.x = -.12;     // mud flap
+      liftEye(s, sx * .7, 1.66, -3.05, M);
+      lamp(s, sx * .55, 2.3, -2.9, -1, M, .8);
+    }
+    rbox(s, .5, .18, .2, M.steel, 0, .95, -3.33, .04);                                                  // tow hitch
+    rbox(s, 1.3, .3, .06, M.frame, 0, 1.28, -3.34, .02);
+  });
+  weld(front, s => {
+    for (const sx of [-1, 1]) {
+      const fl = rbox(s, .66, .45, .03, M.rubber, sx * 1.18, 1.52, .3, .01); fl.rotation.x = .1;
+      rbox(s, .6, .018, 1.0, M.frame, sx * 1.18, 1.842, 1.0, .004);
+      lamp(s, sx * .86, 1.95, 1.55, 1, M, .9);
+    }
+    rbox(s, 1.5, .1, .1, M.frame, 0, 1.3, 1.82, .02);
+  });
+  weld(arms, s => {
+    for (const sx of [-1, 1]) {
+      hose(s, [[sx * .69, .02, .1], [sx * .69, .27, 1.3], [sx * .69, .04, 2.4]], .024, M.hose);
+      hose(s, [[sx * .69, .1, .1], [sx * .69, .35, 1.3], [sx * .69, .12, 2.4]], .024, M.hose);
+      cylX(s, .13, .26, M.steel, sx * .82, 0, 2.62, 10); cylX(s, .13, .26, M.steel, sx * .82, 0, -.02, 10);   // pins
+    }
+    beam(s, V(0, .86, 1.47), V(0, .46, 2.52), .11, .13, M.frame, .02);                                 // tilt link
+    cylX(s, .07, .3, M.steel, 0, .86, 1.47, 8);
+  });
+  weld(bucket, s => {
+    rbox(s, 2.9, .14, .05, M.paint, 0, .62, .13, .01);                                                  // spill guard
+    for (const sx of [-1, 1]) { rbox(s, .06, .3, .5, M.steel, sx * 1.46, -.3, .78, .01); rbox(s, .3, .26, .1, M.frame, sx * .82, .2, -.06, .02); }
+    for (let i = 0; i < 5; i++) rbox(s, .09, .03, 1.0, M.steel, -1.2 + i * .6, -.49, .5, .008);        // wear strips
+  });
+}
+
+function detailExcavator(g, house, boom, stick, bucket, M) {
+  weld(g, s => {
+    for (const z of [-.85, .85]) rbox(s, 2.3, .3, .55, M.frame, 0, .62, z, .04);                        // cross-members to the track frames
+    for (const sx of [-1, 1]) rbox(s, .3, .035, .5, M.steel, sx * 1.66, .62, 0, .008);                  // steps
+    for (let i = 0; i < 12; i++) { const a = i / 12 * Math.PI * 2; cylY(s, .03, .03, .04, M.steel, Math.cos(a) * .9, 1.16, Math.sin(a) * .9, 6); }
+  });
+  weld(house, s => {
+    rbox(s, 1.02, .74, 1.52, M.paint, .72, .59, -1.14, .08);                                            // hydraulic and fuel tanks behind the cab
+    panel(s, 1.232, -1.8, -.5, .32, .9, M);
+    panel(s, -1.227, -.15, .95, .3, .92, M);
+    cylY(s, .07, .07, .05, M.steel, .5, .98, -.7, 8); cylY(s, .06, .06, .05, M.frame, .9, .98, -1.5, 8);
+    handrail(s, [[1.2, .96, -1.85], [1.2, 1.32, -1.85], [1.2, 1.32, -.48], [1.2, .96, -.48]], M);
+    rbox(s, .62, .018, 1.2, M.frame, .72, .97, -1.15, .004);                                            // anti-slip top
+    rbox(s, .9, .045, 1.3, M.paint, -.55, 1.06, -1.15, .015);                                           // engine cover rib
+    rbox(s, .5, .04, .05, M.steel, -.55, 1.1, -.55, .01);
+    cylY(s, .12, .12, .3, M.frame, -.25, 1.2, -1.6, 10); cylY(s, .14, .12, .08, M.steel, -.25, 1.38, -1.6, 10);   // air cleaner
+    cylY(s, .09, .09, .36, M.steel, -.85, 1.2, -1.3, 10);
+    rbox(s, 1.7, .03, .36, M.frame, 0, 1.095, -2.18, .006);                                             // counterweight top
+    for (const sx of [-1, 1]) { liftEye(s, sx * .9, 1.12, -2.2, M); rbox(s, .5, .3, .03, M.frame, sx * .6, .62, -2.565, .01); lamp(s, sx * 1.0, 1.0, 1.05, 1, M, .8); }
+    rbox(s, .12, .1, .1, M.frame, 0, 1.05, -2.5, .02);                                                  // rear camera
+    for (let i = 0; i < 4; i++) rbox(s, .5, .015, .03, M.frame, .72, .4 + i * .1, -1.905, .004);
+  });
+  weld(boom, s => {
+    for (const sx of [-1, 1]) for (const dy of [-.07, .07]) hose(s, [[sx * .26, .1 + dy, .25], [sx * .26, .44 + dy, 1.25], [sx * .245, .78 + dy, 2.3], [sx * .24, .44 + dy, 3.35], [sx * .23, .12 + dy, 4.35]], .017, M.hose);
+    for (const z of [1.2, 3.4]) for (const sx of [-1, 1]) rbox(s, .03, .26, .07, M.steel, sx * .262, z < 2 ? .42 : .43, z, .008);   // hose clamps
+    lamp(s, .32, .62, 1.6, 1, M, .9);
+    for (const sx of [-1, 1]) { cylX(s, .12, .1, M.steel, sx * .26, 0, 4.6, 10); cylX(s, .13, .1, M.steel, sx * .28, 0, 0, 10); rbox(s, .04, .5, .9, M.paint, sx * .24, .8, 2.3, .01); }
+  });
+  weld(stick, s => {
+    for (const sx of [-1, 1]) {
+      hose(s, [[sx * .185, .46, -.3], [sx * .18, .28, 1.2], [sx * .175, .1, 2.5]], .015, M.hose);
+      cylX(s, .09, .08, M.steel, sx * .19, 0, 3.3, 8);
+      beam(s, V(sx * .2, .22, 2.62), V(sx * .2, .52, 2.98), .05, .09, M.frame, .01);                    // bucket links
+    }
+    cylX(s, .05, .5, M.steel, 0, .52, 2.98, 8);
+    rbox(s, .34, .05, 1.4, M.paint, 0, .37, 1.3, .01).rotation.x = .135;
+  });
+  weld(bucket, s => {
+    for (const sx of [-1, 1]) { rbox(s, .05, .12, .5, M.steel, sx * .57, -.02, .85, .01); rbox(s, .05, .3, .3, M.frame, sx * .2, .3, -.02, .01); }
+    for (let i = 0; i < 3; i++) rbox(s, 1.1, .03, .07, M.steel, 0, .12 - .1 * Math.cos(i - 1), .2 + i * .3, .008);
+  });
+}
+
+function detailHauler(g, front, bed, M) {
+  weld(g, s => {
+    for (const sx of [-1, 1]) {
+      rbox(s, .42, .5, .95, M.paint, sx * .98, 1.12, .5, .08);                                          // tanks on the frame
+      for (const z of [.2, .8]) rbox(s, .44, .03, .04, M.steel, sx * .98, 1.12, z, .008);
+      cylY(s, .06, .06, .04, M.steel, sx * .98, 1.39, .7, 8);
+      for (const z of [-1.86, -3.95]) { const fl = rbox(s, .7, .55, .03, M.rubber, sx * 1.3, .95, z, .01); fl.rotation.x = -.1; }
+      rbox(s, .2, .12, .05, M.frame, sx * .55, 1.2, -4.4, .02);
+    }
+    rbox(s, 1.5, .16, .12, M.frame, 0, .95, -4.38, .03);
+    for (const z of [-.8, -2.9]) cylX(s, .14, 2.0, M.frame, 0, .9, z, 10);                              // axles
+  });
+  weld(front, s => {
+    rbox(s, .7, .045, 1.5, M.paint, 0, 2.415, 2.1, .015);                                               // hood rib
+    for (const sx of [-1, 1]) {
+      panel(s, sx * 1.002, 1.45, 2.75, 1.45, 2.3, M);
+      for (let i = 0; i < 5; i++) rbox(s, .03, .4, .07, M.frame, sx * 1.004, 1.9, 1.7 + i * .16, .008);
+      handrail(s, [[sx * .98, 2.4, 1.3], [sx * .98, 2.85, 1.3], [sx * .98, 2.85, 2.9], [sx * .98, 2.4, 2.9]], M);
+      rbox(s, .7, .018, 1.6, M.frame, sx * 1.3, 1.922, 1.75, .004);
+      lamp(s, sx * .9, 2.5, 2.98, 1, M, .9);
+      rbox(s, .3, .035, .4, M.steel, sx * 1.18, .75, .4, .008);                                         // step
+    }
+    cylY(s, .13, .13, .3, M.frame, -.95, 2.56, 1.5, 12); cylY(s, .16, .13, .1, M.steel, -.95, 2.76, 1.5, 12);
+    cylY(s, .095, .095, .5, M.steel, .95, 2.7, 1.45, 10);
+    rbox(s, .5, .2, .16, M.steel, 0, 1.0, 3.14, .04);
+    for (const sx of [-1, 1]) rbox(s, .1, .34, .1, M.stripe, sx * 1.02, 1.0, 3.06, .02);
+  });
+  weld(bed, s => {
+    // the spill guard: the front wall carries on up and reaches forward over the cab
+    rbox(s, 2.85, 1.1, .12, M.paint, 0, 2.1, 5.6, .03);
+    rbox(s, 2.7, .09, 1.15, M.paint, 0, 2.66, 6.15, .03);
+    for (const sx of [-1, 0, 1]) { beam(s, V(sx * 1.2, 1.7, 5.68), V(sx * 1.2, 2.6, 6.6), .07, .09, M.paint, .01); rbox(s, .07, .06, 1.1, M.paint, sx * 1.2, 2.72, 6.15, .01); }
+    for (let i = 0; i < 4; i++) rbox(s, 2.6, .06, .1, M.paint, 0, -.02, .9 + i * 1.3, .01);             // floor bearers
+    for (const sx of [-1, 1]) { rbox(s, .1, .1, 5.5, M.frame, sx * .55, -.06, 2.8, .02); cylX(s, .1, .3, M.steel, sx * .55, 0, 0, 10); }
+  });
 }
 
 // ---------------------------------------------------------------- the machines
@@ -314,6 +559,7 @@ export function buildDozer(m, M, L) {
   const pile = new THREE.Mesh(heapGeo(2.0, 1.0, 1.2, 3), L.dirt);
   pile.castShadow = true; pile.receiveShadow = true; blade.add(pile);
   m.rams = [-1, 1].map(s => new Ram(g, V(s * .62, 1.82, 1.6), g, V(s * .62, 1.05, -.02), blade, .075, M));
+  detailDozer(g, blade, M);
   Object.assign(m, { group: g, blade3: blade, pile });
 }
 
@@ -364,6 +610,7 @@ export function buildLoader(m, M, L) {
     ...[-1, 1].map(s => new Ram(g, V(s * .62, 1.1, .5), front, V(s * .82, -.14, 1.2), arms, .085, M)),
     new Ram(g, V(0, 1.62, .45), front, V(0, .85, 1.18), arms, .08, M),
   ];
+  detailLoader(g, front, arms, bucket, M);
   Object.assign(m, { group: g, arms, bucket, bucketLoad: bl });
 }
 
@@ -408,6 +655,7 @@ export function buildExcavator(m, M, L) {
     new Ram(g, V(0, 1.1, 2.0), boom, V(0, .62, -.5), stick, .085, M),
     new Ram(g, V(0, .3, .45), stick, V(0, .3, -.08), bucket, .07, M),
   ];
+  detailExcavator(g, house, boom, stick, bucket, M);
   Object.assign(m, { group: g, house, boom, stick, bucket, bucketLoad: bl });
 }
 
@@ -451,6 +699,7 @@ export function buildHauler(m, M, L) {
   m.beacons = [beacon(front, 0, 3.92, .4, M)];
   ladder(front, -.95, .5, 2.3, .4, M);
   m.rams = [-1, 1].map(s => new Ram(g, V(s * .55, 1.3, -1.2), g, V(s * .55, .0, 3.4), bed, .1, M));
+  detailHauler(g, front, bed, M);
   Object.assign(m, { group: g, bed, bedLoad: bl });
 }
 
@@ -514,17 +763,22 @@ export function rockGeo(seed) {
   return g;
 }
 export function tuftGeo() {
+  // a tuft of fine curved blades: dark at the root, the ground's own green higher up, a few dry straws
   const pos = [], col = [], nor = [];
   let s = 1;
   const r = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
-  for (let b = 0; b < 12; b++) {
-    const a = r() * Math.PI * 2, ox = (r() - .5) * .3, oz = (r() - .5) * .3, h = .16 + r() * .26, w = .016 + r() * .01;
-    const lean = .1 + r() * .18, lx = Math.cos(a) * lean, lz = Math.sin(a) * lean, px = -Math.sin(a) * w, pz = Math.cos(a) * w;
-    pos.push(ox - px, 0, oz - pz, ox + px, 0, oz + pz, ox + lx, h, oz + lz);
-    const k = .8 + r() * .4;
-    const dry = r() < .2;
-    col.push(.1 * k, .17 * k, .05 * k, .1 * k, .17 * k, .05 * k, (dry ? .5 : .32) * k, (dry ? .5 : .46) * k, (dry ? .26 : .16) * k);
-    for (let i = 0; i < 3; i++) nor.push(0, 1, 0);
+  for (let b = 0; b < 14; b++) {
+    const a = r() * Math.PI * 2, ox = (r() - .5) * .42, oz = (r() - .5) * .42, h = .13 + r() * r() * .3, w = .009 + r() * .008;
+    const lean = .05 + r() * .16, lx = Math.cos(a) * lean, lz = Math.sin(a) * lean, px = -Math.sin(a) * w, pz = Math.cos(a) * w;
+    const mx = ox + lx * .35, mz = oz + lz * .35, my = h * .55, tx = ox + lx, tz = oz + lz;
+    pos.push(ox - px, 0, oz - pz, ox + px, 0, oz + pz, mx + px * .8, my, mz + pz * .8,
+      ox - px, 0, oz - pz, mx + px * .8, my, mz + pz * .8, mx - px * .8, my, mz - pz * .8,
+      mx - px * .8, my, mz - pz * .8, mx + px * .8, my, mz + pz * .8, tx, h, tz);
+    const k = .75 + r() * .5, dry = r() < .16;
+    const c0 = [.05 * k, .085 * k, .028 * k], c1 = dry ? [.24 * k, .23 * k, .1 * k] : [.13 * k, .21 * k, .06 * k], c2 = dry ? [.4 * k, .38 * k, .18 * k] : [.22 * k, .33 * k, .1 * k];
+    col.push(...c0, ...c0, ...c1, ...c0, ...c1, ...c1, ...c1, ...c1, ...c2);
+    const nl = Math.hypot(lx * 1.5, 1, lz * 1.5);
+    for (let i = 0; i < 9; i++) nor.push(lx * 1.5 / nl, 1 / nl, lz * 1.5 / nl);
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
