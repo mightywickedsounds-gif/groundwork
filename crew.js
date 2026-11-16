@@ -123,10 +123,27 @@ export function makeCrew(G) {
     if (G.SPEC[m.type].tracks) return [clamp(e * 2.4, -1, 1), e];
     return [(rev ? -1 : 1) * clamp(e * 2.2, -1, 1), e];
   }
+  // the tightest circle a machine can drive (tracked machines turn on the spot)
+  const turnR = m => G.SPEC[m.type].tracks ? 0 : G.SPEC[m.type].wb / Math.tan(.55);
   // drive to a point (forwards); returns true when there
-  function goto(m, c, x, z, tol = 2.5, speed = .8) {
+  function goto(m, c, x, z, tol = 2.5, speed = .8, waypoint = false) {
     const d = Math.hypot(x - m.x, z - m.z);
-    if (d < tol) return true;
+    if (d < tol) { m.kturn = 0; return true; }
+    // a wheeled machine can't reach a point inside its turning circle by driving forwards (it would circle it for
+    // ever): back up on opposite lock until the point is ahead, like a driver doing a three-point turn
+    const R = turnR(m);
+    if (R > 0) {
+      const lx = (x - m.x) * Math.cos(m.yaw) - (z - m.z) * Math.sin(m.yaw), lz = (x - m.x) * Math.sin(m.yaw) + (z - m.z) * Math.cos(m.yaw);
+      const e0 = Math.atan2(lx, lz), inside = Math.min(Math.hypot(lx - R, lz), Math.hypot(lx + R, lz)) < R * 1.05;
+      if (m.kturn > 0) {
+        m.kturn -= G.dt();
+        if (Math.abs(e0) < .35 || (!inside && Math.abs(e0) < .9) || m.blocked) m.kturn = 0;
+        else { c.throttle = -.45; c.steer = -Math.sign(e0); return false; }
+      } else if (inside && Math.abs(e0) > (waypoint ? 1.9 : .5)) {
+        if (Math.abs(m.v) > 1.5) { c.throttle = 0; c.steer = Math.sign(e0); return false; }   // stop first
+        m.kturn = 6; c.throttle = -.45; c.steer = -Math.sign(e0); return false;
+      }
+    }
     // steer round other machines that sit between here and there
     let ax = (x - m.x) / d, az = (z - m.z) / d, px = 0, pz = 0;
     for (const o of G.machines) {
@@ -196,7 +213,9 @@ export function makeCrew(G) {
         const [x, z] = pt(S, s + 10, lane);
         const [sv, e] = steerTo(m, x, z, false);
         c.steer = sv;
-        if (Math.abs(e) < .08) { st.state = 'push'; st.t = 0; st.peak = 0; }
+        st.tt = (st.tt || 0) + dt;
+        if (Math.abs(e) < .08) { st.state = 'push'; st.t = 0; st.peak = 0; st.tt = 0; }
+        else if (st.tt > 8) { st.tt = 0; st.lane++; st.state = 'go'; unlock(S, m); st.rec = 1.5; st.recDir = 1; }   // no room to turn here
         break;
       }
       case 'push': {
@@ -402,16 +421,28 @@ export function makeCrew(G) {
   // drive somewhere, along a route when it is far or round water; returns true when there
   function travel(m, st, c, x, z, tol = 2.5, speed = .8) {
     const d = Math.hypot(x - m.x, z - m.z);
-    if (d < tol) { st.path = null; return true; }
+    if (d < tol) { st.path = null; st.best = null; return true; }
+    // progress check: a machine that hasn't got any closer for a while is boxed in. Near the spot it works from where
+    // it is; further out it plans a fresh route and backs out first
+    if (!st.best || Math.hypot(x - st.best.x, z - st.best.z) > 3) st.best = { x, z, d, t: 0 };
+    st.best.t += st.dt || 0;
+    if (d < st.best.d - 1) { st.best.d = d; st.best.t = 0; }
+    if (st.best.t > 20) {
+      st.best.t = 0; st.best.d = d;
+      if (d < Math.max(12, tol * 3)) { st.path = null; st.best = null; return true; }
+      st.path = null; st.rec = 2.2; st.recDir = Math.sign(m.v) || 1;
+    }
     if (d < 10) return goto(m, c, x, z, tol, speed);
     st.pathT = (st.pathT || 0) - st.dt;
     if (!st.path || st.pathT <= 0 || Math.hypot(x - st.goal[0], z - st.goal[1]) > 6) {
       st.path = findPath(m, m.x, m.z, x, z); st.pi = 0; st.pathT = 3; st.goal = [x, z];
     }
     if (!st.path || !st.path.length) return goto(m, c, x, z, tol, speed);
-    while (st.pi < st.path.length - 1 && Math.hypot(st.path[st.pi][0] - m.x, st.path[st.pi][1] - m.z) < 7) st.pi++;
+    // look further ahead than the machine's turning circle, so it steers smoothly round bends instead of circling
+    const look = Math.max(7, turnR(m) * 1.3);
+    while (st.pi < st.path.length - 1 && Math.hypot(st.path[st.pi][0] - m.x, st.path[st.pi][1] - m.z) < look) st.pi++;
     const [tx, tz] = st.path[st.pi];
-    goto(m, c, tx, tz, 0, speed);
+    goto(m, c, tx, tz, 0, speed, st.pi < st.path.length - 1);
     return false;
   }
 
@@ -552,8 +583,11 @@ export function makeCrew(G) {
       case 'align': {
         const [x, z] = pt(P, s0, o), [sv, e] = steerTo(m, x, z, false);
         c.steer = sv; c.throttle = G.SPEC[m.type].tracks ? (Math.abs(e) < .3 ? .3 : 0) : .25;
-        if (s >= s0 - .5) st.state = 'work';
-        if (Math.hypot(x - m.x, z - m.z) > 16) st.state = 'toStart';
+        st.at = (st.at || 0) + dt;
+        if (s >= s0 - .5) { st.state = 'work'; st.at = 0; }
+        // can't line up (boxed in by a parked machine, or the start is inside the turning circle): back off and go round
+        if (Math.hypot(x - m.x, z - m.z) > 16 || st.at > 12) { st.state = 'toStart'; st.at = 0; st.rec = 2.5; st.recDir = 1; st.best = null; }
+        unstick(m, st, c, dt);
         break;
       }
       case 'work': {
@@ -672,7 +706,7 @@ export function makeCrew(G) {
   // ------------------------------------------------------------ running a project
   let proj = null;
   function startStage(P) {
-    P.lead = undefined; P.stageT = 0; restart();
+    P.lead = undefined; P.stageT = 0; P.lateSaid = false; restart();
     const id = stage(P);
     if (id === 'subbase' && !P.prof) designProfile(P);
     G.status(TITLE[id](P));
@@ -691,6 +725,13 @@ export function makeCrew(G) {
         else if (s > P.sL - 14) P.prof[i] = +Math.max(P.prof[i], gradeAt(P, s) - .02).toFixed(3);
       }
     }
+  }
+  // how long a stage may take before the crew finish it by hand: time to bring the machines in, plus twice the work
+  function stageLimit(P) {
+    const id = stage(P), d = STG[id] || {};
+    if (id === 'culverts' || id === 'crane') return 120 + 25 * (P.kind === 'bridge' ? P.items.length : P.culverts.length);
+    if (id === 'deck') return 150 + STG.deck.dur * 2;
+    return 120 + (d.dur || 40) * 2;
   }
   function stageDone(P) {
     const id = stage(P), d = STG[id] || {};
@@ -727,6 +768,19 @@ export function makeCrew(G) {
       P.head = P.front;
       if (P.front >= endOf(P) + .5) { shapeFill(P, fillStart(P), endOf(P) + .5); nextStage(P); }
     } else {
+      // a stage that runs well over its time (a machine that can't get into place) is finished by the crew on foot,
+      // at the stage's normal pace, so a project never freezes
+      const late = P.stageT - stageLimit(P);
+      if (late > 0) {
+        if (!P.lateSaid) { P.lateSaid = true; G.say('Crew: ' + TITLE[id](P) + ' by hand'); }
+        if (id === 'culverts' || id === 'crane') {
+          if (Math.floor(late / 3) !== Math.floor((late - dt) / 3)) {
+            if (P.kind === 'bridge') P.placed = Math.min(P.items.length, P.placed + 1); else P.pipes = Math.min(P.culverts.length, P.pipes + 1);
+            W.refresh(P);
+          }
+        } else if (id === 'deck') P.cut.deck = Math.min(P.sR + .5, (P.cut.deck ?? P.sL - .5) + (P.sR - P.sL + 1) / STG.deck.dur * dt);
+        else { const [s0, s1] = range(P); P.lead = Math.max(P.lead ?? -1e9, s0 + late * (s1 - s0) / (d.dur || 40)); }
+      }
       applyLead(P, dt);
       if (stageDone(P)) nextStage(P);
     }

@@ -62,7 +62,7 @@ On GitHub, open this repository's **Settings, then Pages**. Under "Build and dep
 - the excavator digs and dumps;
 - a full bucket dumps as a heap about a metre tall;
 - fallen trees stay as logs and can be pushed;
-- the crew gets in, follows you (checked over 50 s), keeps working when you take one machine over, starts building when you stop at the river and has begun filling it within five minutes, and gets out when turned off;
+- the crew gets in, follows you (checked over 50 s), keeps working when you take one machine over, starts building when you stop at the river, has clearly moved the job on within five minutes, finishes the whole crossing within 40 minutes of game time, and gets out when turned off;
 - fast water washes loose dirt downstream, but the untouched riverbanks don't erode;
 - a tall pile crumbles until it can stand;
 - a finished job pays and a new one appears;
@@ -230,3 +230,21 @@ Tested: all 13 checks pass. The dam check now uses a wider dam and a little more
 - Tree bark is lighter (trunks and logs were showing nearly black).
 
 **Tested:** all 24 automatic checks pass. In the test runs the building crew cleared a site in 1.5-4 minutes, hauled the logs in about 2.5 minutes and framed a full cabin in about 12 minutes of game time (3 minutes at 4x). Bugs found and fixed while testing: the framers stopped at a quarter of the cabin (pieces out of order); the log truck got stuck among parked machines and couldn't reach logs felled outwards; the dozer's own blade cut the pad below level while grading. Not done this round: better-looking trees and grass. I can't see or hear it on a real screen from here, so please tell me what looks off.
+
+### Round 9: jobs that finish, and a heavier, more realistic look (owner: crew drives in circles, sits there or gets stuck; looks unrealistic, no force)
+
+**The crew now finishes its jobs.** I ran crossings and buildings for 20-45 minutes of game time with nobody touching anything, logged every machine every 10 seconds, and fixed what got stuck:
+- **Driving in circles:** wheeled machines (mixer, crane, log truck, hauler, trucks) can't turn on the spot. When the place they were heading for was too close and off to the side, they circled it for ever. They now stop, back up on opposite lock and pull forward again (a three-point turn). On longer routes they look further ahead than their turning circle, so they take bends smoothly.
+- **Sitting there:** if one machine couldn't get into place, its whole stage waited for ever (the bridge froze at the deck pour). Now a machine that hasn't got any closer for 20 seconds either starts work from where it is (if it's close) or backs out and finds another way. If a stage still runs far over its normal time, the crew finish it by hand at the normal pace ("CREW: ... BY HAND").
+- **Stuck:** the dozer could sit wedged against another machine while turning, and trucks could wedge themselves while lining up for a road layer; both now back off and try again. The log truck kept going back to a log it couldn't reach, and its target spot moved every couple of seconds so it never arrived. It now picks one spot per trip, and after two failed tries the fallers cut that log up and carry it off.
+- **Results (game time, no help from the player):** a bridge over the main river finished in 23-27 minutes; causeways over the south and north creeks in 19 and 28 minutes. Before, the bridge never finished. The building crew built a cabin and a shed and was framing the workshop when the 45-minute run ended; before, it stopped at the second site.
+
+**Look and feel.**
+- **Light:** new sky (deep blue overhead to haze at the horizon, sun glow), warmer sunlight, bluer shade, steadier shadows. On High (and Medium on computers) the picture gets contact shadows where things meet the ground, a soft glow, darker corners and fine grain. Low is unchanged, for slow phones.
+- **Machines:** roll cages, hoses, lamps, guards, steps, tanks, track rollers and a sagging top run on the tracks; dark undersides; mud that stays put. Cabs have reflective glass (almost clear from the seat), a monitor, headrest, arm rests and pedals.
+- **Weight:** bodies squat when pulling away, dip when braking, lean in turns and settle with a little overshoot; the dozer's nose dips when the blade bites and under a full bucket; the engine shudders under strain; the camera jolts on knocks and drops and rumbles under load; exhaust puffs harder when you open the throttle; landings thud. (The sway is only for show: the digging and driving work exactly as before, tested.)
+- **Dirt:** bigger, more numerous clods that land with dust and roll; soil spills off the ends of the blade; loaded buckets shed grains; the hauler throws a dust cloud when it tips; tracks and tyres leave tread prints and kick up dust.
+- **Water:** reflects the sky and the dark tree line; smooth where it's calm, broken where it runs fast; near-black in the deep, foam along the edges, streaks in the current, white water in fast shallows.
+- **Trees and grass:** trees sway in the wind, each in its own rhythm, and leaves glow when the sun is behind them; grass grows in thick and thin patches with dry yellow areas; meadow colour varies; damp dark soil along the water.
+
+**Tested:** all 25 automatic checks pass. That includes a new check that the crew finishes the whole crossing (it took 25-27 minutes in the test runs; the check allows 40, because the time varies from run to run). The old crew check failed at the start of this round. Screenshots on High/Medium were checked for water, clods, cabs and lighting. I can't check the frame rate on a real graphics card or phone from here; if it runs slowly, switch to Medium or Low in the menu, and please tell me.

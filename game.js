@@ -2,13 +2,12 @@
 // water flows over it (a "virtual pipes" shallow-water model), and the whole valley is saved in the
 // browser so nothing ever resets.
 import * as THREE from 'three';
-import { Sky } from 'three/addons/objects/Sky.js';
-import { makeTextures } from './textures.js?v=8';
-import * as MOD from './models.js?v=8';
-import { Sound } from './audio.js?v=8';
-import { makeCrew } from './crew.js?v=8';
-import { makeWorks } from './construct.js?v=8';
-import { makePeople } from './people.js?v=8';
+import { makeTextures } from './textures.js?v=9';
+import * as MOD from './models.js?v=9';
+import { Sound } from './audio.js?v=9';
+import { makeCrew } from './crew.js?v=9';
+import { makeWorks } from './construct.js?v=9';
+import { makePeople } from './people.js?v=9';
 
 const N = 256, NN = N * N;           // 256 x 256 cells, 1 m each
 const SAVE_KEY = 'groundwork.save.v3';   // v1 (the first, smaller valley) is left untouched in the browser
@@ -484,9 +483,9 @@ const isTouch = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in wind
 let quality = localStorage.getItem('groundwork.quality');
 if (!['high', 'medium', 'low'].includes(quality)) quality = isTouch ? 'medium' : 'high';
 const QS = {
-  high: { shadow: 4096, shadowR: 75, grass: 22000, grassR: 46, dpr: 2, soft: true, near: 900, far: 3200, detail: 2, detailR: 95 },
-  medium: { shadow: 2048, shadowR: 60, grass: 9000, grassR: 32, dpr: 1.5, soft: true, near: 450, far: 1800, detail: 2, detailR: 60 },
-  low: { shadow: 1024, shadowR: 45, grass: 0, grassR: 0, dpr: 1, soft: false, near: 160, far: 800, detail: 1, detailR: 0 },
+  high: { shadow: 4096, shadowR: 75, grass: 22000, grassR: 46, dpr: 2, soft: true, near: 900, far: 3200, detail: 2, detailR: 95, post: true, msaa: 4, aoN: 12 },
+  medium: { shadow: 2048, shadowR: 60, grass: 9000, grassR: 32, dpr: 1.5, soft: true, near: 450, far: 1800, detail: 2, detailR: 60, post: true, msaa: 2, aoN: 8 },
+  low: { shadow: 1024, shadowR: 45, grass: 0, grassR: 0, dpr: 1, soft: false, near: 160, far: 800, detail: 1, detailR: 0, post: false, msaa: 0, aoN: 0 },
 };
 const Q = QS[quality];
 const T = makeTextures(quality);
@@ -495,22 +494,43 @@ let simTime = 0;
 
 // ---------------------------------------------------------------- scene, sky and light
 const canvas = $('view');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: !Q.post, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, Q.dpr));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = Q.soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = .68;
+renderer.toneMappingExposure = .8;
 { const an = Math.min(8, renderer.capabilities.getMaxAnisotropy()); for (const k in T) if (T[k] && T[k].isTexture) T[k].anisotropy = an; }
 const scene = new THREE.Scene();
 const FOG = new THREE.Color(0xb7c4cf);
 scene.fog = new THREE.FogExp2(FOG, .00095);
 const camera = new THREE.PerspectiveCamera(55, 1, .1, 12000);
 const SUN_DIR = new THREE.Vector3(-.5, .56, .66).normalize();
+// the sky: deep blue overhead, paling to haze at the horizon (the same colour the far land fades into), with a warm
+// glow around the sun
 function makeSky(scale) {
-  const s = new Sky(); s.scale.setScalar(scale);
-  const u = s.material.uniforms;
-  u.turbidity.value = 4.5; u.rayleigh.value = 1.25; u.mieCoefficient.value = .0045; u.mieDirectionalG.value = .82; u.sunPosition.value.copy(SUN_DIR);
+  const fogLin = FOG.clone();
+  const m = new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: { uSun: { value: SUN_DIR.clone() }, uFog: { value: fogLin } },
+    vertexShader: 'varying vec3 vDir; void main() { vDir = normalize(position); vec4 p = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position = p.xyww; }',
+    fragmentShader: `
+      uniform vec3 uSun, uFog; varying vec3 vDir;
+      void main() {
+        vec3 d = normalize(vDir);
+        float h = max(d.y, 0.), s = max(dot(d, uSun), 0.);
+        vec3 zen = vec3(.07, .2, .56), mid = vec3(.2, .42, .82);
+        vec3 col = mix(mid, zen, pow(h, .55));
+        col = mix(uFog * 1.12, col, 1. - pow(1. - h, 5.5));
+        col += vec3(1., .78, .5) * (pow(s, 6.) * .16 + pow(s, 60.) * .5 + pow(s, 900.) * 6.) * (1. - pow(1. - h, 12.) * .6);
+        col += vec3(1., .9, .75) * smoothstep(.99955, .9998, s) * 40.;
+        col = mix(uFog, col, smoothstep(-.04, .0, d.y));
+        gl_FragColor = vec4(col, 1.);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+  });
+  const s = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), m); s.scale.setScalar(scale); s.frustumCulled = false; s.renderOrder = -2;
   return s;
 }
 const sky = makeSky(10000); sky.position.set(N / 2, 0, N / 2); scene.add(sky);
@@ -525,13 +545,141 @@ T.clouds.repeat.set(3, 3);
 const clouds = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000).rotateX(Math.PI / 2),
   new THREE.MeshBasicMaterial({ map: T.clouds, transparent: true, opacity: .75, depthWrite: false, fog: false, color: new THREE.Color(1.5, 1.5, 1.5) }));
 clouds.position.set(N / 2, 1100, N / 2); clouds.renderOrder = -1; scene.add(clouds);
-const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x4d4030, .45);
-const sun = new THREE.DirectionalLight(0xfff0dc, 4.4);
+const hemi = new THREE.HemisphereLight(0xbdd4ff, 0x6b5a45, 1.2);
+const sun = new THREE.DirectionalLight(0xffe8c6, 5.0);
 sun.castShadow = true;
 sun.shadow.mapSize.set(Q.shadow, Q.shadow);
 Object.assign(sun.shadow.camera, { left: -Q.shadowR, right: Q.shadowR, top: Q.shadowR, bottom: -Q.shadowR, near: 1, far: 500 });
-sun.shadow.bias = -.0004; sun.shadow.normalBias = .05;
+sun.shadow.bias = -.0003; sun.shadow.normalBias = .04;
+// the shadow box follows the machine in whole shadow-map pixels, so shadows don't shimmer as it drives
+const SUN_R = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), SUN_DIR).normalize(), SUN_U = new THREE.Vector3().crossVectors(SUN_DIR, SUN_R).normalize();
+const _sf = new THREE.Vector3();
+function aimSun(x, y, z) {
+  const px = Q.shadowR * 2 / Q.shadow;
+  _sf.set(x, y, z);
+  const a = Math.round(_sf.dot(SUN_R) / px) * px, b = Math.round(_sf.dot(SUN_U) / px) * px, c = _sf.dot(SUN_DIR);
+  _sf.set(0, 0, 0).addScaledVector(SUN_R, a).addScaledVector(SUN_U, b).addScaledVector(SUN_DIR, c);
+  sun.target.position.copy(_sf);
+  sun.position.copy(_sf).addScaledVector(SUN_DIR, 150);
+}
 scene.add(hemi, sun, sun.target);
+
+// ---------------------------------------------------------------- finishing pass (High and Medium): the picture is drawn into a
+// buffer first, then shaded where things meet (under machines, in track wells, at the foot of trees and banks) from the
+// depth of what was drawn, with a soft glow off bright metal and water, a little lens darkening at the corners and film
+// grain. Low draws straight to the screen.
+const POST = Q.post && (quality === 'high' || !isTouch) && renderer.capabilities.isWebGL2 && (renderer.extensions.has('EXT_color_buffer_float') || renderer.extensions.has('EXT_color_buffer_half_float')) ? (() => {
+  const depthTex = new THREE.DepthTexture(4, 4); depthTex.type = THREE.UnsignedIntType;
+  const rt = new THREE.WebGLRenderTarget(4, 4, { samples: Q.msaa, type: THREE.HalfFloatType, depthTexture: depthTex, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+  const half = { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
+  const aoRT = new THREE.WebGLRenderTarget(4, 4, half);
+  const glowA = new THREE.WebGLRenderTarget(4, 4, { ...half, type: THREE.HalfFloatType }), glowB = new THREE.WebGLRenderTarget(4, 4, { ...half, type: THREE.HalfFloatType });
+  const tri = new THREE.BufferGeometry();
+  tri.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
+  const pass = (fs, uniforms) => new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, depthTest: false, depthWrite: false, uniforms,
+    vertexShader: 'in vec3 position; out vec2 vUv; void main() { vUv = position.xy * .5 + .5; gl_Position = vec4(position.xy, 0., 1.); }',
+    fragmentShader: 'precision highp float; precision highp sampler2D; in vec2 vUv; out vec4 outColor;\n' + fs });
+  const aoMat = pass(`
+    uniform sampler2D tDepth; uniform vec2 uPx; uniform vec4 uProj; uniform vec2 uNF;
+    float viewZ(vec2 uv) { float d = texture(tDepth, uv).x; return uNF.x * uNF.y / (uNF.y - d * (uNF.y - uNF.x)); }   // distance in front of the camera
+    vec3 viewPos(vec2 uv) { float z = viewZ(uv); return vec3((uv * 2. - 1.) * uProj.xy * z, -z); }
+    void main() {
+      float d0 = texture(tDepth, vUv).x;
+      if (d0 >= .99999) { outColor = vec4(1.); return; }
+      vec3 P = viewPos(vUv);
+      // the surface's facing from its neighbours (taking the nearer-in-depth pair on each axis, so edges don't smear)
+      vec3 pl = viewPos(vUv - vec2(uPx.x, 0.)), pr = viewPos(vUv + vec2(uPx.x, 0.)), pd = viewPos(vUv - vec2(0., uPx.y)), pu = viewPos(vUv + vec2(0., uPx.y));
+      vec3 dx = abs(pl.z - P.z) < abs(pr.z - P.z) ? P - pl : pr - P, dy = abs(pd.z - P.z) < abs(pu.z - P.z) ? P - pd : pu - P;
+      vec3 Nn = normalize(cross(dx, dy));
+      float R = clamp(-P.z * .09, .35, 1.6);                // how far around (metres) counts as "nearby"
+      float rPx = R / (-P.z * uProj.x) * .5;                // that radius on screen (fraction of the width)
+      float ang = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(.06711056, .00583715)))) * 6.2831853;
+      float occ = 0.;
+      const int NS = ${Q.aoN};
+      for (int i = 0; i < NS; i++) {
+        float f = (float(i) + .5) / float(NS), a = ang + float(i) * 2.399963;
+        vec2 o = vec2(cos(a), sin(a)) * sqrt(f) * rPx; o.y *= uProj.x / uProj.y;
+        vec3 v = viewPos(vUv + o) - P;
+        float l2 = dot(v, v) + 1e-4;
+        occ += max(0., dot(v, Nn) - .03 - .012 * -P.z) / l2 * max(0., 1. - l2 / (R * R)) * R;
+      }
+      float ao = clamp(1. - occ * 3.4 / float(NS), 0., 1.);
+      ao = mix(ao, 1., smoothstep(60., 140., -P.z));
+      outColor = vec4(ao, -P.z * .01, 0., 1.);
+    }`, { tDepth: { value: depthTex }, uPx: { value: new THREE.Vector2() }, uProj: { value: new THREE.Vector4() }, uNF: { value: new THREE.Vector2() } });
+  const brightMat = pass(`
+    uniform sampler2D tCol; uniform vec2 uPx;
+    void main() {
+      vec3 c = vec3(0.);
+      for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) c += min(texture(tCol, vUv + (vec2(float(i), float(j)) - .5) * uPx * 2.).rgb, vec3(40.));
+      c *= .25; float l = max(c.r, max(c.g, c.b));
+      outColor = vec4(c * smoothstep(1.6, 5., l), 1.);
+    }`, { tCol: { value: rt.texture }, uPx: { value: new THREE.Vector2() } });
+  const blurMat = pass(`
+    uniform sampler2D tCol; uniform vec2 uDir;
+    void main() {
+      vec3 c = texture(tCol, vUv).rgb * .227;
+      c += (texture(tCol, vUv + uDir * 1.385).rgb + texture(tCol, vUv - uDir * 1.385).rgb) * .316;
+      c += (texture(tCol, vUv + uDir * 3.231).rgb + texture(tCol, vUv - uDir * 3.231).rgb) * .07;
+      outColor = vec4(c, 1.);
+    }`, { tCol: { value: null }, uDir: { value: new THREE.Vector2() } });
+  const outMat = pass(`
+    uniform sampler2D tCol, tAO, tGlow; uniform vec2 uPx; uniform float uExp, uTime, uDbg;
+    const int AOB = ${quality === 'high' ? 2 : 1};
+    vec3 aces(vec3 x) {   // the same film curve the renderer uses on Low
+      const mat3 A = mat3(.59719, .076, .0284, .35458, .90834, .13383, .04823, .01566, .83777);
+      const mat3 B = mat3(1.60475, -.10208, -.00327, -.53108, 1.10813, -.07276, -.07367, -.00605, 1.07602);
+      x = A * (x * uExp / .6); x = (x * (x + .0245786) - .000090537) / (x * (.983729 * x + .432951) + .238081); return clamp(B * x, 0., 1.);
+    }
+    void main() {
+      vec3 c = texture(tCol, vUv).rgb;
+      // soften the shading, without letting it leak across edges
+      vec2 a0 = texture(tAO, vUv).xy; float ao = 0., wsum = 0.;
+      for (int j = -AOB; j <= AOB; j++) for (int i = -AOB; i <= AOB; i++) {
+        vec2 s = texture(tAO, vUv + vec2(float(i), float(j)) * uPx * 2.).xy;
+        float w = 1. / (1. + abs(s.y - a0.y) * 4000. / (1. + a0.y * 100.));
+        ao += s.x * w; wsum += w;
+      }
+      ao /= wsum;
+      float lum = dot(c, vec3(.2126, .7152, .0722));
+      c *= mix(vec3(1.), vec3(ao * ao, ao * ao * 1.02, ao * ao * 1.06), 1. - smoothstep(1.2, 4., lum) * .6);
+      c += texture(tGlow, vUv).rgb * .35;
+      vec2 q = vUv - .5; c *= 1. - dot(q, q) * .55;
+      c = aces(c);
+      c = mix(vec3(dot(c, vec3(.2126, .7152, .0722))), c, 1.06);
+      c = pow(c, vec3(1. / 2.2));
+      float n = fract(sin(dot(gl_FragCoord.xy + uTime * 61., vec2(12.9898, 78.233))) * 43758.5453);
+      if (uDbg > .5) c = vec3(ao);
+      outColor = vec4(c + (n - .5) * .018, 1.);
+    }`, { tCol: { value: rt.texture }, tAO: { value: aoRT.texture }, tGlow: { value: glowA.texture }, uPx: { value: new THREE.Vector2() }, uExp: { value: 1 }, uTime: { value: 0 }, uDbg: { value: 0 } });
+  const quad = new THREE.Mesh(tri, aoMat); quad.frustumCulled = false;
+  const pcam = new THREE.Camera(), size = new THREE.Vector2();
+  const draw = (mat, target) => { quad.material = mat; renderer.setRenderTarget(target); renderer.render(quad, pcam); };
+  return {
+    debug(v) { outMat.uniforms.uDbg.value = v ? 1 : 0; },
+    render() {
+      renderer.getDrawingBufferSize(size);
+      const w = Math.max(2, size.x), h = Math.max(2, size.y), hw = Math.max(1, w >> 1), hh = Math.max(1, h >> 1);
+      if (rt.width !== w || rt.height !== h) { rt.setSize(w, h); aoRT.setSize(hw, hh); glowA.setSize(Math.max(1, hw >> 1), Math.max(1, hh >> 1)); glowB.setSize(Math.max(1, hw >> 1), Math.max(1, hh >> 1)); }
+      renderer.setRenderTarget(rt); renderer.render(scene, camera);
+      const pe = camera.projectionMatrix.elements;
+      aoMat.uniforms.uPx.value.set(1 / hw, 1 / hh); aoMat.uniforms.uProj.value.set(1 / pe[0], 1 / pe[5], 0, 0); aoMat.uniforms.uNF.value.set(camera.near, camera.far);
+      draw(aoMat, aoRT);
+      brightMat.uniforms.uPx.value.set(1 / w, 1 / h); draw(brightMat, glowA);
+      for (let i = 0; i < 2; i++) {
+        blurMat.uniforms.tCol.value = glowA.texture; blurMat.uniforms.uDir.value.set((1 + i) / glowA.width, 0); draw(blurMat, glowB);
+        blurMat.uniforms.tCol.value = glowB.texture; blurMat.uniforms.uDir.value.set(0, (1 + i) / glowA.height); draw(blurMat, glowA);
+      }
+      outMat.uniforms.uPx.value.set(1 / w, 1 / h); outMat.uniforms.uExp.value = renderer.toneMappingExposure; outMat.uniforms.uTime.value = simTime % 10;
+      draw(outMat, null);
+    },
+  };
+})() : null;
+function drawFrame() {
+  renderer.getDrawingBufferSize(_bs);
+  pMat.uniforms.uScale.value = _bs.y * .5 * camera.projectionMatrix.elements[5];
+  if (POST) POST.render(); else renderer.render(scene, camera);
+}
 
 // ---------------------------------------------------------------- the ground (textured: grass, dirt, gravel; wet where water is)
 function terrainMaterial() {
@@ -554,7 +702,14 @@ function terrainMaterial() {
         vec3 gh = texture2D(tHgt, gp1).rgb;
         vec3 gw = max(vMat.xyz, 0.) + 1e-4; gw = gw * (.35 + gh * 1.3); gw = gw * gw * gw; gw /= (gw.x + gw.y + gw.z);
         vec3 cG = mix(texture2D(tGrass, gp1).rgb, texture2D(tGrass, gp2).rgb, .4);
+        // meadow patches: sun-dried yellow in places, deeper green in others
+        { float gdry = texture2D(tMacro, vTWP.zx * .027 + .31).r, glush = texture2D(tMacro, vTWP.xz * .019 + .73).r;
+          cG = mix(cG, cG * vec3(1.42, 1.2, .72), smoothstep(.5, .78, gdry) * .75);
+          cG = mix(cG, cG * vec3(.72, .9, .7), smoothstep(.52, .8, glush) * .7); }
         vec3 cD = mix(texture2D(tDirt, gp1).rgb, texture2D(tDirt, gp2).rgb, .35);
+        // fine grit and small stones up close
+        { vec3 gfine = texture2D(tHgt, vTWP.xz * 1.13 + .17).rgb;
+          cD *= .78 + gfine.g * .5; cD = mix(cD, vec3(.5, .47, .43), smoothstep(.82, .94, gfine.b) * .18); }
         // soil layers where the ground has been cut: dark topsoil, brown subsoil, then orange clay with a pale streak;
         // freshly dumped spoil is looser and lighter
         { float dB = vDig.x - vTWP.y + (gmac - .5) * .45 + (gh.r - .5) * .12;
@@ -587,8 +742,8 @@ function waterMaterial() {
     transparent: true, depthWrite: false, fog: true,
     uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
       uTime: { value: 0 }, tN: { value: null }, uSun: { value: SUN_DIR.clone() }, uSunCol: { value: new THREE.Color(1, .92, .8) },
-      uSky: { value: new THREE.Color(.25, .42, .7) }, uHor: { value: new THREE.Color(.42, .5, .56) },
-      uDeep: { value: new THREE.Color(.015, .07, .075) }, uShallow: { value: new THREE.Color(.11, .2, .15) },
+      uSky: { value: new THREE.Color(.13, .3, .68) }, uHor: { value: FOG.clone().multiplyScalar(1.05) },
+      uDeep: { value: new THREE.Color(.008, .045, .05) }, uShallow: { value: new THREE.Color(.1, .17, .12) },
     }]),
     vertexShader: `
       #include <common>
@@ -610,26 +765,38 @@ function waterMaterial() {
       void main() {
         if (vW < 0.008) discard;
         vec2 fl = vFlow, uv = vWP.xz * .16;
+        float speed = length(fl), dist = length(cameraPosition - vWP), calm = 1. / (1. + dist * .018);
         float ph = fract(uTime * .12), w1 = abs(ph - .5) * 2.;
         vec4 a1 = texture2D(tN, uv - fl * ph * .9 + vec2(uTime * .006, 0.));
         vec4 a2 = texture2D(tN, uv - fl * fract(ph + .5) * .9 + vec2(.37, .21));
         vec4 b1 = texture2D(tN, uv * 2.3 + vec2(-uTime * .011, uTime * .014));
-        vec3 n1 = mix(a1.xyz, a2.xyz, w1) * 2. - 1., n2 = b1.xyz * 2. - 1.;
-        vec3 nt = normalize(vec3(n1.xy * .9 + n2.xy * .5, 1.6));
+        vec4 b2 = texture2D(tN, uv * 5.1 - fl * uTime * .12 + vec2(uTime * .02, -uTime * .017));
+        vec3 n1 = mix(a1.xyz, a2.xyz, w1) * 2. - 1., n2 = b1.xyz * 2. - 1., n3 = b2.xyz * 2. - 1.;
+        // still water is nearly a mirror; the faster it runs the more it is broken up (and less so far away, where
+        // fine ripples would only sparkle)
+        float chop = (.16 + min(speed, 2.5) * .5) * mix(.3, 1., calm);
+        vec3 nt = normalize(vec3((n1.xy * .9 + n2.xy * .5 + n3.xy * .35 * calm) * chop, 1.));
         vec3 N = normalize(vec3(nt.x, nt.z, nt.y));
         vec3 V = normalize(cameraPosition - vWP);
         float fres = .02 + .98 * pow(1. - max(dot(N, V), 0.), 5.);
-        vec3 R = reflect(-V, N);
-        vec3 skyc = mix(uHor, uSky, clamp(R.y * 1.8, 0., 1.));
-        float spec = pow(max(dot(R, uSun), 0.), 350.) * 9. + pow(max(dot(R, uSun), 0.), 40.) * .25;
-        float depthF = 1. - exp(-vW * 1.1);
-        vec3 body = mix(uShallow, uDeep, depthF) * (.75 + .25 * max(dot(N, uSun), 0.));
+        vec3 R = reflect(-V, N); R.y = abs(R.y);
+        // what it mirrors: sky overhead, haze lower down, and the dark line of the forest along the banks
+        vec3 skyc = mix(uHor, uSky, clamp(R.y * 1.7, 0., 1.));
+        skyc = mix(vec3(.018, .04, .022), skyc, smoothstep(.04, .3, R.y + (n2.x + n1.y) * .05));
+        float sd = max(dot(R, uSun), 0.);
+        float spec = pow(sd, 420.) * 14. + pow(sd, 48.) * .3;
+        // depth: the bed shows through the shallows, then green, then near-black water
+        float depthF = 1. - exp(-vW * 1.5);
+        vec3 body = mix(uShallow, uDeep, depthF) * (.7 + .3 * max(dot(N, uSun), 0.));
+        body = mix(body, uDeep * .45, smoothstep(.9, 2.4, vW));
         vec3 col = mix(body, skyc, fres) + uSunCol * spec;
-        float speed = length(fl);
+        // foam: a line along the edge, streaks where the current is fast, white water where it is fast and shallow
         float fn = mix(a1.a, a2.a, w1) * .6 + texture2D(tN, uv * 3.7 - fl * uTime * .3).a * .4;
-        float foam = smoothstep(.58, .88, fn) * (smoothstep(.2, .0, vW) * .8 + clamp(speed * .22, 0., .4));
-        col = mix(col, vec3(.85, .88, .86), foam * .75);
-        float alpha = clamp(.38 + depthF * .58 + fres * .3 + foam * .5, 0., .97) * smoothstep(.008, .07, vW);
+        float rush = smoothstep(.7, 2.2, speed), rapid = rush * smoothstep(.7, .12, vW);
+        float foam = smoothstep(.6 - rapid * .25, .86 - rapid * .2, fn) * (smoothstep(.16, .0, vW) * .85 + rush * .45 + rapid * .5);
+        foam = clamp(foam, 0., 1.);
+        col = mix(col, vec3(.86, .89, .87) * (.75 + .25 * max(dot(N, uSun), 0.)), foam * .8);
+        float alpha = clamp(.3 + depthF * .66 + fres * .45 + foam * .5, 0., .98) * smoothstep(.008, .07, vW);
         gl_FragColor = vec4(col, alpha);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -658,7 +825,9 @@ function cellLook(i0, i1, j0, j1) {
     if (w > .05 && M[k] === 0 && !D[k]) { g = 0; d = .7; r = .3; }
     let wet = 0;
     if (w > .02) wet = clamp(.6 + w * .3, 0, 1);
-    else if ((i > 0 && W[k - 1] > .02) || (i < N - 1 && W[k + 1] > .02) || (j > 0 && W[k - N] > .02) || (j < N - 1 && W[k + N] > .02)) wet = .45;
+    else if ((i > 0 && W[k - 1] > .02) || (i < N - 1 && W[k + 1] > .02) || (j > 0 && W[k - N] > .02) || (j < N - 1 && W[k + N] > .02)) wet = .5;
+    else if ((i > 1 && W[k - 2] > .02) || (i < N - 2 && W[k + 2] > .02) || (j > 1 && W[k - 2 * N] > .02) || (j < N - 2 && W[k + 2 * N] > .02)
+      || (i > 0 && j > 0 && W[k - N - 1] > .02) || (i < N - 1 && j > 0 && W[k - N + 1] > .02) || (i > 0 && j < N - 1 && W[k + N - 1] > .02) || (i < N - 1 && j < N - 1 && W[k + N + 1] > .02)) wet = .26;
     cMat[k * 4] = g; cMat[k * 4 + 1] = d; cMat[k * 4 + 2] = r; cMat[k * 4 + 3] = wet;
   }
 }
@@ -910,15 +1079,40 @@ function updateRing() {
 }
 
 // ---------------------------------------------------------------- trees, rocks, grass
+const windU = { uTime: { value: 0 } };
+// card trees: the crowns sway in the wind (more toward the top and the branch tips), each tree in its own time, and
+// leaves glow when the sun is behind them
+function leafy(sh, trunk) {
+  sh.uniforms.uTime = windU.uTime;
+  sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;')
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+      #ifdef USE_INSTANCING
+        { vec4 gIP = instanceMatrix * vec4(0., 0., 0., 1.);
+          float gph = gIP.x * .37 + gIP.z * .29, gh = max(position.y, 0.);
+          float gsw = sin(uTime * .9 + gph) + .45 * sin(uTime * 2.1 + gph * 1.7);
+          float gtip = ${trunk ? '0.' : 'length(position.xz)'};
+          transformed.x += gsw * gh * gh * .0011 + sin(uTime * 2.7 + gph + position.y * .8) * gtip * .012;
+          transformed.z += gsw * gh * gh * .0007 + cos(uTime * 2.3 + gph + position.y * .6) * gtip * .012;
+          transformed.y += sin(uTime * 3.1 + gph + position.x + position.z) * gtip * .008; }
+      #endif`);
+  if (!trunk) sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      #if NUM_DIR_LIGHTS > 0
+        { float gback = max(dot(-normalize(vViewPosition), directionalLights[0].direction), 0.);
+          totalEmissiveRadiance += diffuseColor.rgb * vec3(1.1, 1.25, .55) * pow(gback, 3.) * .55; }
+      #endif`);
+}
 const folMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: T.foliage, alphaTest: .42, side: THREE.DoubleSide, roughness: .88, alphaToCoverage: true });
 const barkTex = T.bark.clone(); barkTex.repeat.set(2, 5); barkTex.needsUpdate = true;
 const barkMat = new THREE.MeshStandardMaterial({ map: barkTex, roughness: .95, color: 0xd2c2ac });
+folMat.onBeforeCompile = sh => leafy(sh, false); folMat.customProgramCacheKey = () => 'gw-fol';
+barkMat.onBeforeCompile = sh => leafy(sh, true); barkMat.customProgramCacheKey = () => 'gw-bark';
 const TREE_GEOS = [MOD.spruceGeo(1, 12), MOD.spruceGeo(2, 14.5), MOD.spruceGeo(3, 16.5), MOD.leafyGeo(1, 10), MOD.leafyGeo(2, 12)];
 const TREE_H = [12, 14.5, 16.5, 10, 12];
 // trees in the valley thin out (a dithered fade) when they stand between the camera and the machine you're watching
 function fadeable(mat, key) {
   const m = mat.clone();
   m.onBeforeCompile = sh => {
+    leafy(sh, key === 'bark');
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float aFade; varying float vFade;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFade = aFade;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
@@ -956,7 +1150,7 @@ function updateTrees(dt, terrainChanged) {
   for (const t of trees) {
     if (t.st === 1) {
       t.a = Math.min(1, t.a + dt * (.45 + t.a * 2.4));
-      if (t.a >= 1) { t.st = 2; t.t = 0; logRest(t); dust(t.x + t.dx * 7 * t.s, t.y + .5, t.z + t.dz * 7 * t.s, 16, [.42, .38, .3]); }
+      if (t.a >= 1) { t.st = 2; t.t = 0; logRest(t); quake(t.x, t.y, t.z, .5 * t.s); dust(t.x + t.dx * 7 * t.s, t.y + .5, t.z + t.dz * 7 * t.s, 16, [.42, .38, .3]); }
       t.dirty = true;
     } else if (t.st === 2 && refresh) { if (logRest(t)) t.dirty = true; }
     else if (t.st === 0 && refresh) { const y = hAt(t.x, t.z) - .15; if (Math.abs(y - t.y) > .01) { t.y = y; t.dirty = true; } }
@@ -1108,6 +1302,7 @@ if (Q.grass > 0) {
   grassIM = new THREE.InstancedMesh(MOD.tuftGeo(), grassMat, Q.grass);
   grassIM.receiveShadow = true; grassIM.frustumCulled = false; grassIM.count = 0; scene.add(grassIM);
 }
+const _gc = new THREE.Color();
 const hashf = (a, b) => { const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return s - Math.floor(s); };
 function updateGrass(dt, me) {
   if (!grassIM) return;
@@ -1129,13 +1324,17 @@ function updateGrass(dt, me) {
     for (let q = 0; q < (bank ? 3 : 2) && n < Q.grass; q++) {
       const hx = hashf(i + q * .37, j), hz = hashf(j + q * .51, i + 3.1);
       if (dd > R * R * .55 && hx < .5) continue;
-      const x = i + hx - .5, z = j + hz - .5, s = .7 + hashf(i, j + q) * .7;
+      const patch = vnoise(i * .11 + 3.3, j * .11 - 1.7) + .5 * vnoise(i * .37, j * .37);   // about -.75 .. .75
+      if (!bank && patch < -.18 && hz < .55) continue;
+      const x = i + hx - .5, z = j + hz - .5, s = (.7 + hashf(i, j + q) * .7) * clamp(1 + patch * .9, .55, 1.7);
+      { const dryp = clamp(vnoise(i * .07 - 9.1, j * .07 + 4.2) * 2.2 + .25, 0, 1), sh = .72 + hashf(j * 1.3 + q, i * .7) * .56;
+        _gc.setRGB(sh * (1 + dryp * .55), sh * (1 + dryp * .22), sh * (1 - dryp * .3)); grassIM.setColorAt(n, _gc); }
       _q.setFromAxisAngle(_ax.set(0, 1, 0), hx * 6.28);
       _m4.compose(_v.set(x, hAt(x, z) - .03, z), _q, _s.set(s * (bank ? .8 : 1), s * (.8 + hz * .5) * (bank ? 2.6 + hz * 1.4 : 1), s * (bank ? .8 : 1)));
       grassIM.setMatrixAt(n++, _m4);
     }
   }
-  grassIM.count = n; grassIM.instanceMatrix.needsUpdate = true;
+  grassIM.count = n; grassIM.instanceMatrix.needsUpdate = true; if (grassIM.instanceColor) grassIM.instanceColor.needsUpdate = true;
 }
 
 // the forest beyond the work site (fixed scenery)
@@ -1240,23 +1439,78 @@ function updateParticles(dt) {
   pGeo.attributes.position.needsUpdate = true; pGeo.attributes.aCol.needsUpdate = true; pGeo.attributes.aSize.needsUpdate = true;
 }
 
+// ---------------------------------------------------------------- prints: tracks and tyres press their pattern into the ground
+// (just for show; the oldest are reused, and a print goes when the ground under it is dug, buried or flooded)
+const TMAX = quality === 'high' ? 1800 : quality === 'medium' ? 1000 : 500;
+const treadGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+const tInfo = new Float32Array(TMAX * 2), tCell = new Int32Array(TMAX).fill(-1), tH = new Float32Array(TMAX);
+treadGeo.setAttribute('aInfo', new THREE.InstancedBufferAttribute(tInfo, 2).setUsage(THREE.DynamicDrawUsage));
+const treadMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+  uniforms: { tMap: { value: T.tread }, uFade: { value: quality === 'high' ? 110 : 70 } },
+  vertexShader: `attribute vec2 aInfo; varying vec2 vUv; varying float vA; uniform float uFade;
+    void main() { vUv = vec2(uv.x * .5 + aInfo.x, uv.y); vec4 mv = modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+      vA = aInfo.y * (1. - smoothstep(uFade * .55, uFade, -mv.z)); gl_Position = projectionMatrix * mv; }`,
+  fragmentShader: `uniform sampler2D tMap; varying vec2 vUv; varying float vA;
+    void main() { float a = texture2D(tMap, vUv).a * vA; if (a < .01) discard; gl_FragColor = vec4(.03, .022, .015, a * .85); }`,
+});
+const treadIM = new THREE.InstancedMesh(treadGeo, treadMat, TMAX);
+treadIM.frustumCulled = false; treadIM.renderOrder = 1; scene.add(treadIM);
+let tNext = 0, tCheck = 0;
+const _tr = new THREE.Vector3(), _tf = new THREE.Vector3(), _tu = new THREE.Vector3();
+const hShow = (x, z) => (Q.detail > 1 ? hDraw(x, z, 2) : hAt(x, z));
+function addPrint(x, z, yaw, wid, len, tyre) {
+  if (x < 2 || z < 2 || x > N - 3 || z > N - 3) return;
+  const k = cellOf(x, z);
+  if (W[k] > .02 || DECK[k] > 0) return;
+  const fx = Math.sin(yaw), fz = Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw), a = len / 2, b = wid / 2;
+  const hf = hShow(x + fx * a, z + fz * a), hb = hShow(x - fx * a, z - fz * a), hr = hShow(x + rx * b, z + rz * b), hl = hShow(x - rx * b, z - rz * b);
+  _tf.set(fx * len, hf - hb, fz * len); _tr.set(rx * wid, hr - hl, rz * wid); _tu.crossVectors(_tf, _tr).normalize();
+  const i = tNext; tNext = (tNext + 1) % TMAX;
+  _m4.makeBasis(_tr, _tu, _tf).setPosition(x, (hf + hb + hr + hl) / 4 + .025, z);
+  treadIM.setMatrixAt(i, _m4); treadIM.instanceMatrix.needsUpdate = true;
+  tInfo[i * 2] = tyre ? .5 : 0; tInfo[i * 2 + 1] = M[k] === 2 ? .55 : (M[k] === 1 || D[k]) ? 1 : .6;
+  treadGeo.attributes.aInfo.needsUpdate = true;
+  tCell[i] = k; tH[i] = H[k];
+}
+function updatePrints() {
+  let any = false;
+  for (let q = 0; q < 60; q++) {
+    const i = tCheck; tCheck = (tCheck + 1) % TMAX;
+    const k = tCell[i]; if (k < 0) continue;
+    if (Math.abs(H[k] - tH[i]) > .05 || W[k] > .03) { tCell[i] = -1; tInfo[i * 2 + 1] = 0; any = true; }
+  }
+  if (any) treadGeo.attributes.aInfo.needsUpdate = true;
+}
+// where each machine's tracks or wheels touch: [sideways, along, width]
+const CONTACT = { dozer: [[1.2, 0, .62], [-1.2, 0, .62]], excavator: [[1.25, 0, .62], [-1.25, 0, .62]], paver: [[1.3, 0, .5], [-1.3, 0, .5]],
+  loader: [[1.18, -1.6, .66], [-1.18, -1.6, .66]], hauler: [[1.3, -2.9, .76], [-1.3, -2.9, .76]] };
+function leavePrints(m, dist, dyaw) {
+  const pts = CONTACT[m.type]; if (!pts) return;
+  m.printAcc = (m.printAcc || 0) + Math.abs(dist) + Math.abs(dyaw) * 1.2;
+  if (m.printAcc < .5) return;
+  m.printAcc = 0;
+  const c = Math.cos(m.yaw), sn = Math.sin(m.yaw), tyre = !SPEC[m.type].tracks;
+  for (const [px, pz, w] of pts) addPrint(m.x + c * px + sn * pz, m.z - sn * px + c * pz, m.yaw, w, .52, tyre);
+}
+
 // clods and stones that tumble out of buckets and beds (just for show: the ground has already been changed)
-const CMAX = 360;
+const CMAX = quality === 'low' ? 360 : 900;
 const clodGeo = (() => { const g = new THREE.IcosahedronGeometry(.11, 1), p = g.attributes.position; for (let i = 0; i < p.count; i++) { const k = .75 + .45 * Math.abs(Math.sin(p.getX(i) * 41 + p.getY(i) * 23 + p.getZ(i) * 17)); p.setXYZ(i, p.getX(i) * k, p.getY(i) * k * .8, p.getZ(i) * k); } g.computeVertexNormals(); return g; })();
 const chunkIM = new THREE.InstancedMesh(clodGeo, new THREE.MeshStandardMaterial({ roughness: 1, map: T.dirt }), CMAX);
 chunkIM.castShadow = true; chunkIM.frustumCulled = false; scene.add(chunkIM);
 const cPos = new Float32Array(CMAX * 3), cVel = new Float32Array(CMAX * 3), cLife = new Float32Array(CMAX), cRot = new Float32Array(CMAX * 2), cS = new Float32Array(CMAX);
 let cNext = 0, chunksLive = 0;
 { const col = new THREE.Color(); for (let i = 0; i < CMAX; i++) { chunkIM.setMatrixAt(i, _m4.makeScale(0, 0, 0)); chunkIM.setColorAt(i, col.setRGB(.4, .3, .2)); } }
-const CHUNK_DIRT = new THREE.Color(0x5e4029), CHUNK_GRAVEL = new THREE.Color(0x8c8880), _cc = new THREE.Color();
+const CHUNK_DIRT = new THREE.Color(0x9a7352), CHUNK_GRAVEL = new THREE.Color(0x8c8880), _cc = new THREE.Color();
 function chunks(x, y, z, n, gravel, vx = 0, vz = 0, spread = 1) {
   spawn('grain', x, y, z, n * 9, gravel ? [.55, .53, .5] : [.34, .24, .16], { jitter: spread, vx, vz, size: .75 });
-  n = Math.ceil(n * .3);
+  n = Math.ceil(n * .55);
   for (let q = 0; q < n; q++) {
     const i = cNext; cNext = (cNext + 1) % CMAX;
     cPos[i * 3] = x + (Math.random() - .5) * spread; cPos[i * 3 + 1] = y + (Math.random() - .5) * .3; cPos[i * 3 + 2] = z + (Math.random() - .5) * spread;
     cVel[i * 3] = vx + (Math.random() - .5) * 1.2; cVel[i * 3 + 1] = Math.random() * 1.2; cVel[i * 3 + 2] = vz + (Math.random() - .5) * 1.2;
-    cLife[i] = 1.6 + Math.random(); cRot[i * 2] = Math.random() * 6; cRot[i * 2 + 1] = Math.random() * 6; cS[i] = .3 + Math.random() * Math.random() * .8;
+    cLife[i] = 1.6 + Math.random(); cRot[i * 2] = Math.random() * 6; cRot[i * 2 + 1] = Math.random() * 6; cS[i] = .4 + Math.random() * Math.random() * 1.3;
     _cc.copy(gravel ? CHUNK_GRAVEL : CHUNK_DIRT).multiplyScalar(.75 + Math.random() * .5);
     chunkIM.setColorAt(i, _cc);
   }
@@ -1272,10 +1526,13 @@ function updateChunks(dt) {
     cVel[i * 3 + 1] -= 9.8 * dt;
     let x = cPos[i * 3] + cVel[i * 3] * dt, y = cPos[i * 3 + 1] + cVel[i * 3 + 1] * dt, z = cPos[i * 3 + 2] + cVel[i * 3 + 2] * dt;
     const g = hAt(x, z) + .05;
-    if (y < g) { y = g; cVel[i * 3] *= .4; cVel[i * 3 + 2] *= .4; cVel[i * 3 + 1] = -cVel[i * 3 + 1] * .25; cLife[i] = Math.min(cLife[i], .6); }
+    if (y < g) {   // lands: a puff of dust for the big ones, a short roll, then it settles into the heap
+      if (cVel[i * 3 + 1] < -2.5 && cS[i] > .9 && Math.random() < .5) spawn('dust', x, g + .1, z, 1, DIRT_C, { alpha: .3, size: .55 });
+      y = g; cVel[i * 3] *= .45; cVel[i * 3 + 2] *= .45; cVel[i * 3 + 1] = -cVel[i * 3 + 1] * .22; cLife[i] = Math.min(cLife[i], 1.1);
+    }
     cPos[i * 3] = x; cPos[i * 3 + 1] = y; cPos[i * 3 + 2] = z;
     cRot[i * 2] += dt * 6; cRot[i * 2 + 1] += dt * 4;
-    const s = cLife[i] > 0 ? cS[i] * Math.min(1, cLife[i] * 3) : 0;
+    const s = cLife[i] > 0 ? cS[i] * Math.min(1, cLife[i] * 2.5) : 0;
     _q.setFromEuler(new THREE.Euler(cRot[i * 2], cRot[i * 2 + 1], 0));
     chunkIM.setMatrixAt(i, _m4.compose(_v.set(x, y, z), _q, _s.set(s, s, s)));
   }
@@ -1400,15 +1657,42 @@ function poseMachine(m, dt, inp) {
   m.roll = lerp(m.roll, Math.atan2(hl - hr, Wd * 2), k);
   // the body rocks back when pulling away, dips when stopping and leans in turns
   if (dt > 0) {
-    const acc = (m.v - m.lastV) / dt; m.lastV = m.v;
-    const soft = s.tracks ? .006 : .014;
-    m.sPitch = lerp(m.sPitch, clamp(-acc * soft, -.05, .05), 1 - Math.exp(-dt * 5));
-    m.sRoll = lerp(m.sRoll, clamp(-m.v * inp.steer * soft * .8, -.04, .04), 1 - Math.exp(-dt * 4));
+    const acc = clamp((m.v - m.lastV) / dt, -12, 12); m.lastV = m.v;
+    const soft = s.tracks ? .007 : .015, lf = s.cap ? clamp(m.load.v / s.cap, 0, 1) : 0;
+    // what the body is being asked to do: squat back under power, nose down under braking, lean out of turns...
+    let tp = -acc * soft, tr = -m.v * inp.steer * soft * .9, ty = 0;
+    // ...and the weight of the work: the dozer's nose digs in when the blade bites and when it shoves a full blade,
+    // the loader tips forward under a full raised bucket, the hauler sits down on its springs under a load, and the
+    // excavator is dragged toward its bucket
+    if (m.type === 'dozer') tp += clamp(m.digSm * .012, 0, .03) + lf * .014 * (m.v > .2 ? 1 : .4);
+    else if (m.type === 'loader') { tp += lf * (.012 + m.arm * .012) + clamp(m.digSm * .01, 0, .02); ty -= lf * .03; }
+    else if (m.type === 'hauler') { tp -= lf * .012 + m.tip * .012; ty -= lf * .07; }
+    else if (m.type === 'excavator') { const pull = clamp(m.digSm * .02, 0, .028) + lf * .008; tp += pull * Math.cos(m.swing); tr -= pull * Math.sin(m.swing); tr += clamp(((m.swing - (m.lastSwing ?? m.swing)) / dt - (m.swingRate || 0)) * .02, -.02, .02); m.swingRate = (m.swing - (m.lastSwing ?? m.swing)) / dt; m.lastSwing = m.swing; }
+    // rough ground rocks it as it travels (tyres wallow, tracks rattle), and the engine pulling hard makes it shudder
+    const sp = Math.abs(m.v), rough = s.tracks ? .006 : .012, ph = (m.x * 1.9 + m.z * 2.3);
+    tp += Math.sin(ph) * rough * Math.min(1, sp / 2); tr += Math.sin(ph * .73 + 1.7) * rough * Math.min(1, sp / 2);
+    tp = clamp(tp, -.075, .075); tr = clamp(tr, -.06, .06);
+    // a sprung, damped body: it overshoots and settles instead of sliding to its new attitude
+    const K = s.tracks ? 120 : 70, C = s.tracks ? 13 : 7.5, n = dt > .02 ? 2 : 1, h = dt / n;
+    for (let i = 0; i < n; i++) {
+      m.sPitchV = (m.sPitchV || 0) + ((tp - m.sPitch) * K - m.sPitchV * C) * h; m.sPitch += m.sPitchV * h;
+      m.sRollV = (m.sRollV || 0) + ((tr - m.sRoll) * K - m.sRollV * C) * h; m.sRoll += m.sRollV * h;
+      m.bobV = (m.bobV || 0) + ((ty - (m.bob || 0)) * K - m.bobV * C) * h; m.bob = (m.bob || 0) + m.bobV * h;
+    }
+    if (!(Math.abs(m.sPitch) < .2 && Math.abs(m.sRoll) < .2 && Math.abs(m.bob) < .5)) { m.sPitch = m.sRoll = m.bob = 0; m.sPitchV = m.sRollV = m.bobV = 0; }
+    // dropping onto the ground after a ledge slams the suspension down
+    const vy = (y - m.y) * 12;
+    if (vy < -3.5 && !m.dropped) { m.dropped = true; m.bobV += vy * .05; quake(m.x, m.y, m.z, clamp(-vy * .05, 0, .5)); snd.clang(m.x, m.y, m.z, 46, clamp(-vy * .06, .1, .45)); dust(m.x, y + .2, m.z, 5, DIRT_C); }
+    else if (vy > -1) m.dropped = false;
+    m.strain = lerp(m.strain || 0, clamp(Math.abs(inp.throttle) * clamp(1 - sp / (s.vmax * .6), 0, 1) * .7 + m.workSm, 0, 1), 1 - Math.exp(-dt * 4));
     m.steerVis = lerp(m.steerVis, inp.steer * (Math.abs(m.v) > .05 || inp.throttle ? 1 : .6), 1 - Math.exp(-dt * 3));
   }
-  const shake = Math.sin(simTime * 57 + m.id * 3) * .004 * (.4 + m.workSm);
-  m.group.position.set(m.x, m.y + shake, m.z);
-  m.group.rotation.set(-m.pitch + m.sPitch, m.yaw, m.roll + m.sRoll, 'YXZ');
+  // the engine: a fine tremble at idle that turns into a heavy shudder when it's pulling
+  const st = m.hp <= 0 ? 0 : .35 + (m.strain || 0) * 1.6 + m.workSm * .8, et = simTime * (44 + (m.strain || 0) * 9) + m.id * 3;
+  const shake = Math.sin(et) * .0022 * st, shR = Math.sin(et * .5 + 1.3) * .0016 * st, shP = Math.sin(et * 1.31 + .4) * .0009 * st;
+  m.group.position.set(m.x, m.y + shake + (m.bob || 0), m.z);
+  m.group.rotation.set(-m.pitch + m.sPitch + shP, m.yaw, m.roll + m.sRoll + shR, 'YXZ');
+  m.swayed = true;
   if (m.front) m.front.rotation.y = m.steerVis * .5;
   m.group.updateMatrixWorld(true);
   for (const r of m.rams) r.update();
@@ -1417,7 +1701,13 @@ function poseMachine(m, dt, inp) {
 const _w = new THREE.Vector3();
 function machineFx(m, dt, isActive) {
   // exhaust: a light haze at idle, dark puffs when the engine is pulling
-  const s = SPEC[m.type], load = clamp((isActive ? Math.abs(m.ctl.throttle) * .6 : 0) + m.workSm, 0, 1);
+  const s = SPEC[m.type], load = clamp((isActive ? Math.abs(m.ctl.throttle) * .6 : 0) + m.workSm + (m.strain || 0) * .3, 0, 1);
+  const thr = isActive && m.hp > 0 ? Math.abs(m.ctl.throttle) : 0;
+  if (thr > .5 && (m.lastThr || 0) <= .5 && simTime - (m.belchT || -9) > 1.2) {
+    m.belchT = simTime; m.exhaust.getWorldPosition(_w);
+    spawn('smoke', _w.x, _w.y, _w.z, 7, [.1, .1, .1], { jitter: .15, size: 1.5, alpha: .8, up: 1.5 });
+  }
+  m.lastThr = thr;
   m.smokeAcc += dt * (1.5 + load * 14 + (isActive ? Math.abs(m.v) / s.vmax * 4 : 0));
   if (m.smokeAcc >= 1) {
     const n = Math.floor(m.smokeAcc); m.smokeAcc -= n;
@@ -1434,6 +1724,22 @@ function machineFx(m, dt, isActive) {
       spawn('smoke', _w.x, _w.y, _w.z, 1, [g, g, g], { jitter: .5, size: 1.1, alpha: .6 });
     }
   }
+  // soil boils off the ends of a cutting blade, and a full bucket on the move sheds a little
+  if (m.type === 'dozer' && m.digSm > .25 && m.v > .3) {
+    const grav = m.digGSm > m.digSm * .5, col = grav ? [.55, .53, .5] : [.33, .23, .15], n = Math.min(4, Math.floor(m.digSm * dt * 14 + Math.random()));
+    for (let q = 0; q < n; q++) {
+      const sx = Math.random() < .5 ? -1 : 1, out = (1.5 + Math.random() * 2) * sx;
+      _w.set(sx * 1.95, m.blade + .15 + Math.random() * .5, 2.85); m.group.localToWorld(_w);
+      spawn('grain', _w.x, _w.y, _w.z, 2, col, { jitter: .25, vx: Math.cos(m.yaw) * out + Math.sin(m.yaw) * m.v, vz: -Math.sin(m.yaw) * out + Math.cos(m.yaw) * m.v, up: -3.5, size: .9 });
+      if (Math.random() < .25) chunks(_w.x, _w.y + .2, _w.z, 1, grav, Math.cos(m.yaw) * out * .7 + Math.sin(m.yaw) * m.v, -Math.sin(m.yaw) * out * .7 + Math.cos(m.yaw) * m.v, .3);
+    }
+    if (Math.random() < dt * 6) { _w.set(0, m.blade + .2, 3.0); m.group.localToWorld(_w); spawn('dust', _w.x, _w.y, _w.z, 1, grav ? GRAVEL_C : DIRT_C, { jitter: 3, alpha: .4, size: 1.1 }); }
+  }
+  if ((m.type === 'excavator' || m.type === 'loader') && m.load.v > .3 && m.bucket && Math.random() < dt * (m.type === 'excavator' ? 5 + Math.abs(m.swingRate || 0) * 14 : Math.abs(m.v) * 1.6)) {
+    _w.set((Math.random() - .5) * (m.type === 'loader' ? 2.4 : .8), 0, m.type === 'loader' ? .8 : .7); m.bucket.localToWorld(_w);
+    spawn('grain', _w.x, _w.y, _w.z, 2, m.load.g > m.load.v * .5 ? [.55, .53, .5] : [.33, .23, .15], { jitter: .3, size: .8 });
+  }
+  m.mats.glass.opacity = cabView && m === machines[active] ? .06 : .32;
   for (const b of m.beacons) b.material.emissiveIntensity = isActive ? (Math.sin(simTime * 9) > .55 ? 4 : .25) : .1;
   // driving through water throws spray
   if (Math.abs(m.v) > .8 && wetAt(m.x, m.z) > .15) {
@@ -1453,6 +1759,7 @@ function hurt(m, amt, x = m.x, y = m.y + 1, z = m.z, why = '?') {
   if (amt > .006 && simTime - m.hurtT > .25) {
     m.hurtT = simTime;
     snd.clang(x, y, z, 70 + Math.random() * 90, clamp(amt * 12, .12, .6));
+    quake(x, y, z, clamp(amt * 25, .15, .9));
     spawn('spark', x, y, z, Math.ceil(clamp(amt * 400, 3, 18)), [1, .72, .32], { jitter: .4 });
   }
   const name = SPEC[m.type].name;
@@ -1561,7 +1868,19 @@ function drive(m, dt, inp) {
     const k = cellOf(wx, wz);
     if (M[k] === 0 && !D[k]) { D[k] = 1; dirty(k); }
   }
-  if (Math.abs(m.v) > 1.5 && Math.random() < dt * 4) { const k = cellOf(m.x, m.z); if (D[k] || M[k]) spawn('dust', m.x - fx * L, m.y + .3, m.z - fz * L, 1, M[k] === 2 ? GRAVEL_C : DIRT_C, { alpha: .35, size: .8 }); }
+  leavePrints(m, dist, dyaw);
+  // dust rolls up behind the tracks or wheels on dry bare ground, and they fling a little soil
+  const sp = Math.abs(m.v) + Math.abs(dyaw) / Math.max(dt, 1e-3) * (s.tracks ? 1.5 : 0);
+  if (sp > .6) {
+    const back = -Math.sign(m.v || 1), rear = s.tracks ? 1.9 : m.type === 'hauler' ? 3.5 : 2.2, hw = s.wid * .4;
+    for (const sx of [-1, 1]) {
+      const wx = m.x + Math.cos(m.yaw) * sx * hw + fx * rear * back, wz = m.z - Math.sin(m.yaw) * sx * hw + fz * rear * back, k = cellOf(wx, wz);
+      if (W[k] > .03 || DECK[k] > 0) continue;
+      const bare = M[k] === 2 || M[k] === 1 || D[k] ? 1 : .12, gy = hAt(wx, wz);
+      if (Math.random() < dt * sp * 2.4 * bare) spawn('dust', wx, gy + .15, wz, 1, M[k] === 2 ? GRAVEL_C : bare < 1 ? [.5, .47, .36] : DIRT_C, { alpha: .25 + Math.min(.3, sp * .04), size: .6 + sp * .09, vx: -fx * m.v * .25, vz: -fz * m.v * .25 });
+      if (bare === 1 && sp > 1.2 && Math.random() < dt * sp * 1.6) spawn('grain', wx, gy + .12, wz, 2, M[k] === 2 ? [.55, .53, .5] : [.3, .21, .14], { jitter: .45, vx: -fx * m.v * .3, vz: -fz * m.v * .3, up: -3, size: .7 });
+    }
+  }
 }
 
 function toolDozer(m, dt, inp) {
@@ -1757,7 +2076,7 @@ function toolHauler(m, dt, inp) {
   const before = m.tip;
   m.tip = clamp(m.tip + (m.tipping ? .45 : -.5) * dt, 0, 1);
   if (m.tip !== before) m.hyd = Math.max(m.hyd, .85);
-  if (before > .02 && m.tip === 0) { _p.set(0, 1.8, -3); m.group.localToWorld(_p); snd.clang(_p.x, _p.y, _p.z, 70, .55); }
+  if (before > .02 && m.tip === 0) { _p.set(0, 1.8, -3); m.group.localToWorld(_p); snd.clang(_p.x, _p.y, _p.z, 70, .55); quake(_p.x, _p.y, _p.z, .45); m.bobV = (m.bobV || 0) - .5; m.sPitchV = (m.sPitchV || 0) - .25; }
   m.bed.rotation.x = -m.tip * .9;
   if (m.tip > .45 && m.load.v > 0) {
     m.group.updateMatrixWorld();
@@ -1767,7 +2086,7 @@ function toolHauler(m, dt, inp) {
     m.pour += put; m.pourG = grav;
     _p.set(0, 1.4, -4.9); m.group.localToWorld(_p);
     chunks(_p.x, _p.y, _p.z, Math.ceil(dt * 70), grav, -Math.sin(m.yaw) * 1.2, -Math.cos(m.yaw) * 1.2, 2.2);
-    if (Math.random() < dt * 14) dust(_p.x, hAt(_p.x, _p.z) + .4, _p.z, 3, grav ? GRAVEL_C : DIRT_C);
+    if (Math.random() < dt * 22) spawn('dust', _p.x, hAt(_p.x, _p.z) + .4, _p.z, 3, grav ? GRAVEL_C : DIRT_C, { jitter: 2.4, size: 1.5, alpha: .8 });
     m.work = Math.max(m.work, .5);
   }
   const f = m.load.v / s.cap;
@@ -2394,6 +2713,27 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) save(
 
 // ---------------------------------------------------------------- camera
 const _cam = new THREE.Vector3(), _look = new THREE.Vector3(), _qq = new THREE.Quaternion(), _e = new THREE.Euler();
+// camera shake: knocks, dumps and falling trees jolt the view (less the further away they are), and an engine pulling
+// hard makes it tremble
+let camJolt = 0, camFov = 55;
+function quake(x, y, z, amt) {
+  const d = Math.hypot(x - camera.position.x, y - camera.position.y, z - camera.position.z);
+  camJolt = Math.min(1, Math.max(camJolt, amt / (1 + d * d / 250)));
+}
+function shakeCamera(dt, m) {
+  camJolt *= Math.exp(-dt * 5.5);
+  const rumble = (m.strain || 0) * .1 + Math.min(1, m.digSm * .25) * .12 + (m.hp > 0 ? .012 : 0), a = camJolt + rumble * (cabView ? 1 : .45);
+  if (a > .002) {
+    const t = simTime, k = cabView ? .012 : .02;
+    camera.rotateX((Math.sin(t * 61.3) + Math.sin(t * 37.7 + 1.1)) * a * k * .5);
+    camera.rotateY((Math.sin(t * 53.1 + 2.2) + Math.sin(t * 29.9)) * a * k * .35);
+    camera.rotateZ((Math.sin(t * 47.9 + .7) + Math.sin(t * 23.3 + 4.)) * a * k * .3);
+  }
+  // the view opens up a little with speed
+  const want = (cabView ? 62 : 55) + clamp(Math.abs(m.v) / 11, 0, 1) * 7;
+  camFov = lerp(camFov, want, 1 - Math.exp(-dt * 2.5));
+  if (Math.abs(camera.fov - camFov) > .02) { camera.fov = camFov; camera.updateProjectionMatrix(); }
+}
 function updateCamera(dt) {
   const m = machines[active];
   const near = cabView ? .05 : .1;
@@ -2405,6 +2745,7 @@ function updateCamera(dt) {
     camera.quaternion.copy(_qq);
     camera.rotateY(Math.PI + camOff);       // the machine faces +z, the camera looks down -z
     camera.rotateX(-(camPitch - .42) * .8 - .12);
+    shakeCamera(dt, m);
     return;
   }
   const baseYaw = m.type === 'excavator' ? m.yaw + m.swing : m.yaw;
@@ -2419,6 +2760,7 @@ function updateCamera(dt) {
   camera.position.lerp(_cam, 1 - Math.exp(-dt * 7));
   _look.set(tx, ty, tz);
   camera.lookAt(_look);
+  shakeCamera(dt, m);
 }
 
 function resize() {
@@ -2448,6 +2790,10 @@ function updateTags() {
 
 // ---------------------------------------------------------------- sound
 const snd = new Sound();
+// heavy things landing are felt as well as heard: a dumped load or a bucket biting in jolts the view
+{ const dump = snd.dump.bind(snd), scoop = snd.scoop.bind(snd);
+  snd.dump = (x, y, z, vol, gravel) => { quake(x, y, z, clamp(vol * .1, .12, .55)); dump(x, y, z, vol, gravel); };
+  snd.scoop = (x, y, z, gravel) => { quake(x, y, z, .16); scoop(x, y, z, gravel); }; }
 let muted = localStorage.getItem('groundwork.muted') === '1';
 snd.muted = muted;
 $('mSound').textContent = 'Sound: ' + (muted ? 'off' : 'on');
@@ -2492,7 +2838,7 @@ function updateSound(dt) {
   for (const m of machines) {
     const s = SPEC[m.type], act = m === me || !!m.ai, inpM = m.ctl || ZERO;
     const rpm = clamp((act ? .06 + Math.abs(m.v) / s.vmax * .5 + Math.abs(inpM.throttle) * .3 : 0) + m.workSm * .45 + m.hydSm * .3, 0, 1);
-    const load = clamp(Math.abs(inpM.throttle) * .45 + m.workSm * .75 + m.hydSm * .2, 0, 1);
+    const load = clamp(Math.abs(inpM.throttle) * .45 + m.workSm * .75 + m.hydSm * .2 + (m.strain || 0) * .35, 0, 1);
     m.exhaust.getWorldPosition(_w);
     snd.updateMachine(m.id, {
       x: _w.x, y: _w.y, z: _w.z, rpm, load, hyd: m.hydSm, hydLoad: m.workSm * (m.hydSm > .1 ? 1 : .3),
@@ -2513,7 +2859,12 @@ let curDt = 1 / 30;
 function update(dt, draw = true) {
   simTime += dt; curDt = dt;
   const me = machines[active];
-  for (const m of machines) { m.dig = 0; m.digG = 0; m.pour = 0; m.hyd = 0; }
+  for (const m of machines) {
+    m.dig = 0; m.digG = 0; m.pour = 0; m.hyd = 0;
+    // the body's sway, bounce and engine shake are for the eye only: the work (where a bucket tip or blade edge is)
+    // is always measured from the machine sitting square on the ground
+    if (m.swayed) { m.group.position.set(m.x, m.y, m.z); m.group.rotation.set(-m.pitch, m.yaw, m.roll, 'YXZ'); m.group.updateMatrixWorld(true); m.swayed = false; }
+  }
   crew.update(dt);
   people.update(dt);
   for (const m of machines) {
@@ -2550,6 +2901,7 @@ function update(dt, draw = true) {
   updateTrees(dt, anyDirty && draw);
   updateParticles(dt);
   updateChunks(dt);
+  updatePrints();
   updateJobs(dt);
   updateGoal(dt);
   saveTimer -= dt;
@@ -2567,10 +2919,9 @@ function update(dt, draw = true) {
   updateMap(dt);
   updateCamera(dt);
   updateGrass(dt, me);
-  sun.position.set(me.x + SUN_DIR.x * 150, me.y + SUN_DIR.y * 150, me.z + SUN_DIR.z * 150);
-  sun.target.position.set(me.x, me.y, me.z);
+  aimSun(me.x, me.y, me.z);
   T.clouds.offset.x = simTime * .0012; T.clouds.offset.y = simTime * .0005;
-  waterMat.uniforms.uTime.value = simTime; grassU.uTime.value = simTime;
+  waterMat.uniforms.uTime.value = simTime; grassU.uTime.value = simTime; windU.uTime.value = simTime;
   updateHud(dt);
   updateSound(dt);
 }
@@ -2583,9 +2934,7 @@ function frame(now) {
   if (paused || dt <= 0) { requestAnimationFrame(frame); return; }
   readInput();
   for (let i = 0; i < speed; i++) update(dt, i === speed - 1);
-  renderer.getDrawingBufferSize(_bs);
-  pMat.uniforms.uScale.value = _bs.y * .5 * camera.projectionMatrix.elements[5];
-  renderer.render(scene, camera);
+  drawFrame();
   updateTags();
   requestAnimationFrame(frame);
 }
@@ -2620,11 +2969,13 @@ function start() {
   if (!resumed && !localStorage.getItem('groundwork.seenHelp')) showHelp(true);
   if (!resumed) save();
   // test hook: run the game forward without drawing (used by the automated checks)
-  window.GW = { SPRINGS, drop: (x, z, v) => dropCircle({ v, g: 0 }, x, z, 6, v), people, works, CULVERTS, DECK, get eroded() { return eroded; }, flux: { FL, FR, FU, FD }, H0, crew, setCrew, dirty, snd, goal, GOALS, RIVERS, YARD, GRAVEL, CAMP, MARSH, SPEC, riverAt, tchunks, machines, H, W, M, D, BED, stats, hAt, select, save, trees, rocks, renderer, scene, camera, get jobs() { return jobs; }, get active() { return active; },
+  window.GW = { prints: treadIM, post: POST, SPRINGS, drop: (x, z, v) => dropCircle({ v, g: 0 }, x, z, 6, v), people, works, CULVERTS, DECK, get eroded() { return eroded; }, flux: { FL, FR, FU, FD }, H0, crew, setCrew, dirty, snd, goal, GOALS, RIVERS, YARD, GRAVEL, CAMP, MARSH, SPEC, riverAt, tchunks, machines, H, W, M, D, BED, stats, hAt, select, save, trees, rocks, renderer, scene, camera, get jobs() { return jobs; }, get active() { return active; },
+    draw(n = 1) { for (let i = 0; i < n; i++) { Object.assign(inp, ZERO); update(1 / 30, true); } drawFrame(); },   // tests: one drawn frame while paused
     step(n, input = {}) { for (let i = 0; i < n; i++) { Object.assign(inp, ZERO, input); if (i > 0) inp.act = false; update(1 / 30); } },
     pause(on) { paused = !!on; },
     cab(on) { cabView = !!on; },
-    render() { updateCamera(1); camera.position.copy(_cam); renderer.getDrawingBufferSize(_bs); pMat.uniforms.uScale.value = _bs.y * .5 * camera.projectionMatrix.elements[5]; renderer.render(scene, camera); } };
+    camSet(off, pitch, dist) { camOff = off; camPitch = pitch; camDist = dist; lastDrag = performance.now(); },
+    render() { updateCamera(1); camera.position.copy(_cam); drawFrame(); } };
   requestAnimationFrame(t => { last = t; frame(t); });
 }
 setTimeout(start, 30);
