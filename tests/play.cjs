@@ -13,6 +13,8 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   p.setDefaultTimeout(180000);
   // the test browser has no graphics card: use the lightest graphics and pause the live loop while checking
   await p.addInitScript(() => localStorage.setItem('groundwork.quality', 'low'));
+  // SEED=n makes the valley (and every other random draw) the same on each run, to compare two versions of the game
+  if (process.env.SEED) await p.addInitScript(sd => { let a = sd | 0; Math.random = () => { a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }, +process.env.SEED);
   const errs = [];
   p.on('pageerror', e => errs.push('PAGEERR ' + e.message));
   p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
@@ -55,6 +57,7 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
     return { blade: +blade.toFixed(2), carried: +carried.toFixed(2), left: +m.load.v.toFixed(2), moved: +GW.stats.moved.toFixed(2), dist: +Math.hypot(m.x - x0, m.z - z0).toFixed(1) };
   });
   check('dozer drives, cuts with the blade and leaves the pile when reversing', dz.carried > 1 && dz.moved > .5 && dz.dist > 3, JSON.stringify(dz));
+
 
   // loader fills, then dumps into the hauler
   const ld = await p.evaluate(() => {
@@ -286,6 +289,53 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
     return { at: [x0, z0], front: +front.toFixed(2), deckStart: z0 + 12, blocked, after: +(m.z + 2.7).toFixed(2) };
   });
   check('a machine stops at an unfinished bridge instead of driving onto it', br.at[0] > 0 && br.front < br.deckStart && br.blocked === 'site' && br.after > br.deckStart, JSON.stringify(br));
+
+  // the heap in front of the blade is real ground that rides along; soil past the blade ends is left as ridges; tyres
+  // press ruts (the 25 cm fine grid)
+  const gr = await p.evaluate(() => {
+    GW.setBoss(false); GW.select(0);
+    const m = GW.machines[0], H = GW.H, H0 = GW.H0;
+    // fresh, open, fairly level ground near the yard (no trees, water or machines in a 9 x 16 m strip ahead)
+    const Y = GW.YARD, yc = [(Y.x0 + Y.x1) / 2, (Y.z0 + Y.z1) / 2];
+    const ok = (x, z, yaw) => { const fx = Math.sin(yaw), fz = Math.cos(yaw), h0 = H[Math.round(z) * 256 + Math.round(x)];
+      for (let d = -4; d <= 16; d++) for (let o = -4; o <= 4; o++) { const X = x + fx * d + fz * o, Z = z + fz * d - fx * o, k = Math.round(Z) * 256 + Math.round(X);
+        if (X < 4 || Z < 4 || X > 251 || Z > 251 || GW.W[k] > 0 || Math.abs(H[k] - h0) > 1) return false; }
+      return GW.trees.every(t => t.st !== 0 || Math.hypot(t.x - x - fx * 6, t.z - z - fz * 6) > 10) && GW.machines.every(q => q === m || Math.hypot(q.x - x - fx * 6, q.z - z - fz * 6) > 12); };
+    let spot = null;
+    for (let r = 20; r < 170 && !spot; r += 4) for (let a = 0; a < 24 && !spot; a++) { const x = Math.round(yc[0] + Math.cos(a / 24 * 6.283) * r), z = Math.round(yc[1] + Math.sin(a / 24 * 6.283) * r); for (const yaw of [0, 1.57, 3.14, 4.71]) if (!spot && ok(x, z, yaw)) spot = [x, z, yaw]; }
+    // first the hauler, loaded, over the fresh ground: its wheels press ruts and wear the turf (compared with before)
+    const h = GW.machines.find(q => q.type === 'hauler'), hi = GW.machines.indexOf(h), hx0 = h.x, hz0 = h.z, hy0 = h.yaw;
+    let rut = 0, wear = 0;
+    if (spot) {
+      GW.select(hi); h.x = spot[0]; h.z = spot[1]; h.yaw = spot[2]; h.v = 0; h.load.v = 10; h.load.g = 0; GW.step(5);
+      const f0 = Float32Array.from(GW.FN), w0 = Uint8Array.from(GW.FW);
+      GW.step(75, { throttle: .45 }); GW.step(20);
+      const fx = Math.sin(h.yaw), fz = Math.cos(h.yaw), rx = Math.cos(h.yaw), rz = -Math.sin(h.yaw);
+      const q = (x, z) => Math.round(z * GW.FS) * GW.FNW + Math.round(x * GW.FS);
+      let n = 0;
+      for (let d = 3.5; d <= 6; d += .25) {
+        const cx = h.x - fx * d, cz = h.z - fz * d, mid = q(cx, cz);
+        for (const sd of [-1.3, 1.3]) { const k = q(cx + rx * sd, cz + rz * sd); rut += (f0[k] - GW.FN[k]) - (f0[mid] - GW.FN[mid]); wear += GW.FW[k] - w0[k]; n++; }
+      }
+      rut /= n; wear /= n;
+      h.load.v = 0; h.x = hx0; h.z = hz0; h.yaw = hy0; h.v = 0; GW.select(0);
+    }
+    if (spot) { m.x = spot[0]; m.z = spot[1]; m.yaw = spot[2]; m.v = 0; }
+    GW.step(5);
+    const before = Float32Array.from(H);
+    m.blade = -.12;
+    GW.step(100, { throttle: .7 });
+    const at = (lx, lz) => { const x = m.x + Math.cos(m.yaw) * lx + Math.sin(m.yaw) * lz, z = m.z - Math.sin(m.yaw) * lx + Math.cos(m.yaw) * lz; return [x, z]; };
+    const cell = ([x, z]) => Math.round(z) * 256 + Math.round(x);
+    let ahead = -9; for (let lz = 3; lz <= 4.2; lz += .4) for (let lx = -1; lx <= 1; lx += 1) { const k = cell(at(lx, lz)); ahead = Math.max(ahead, H[k] - before[k]); }
+    let ridge = -9; for (const sx of [-1, 1]) for (let lz = -4; lz <= 1; lz += .5) for (let lx = 2.0; lx <= 3.2; lx += .3) { const k = cell(at(sx * lx, lz)); ridge = Math.max(ridge, H[k] - before[k]); }
+    const r = { spot, load: +m.load.v.toFixed(2), heap: m.heap ? m.heap.k.length : 0, ahead: +ahead.toFixed(2), ridge: +ridge.toFixed(2), rut: +rut.toFixed(3), wear: Math.round(wear) };
+    GW.step(30, { throttle: -1 }); GW.step(10);   // back off and leave the heap
+    return r;
+  });
+  check('the heap in front of the dozer blade is ground pushed along', gr.heap >= 2 && gr.ahead > .25 && gr.load > .8, JSON.stringify(gr));
+  check('soil spills past the blade ends into ridges along the sides of the cut', gr.ridge > .04, JSON.stringify(gr));
+  check('a loaded hauler presses ruts into fresh ground and wears the turf', gr.rut > .005 && gr.wear > 40, JSON.stringify(gr));
 
   // fast water washes a loose heap out of the river
   const ero = await p.evaluate(() => {
