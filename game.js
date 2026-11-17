@@ -2,12 +2,12 @@
 // water flows over it (a "virtual pipes" shallow-water model), and the whole valley is saved in the
 // browser so nothing ever resets.
 import * as THREE from 'three';
-import { makeTextures } from './textures.js?v=10';
-import * as MOD from './models.js?v=10';
-import { Sound } from './audio.js?v=10';
-import { makeCrew } from './crew.js?v=10';
-import { makeWorks } from './construct.js?v=10';
-import { makePeople } from './people.js?v=10';
+import { makeTextures } from './textures.js?v=11';
+import * as MOD from './models.js?v=11';
+import { Sound } from './audio.js?v=11';
+import { makeCrew } from './crew.js?v=11';
+import { makeWorks } from './construct.js?v=11';
+import { makePeople } from './people.js?v=11';
 
 const N = 256, NN = N * N;           // 256 x 256 cells, 1 m each
 const SAVE_KEY = 'groundwork.save.v3';   // v1 (the first, smaller valley) is left untouched in the browser
@@ -225,6 +225,7 @@ function generate(sd, settle) {
 // Each cell gives some of its dirt to a lower neighbour (straight or diagonal) when the slope between them is steeper
 // than loose soil can stand. Wet soil gives way sooner. Only the 16 m tiles where something changed are checked.
 const SQ2 = Math.SQRT2;
+let slumpBudget = 0;
 function slide(a, b, mv, gen) {
   mv = Math.min(mv, H[a] - BED[a]);
   if (mv < .003) return false;
@@ -237,6 +238,12 @@ function slide(a, b, mv, gen) {
       if (M[b] !== src && (M[b] === 0 || mv > .06)) M[b] = src;
       D[b] = 1;
       if (mv > .06) { treeFallAt(a); treeFallAt(b); }
+      // a slump you can see: a clod breaks off and rolls down the face (a few per frame at most)
+      if (mv > .045 && slumpBudget > 0 && typeof chunks === 'function') {
+        slumpBudget--;
+        const ax = a % N, az = (a / N) | 0, bx = b % N, bz = (b / N) | 0;
+        chunks(ax + .5, H[a] + .15, az + .5, 1, M[a] === 2, (bx - ax) * 1.6, (bz - az) * 1.6, .5);
+      }
     }
     dirty(a); dirty(b);
   }
@@ -495,7 +502,7 @@ let simTime = 0;
 // ---------------------------------------------------------------- scene, sky and light
 const canvas = $('view');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: !Q.post, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, Q.dpr));
+renderer.setPixelRatio(Math.min(devicePixelRatio, isTouch && quality !== 'low' ? 2 : Q.dpr));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = Q.soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -1536,10 +1543,22 @@ function updateChunks(dt) {
     cLife[i] -= dt;
     cVel[i * 3 + 1] -= 9.8 * dt;
     let x = cPos[i * 3] + cVel[i * 3] * dt, y = cPos[i * 3 + 1] + cVel[i * 3 + 1] * dt, z = cPos[i * 3 + 2] + cVel[i * 3 + 2] * dt;
-    const g = hAt(x, z) + .05;
-    if (y < g) {   // lands: a puff of dust for the big ones, a short roll, then it settles into the heap
-      if (cVel[i * 3 + 1] < -2.5 && cS[i] > .9 && Math.random() < .5) spawn('dust', x, g + .1, z, 1, DIRT_C, { alpha: .3, size: .55 });
-      y = g; cVel[i * 3] *= .45; cVel[i * 3 + 2] *= .45; cVel[i * 3 + 1] = -cVel[i * 3 + 1] * .22; cLife[i] = Math.min(cLife[i], 1.1);
+    const g = hAt(x, z) + .05 * cS[i];
+    if (y < g) {
+      const vy = cVel[i * 3 + 1];
+      if (vy < -1.2) {   // lands: a puff of dust for the big ones and a small bounce
+        if (vy < -2.5 && cS[i] > .9 && Math.random() < .5) spawn('dust', x, g + .1, z, 1, DIRT_C, { alpha: .3, size: .55 });
+        cVel[i * 3] *= .6; cVel[i * 3 + 2] *= .6; cVel[i * 3 + 1] = -vy * .2;
+      } else cVel[i * 3 + 1] = 0;
+      y = g;
+      // on the ground it rolls down whatever slope it's on (a heap's face, the side of a pit) and stops on the flat
+      const gx = (hAt(x + .4, z) - hAt(x - .4, z)) * 1.25, gz = (hAt(x, z + .4) - hAt(x, z - .4)) * 1.25, sl = Math.hypot(gx, gz);
+      if (sl > .4) { cVel[i * 3] -= gx * 6.5 * dt; cVel[i * 3 + 2] -= gz * 6.5 * dt; }
+      const f = Math.exp(-dt * (sl > .4 ? 1.2 : 5));
+      cVel[i * 3] *= f; cVel[i * 3 + 2] *= f;
+      const hs = Math.hypot(cVel[i * 3], cVel[i * 3 + 2]);
+      if (hs > .4) { cLife[i] = Math.max(cLife[i], .6); cRot[i * 2] += hs * dt * 3 / Math.max(.3, cS[i]); }
+      else cLife[i] = Math.min(cLife[i], 1.1);
     }
     cPos[i * 3] = x; cPos[i * 3 + 1] = y; cPos[i * 3 + 2] = z;
     cRot[i * 2] += dt * 6; cRot[i * 2 + 1] += dt * 4;
@@ -1587,6 +1606,7 @@ function makeMachine(type, x, z, yaw, equip = false) {
     work: 0, workSm: 0, hyd: 0, hydSm: 0, dig: 0, digG: 0, digSm: 0, pour: 0, pourSm: 0, trackSpeed: 0, steerVis: 0,
     sPitch: 0, sRoll: 0, lastV: 0, grime: .2, hp: 1, hurtT: 0, smokeAcc: 0, pourT: 0, pourG: false, splashT: 0 };
   BUILD[type](m, mats, LOADMAT);
+  rigUp(m);
   m.group.traverse(o => { if (o.isMesh && !o.isInstancedMesh) { o.castShadow = true; o.receiveShadow = true; } });
   m.worker = MOD.buildWorker(m.id); m.worker.position.set(0, 0, -.02); m.cabG.add(m.worker); m.worker.visible = false;
   scene.add(m.group);
@@ -1610,6 +1630,36 @@ function resetMachines() {
 }
 
 const fwdX = y => Math.sin(y), fwdZ = y => Math.cos(y);
+// Where a machine touches the ground, and how it steers.
+// Tracks: five road-wheel stations along each track. Wheels: every tyre (those on the front frame turn with it).
+// Loader, hauler and roller bend in the middle (`hinge`): a = hinge to front axle, b = hinge to rear axle, b0 = middle
+// of the machine to the rear axle, max = the bend that gives the same turning circle the crew plans with (wb / tan .55).
+function rigUp(m) {
+  const s = SPEC[m.type], cp = [];
+  if (m.tracks) for (const t of m.tracks) for (let i = 0; i < 5; i++) cp.push({ x: t.x, z: -t.a + i * t.a / 2, r: 0, f: false, tr: t });
+  else if (m.wheels) for (const w of m.wheels) { const h = w.userData.hold; cp.push({ x: h.position.x, z: h.position.z, r: w.userData.r, f: !!m.front && h.parent === m.front, w, h, y0: w.userData.y0 }); }
+  if (m.drum && m.front) for (const sx of [-.9, .9]) cp.push({ x: sx, z: 1.55, r: .78, f: true });   // the roller's drum
+  m.cp = cp; m.art = 0; m.om = 0; m.vs = 0; m.slipV = 0; m.vy = 0; m.pv = 0; m.rv = 0; m.twist = 0; m.brake = 1;
+  if (!m.tracks && cp.length) {
+    const rear = cp.filter(c => !c.f && (m.front || c.z < 0));
+    for (const c of cp) c.front = !rear.includes(c);
+    const frontPts = cp.filter(c => c.front);
+    const zr = rear.reduce((a, c) => a + c.z, 0) / Math.max(1, rear.length);
+    if (m.front && frontPts.length) {
+      const hz = m.front.position.z, zf = hz + frontPts.reduce((a, c) => a + c.z, 0) / frontPts.length;
+      const a = zf - hz, b = hz - zr, b0 = -zr, Rt = s.wb / Math.tan(.55), Rr = Math.sqrt(Math.max(1, Rt * Rt - b0 * b0));
+      m.hinge = { hz, a, b, b0, max: clamp(Math.atan2(b, Rr) + Math.asin(clamp(a / Math.hypot(Rr, b), -1, 1)), .3, .75) };
+    }
+  }
+}
+// how soft the ground under a machine is (0 firm .. 1): loose tipped soil that hasn't been rolled yet, mud beside water, water
+function softAt(x, z) {
+  const k = cellOf(x, z); if (DECK[k] > 0 || M[k] === 2) return W[k] > .1 && !DECK[k] ? .3 : 0;
+  let v = 0;
+  if (H[k] - H0[k] > .15 && D[k]) v += COMP[k] & 1 ? .2 : .55;
+  if (W[k] > .1) v += .5; else if (cMat[k * 4 + 3] > .2 && (D[k] || M[k] === 1)) v += .35;
+  return Math.min(1, v);
+}
 function circlesOf(m, x, z, yaw) { return SPEC[m.type].circ.map(([oz, r]) => [x + Math.sin(yaw) * oz, z + Math.cos(yaw) * oz, r]); }
 function overlap(m, x, z, yaw) {
   const A = circlesOf(m, x, z, yaw); let pen = 0;
@@ -1645,27 +1695,84 @@ function freeSpot(type, x, z, yaw) {
   }
   return [x, z];
 }
+// Where the ground would hold a machine: its height, pitch and roll (m.gy, m.gp, m.gr) worked out from the points that
+// actually touch.
+// A track is a stiff beam lying on the highest ground under it, so it bridges hollows, rides up over a hump and only tips
+// forward once the machine's weight is past the crest. Each tyre rides at its own height (a wheel is round, so it rolls
+// over a bump rather than stepping up it), the body sits on the axles, and on machines that bend in the middle the front
+// frame rolls on its own axle.
+const _gh = new Float32Array(5);
+function groundPose(m) {
+  const cy = Math.cos(m.yaw), sy = Math.sin(m.yaw);
+  if (m.tracks) {
+    let ss = 0, yA = 0, yB = 0;
+    for (let t = 0; t < 2; t++) {
+      for (let i = 0; i < 5; i++) { const c = m.cp[t * 5 + i]; _gh[i] = gAt(m.x + cy * c.x + sy * c.z, m.z - sy * c.x + cy * c.z); }
+      let best = -1e9, slope = 0;
+      for (let i = 0; i < 2; i++) for (let j = 2; j < 5; j++) {
+        const zi = m.cp[t * 5 + i].z, zj = m.cp[t * 5 + j].z, sl = (_gh[j] - _gh[i]) / (zj - zi), h0 = _gh[i] - sl * zi;
+        if (h0 > best) { best = h0; slope = sl; }
+      }
+      ss += slope; if (t) yB = best; else yA = best;
+    }
+    m.gy = (yA + yB) / 2; m.gp = Math.atan(ss / 2); m.gr = Math.atan2(yA - yB, m.tracks[0].x - m.tracks[1].x); m.gtw = 0;
+    return;
+  }
+  if (!m.cp || !m.cp.length) { m.gy = gAt(m.x, m.z); m.gp = m.gr = m.gtw = 0; return; }
+  const A = m.hinge, ca = Math.cos(m.art), sa = Math.sin(m.art);
+  // sums for the front and rear groups: n, height, z, then left (+x) and right heights and x
+  let nF = 0, hF = 0, zF = 0, nR = 0, hR = 0, zR = 0, fl = 0, flx = 0, fln = 0, fr = 0, frx = 0, frn = 0, rl = 0, rlx = 0, rln = 0, rr = 0, rrx = 0, rrn = 0;
+  for (const c of m.cp) {
+    let lx = c.x, lz = c.z, dx = sy, dz = cy;
+    if (c.f && A) { lx = c.x * ca + c.z * sa; lz = A.hz - c.x * sa + c.z * ca; dx = Math.sin(m.yaw + m.art); dz = Math.cos(m.yaw + m.art); }
+    c.lx = lx; c.lz = lz;
+    const wx = m.x + cy * lx + sy * lz, wz = m.z - sy * lx + cy * lz, d = c.r * .55, drop = c.r - Math.sqrt(c.r * c.r - d * d);
+    const h = Math.max(gAt(wx, wz), gAt(wx + dx * d, wz + dz * d) - drop, gAt(wx - dx * d, wz - dz * d) - drop);
+    c.gh = h;
+    if (c.front) { nF++; hF += h; zF += lz; if (lx > 0) { fl += h; flx += lx; fln++; } else { fr += h; frx += lx; frn++; } }
+    else { nR++; hR += h; zR += lz; if (lx > 0) { rl += h; rlx += lx; rln++; } else { rr += h; rrx += lx; rrn++; } }
+  }
+  if (!nF || !nR) { m.gy = (hF + hR) / (nF + nR); m.gp = m.gr = m.gtw = 0; for (const c of m.cp) c.res = 0; return; }
+  hF /= nF; zF /= nF; hR /= nR; zR /= nR;
+  const slope = (hF - hR) / (zF - zR);
+  const qF = fln && frn ? (fl / fln - fr / frn) / (flx / fln - frx / frn) : 0, qR = rln && rrn ? (rl / rln - rr / rrn) / (rlx / rln - rrx / rrn) : qF;
+  const qBody = A ? qR : (qF + qR) / 2;
+  m.gy = hR - slope * zR; m.gp = Math.atan(slope); m.gr = Math.atan(qBody);
+  m.gtw = A ? clamp(Math.atan(qF) - Math.atan(qR), -.2, .2) : 0;
+  // how far each tyre sits above or below the frame it hangs from
+  for (const c of m.cp) {
+    const q = A ? (c.front ? qF : qR) : qBody, xm = c.front ? (flx + frx) / nF : (rlx + rrx) / nR;
+    c.res = c.gh - ((c.front ? hF : hR) + q * (c.lx - xm) + slope * (c.lz - (c.front ? zF : zR)));
+  }
+}
 function poseMachine(m, dt, inp) {
   const s = SPEC[m.type];
-  const fx = fwdX(m.yaw), fz = fwdZ(m.yaw), lx = Math.cos(m.yaw), lz = -Math.sin(m.yaw);
-  const L = s.len / 2 * .9, Wd = s.wid / 2 * .9;
-  const hf = gAt(m.x + fx * L, m.z + fz * L), hb = gAt(m.x - fx * L, m.z - fz * L);
-  const hl = gAt(m.x + lx * Wd, m.z + lz * Wd), hr = gAt(m.x - lx * Wd, m.z - lz * Wd), hc = gAt(m.x, m.z);
-  const y = Math.max((hf + hb + hl + hr) / 4, hc - .1);
-  const k = dt > 0 ? 1 - Math.exp(-dt * 12) : 1;
-  if (dt > 0) {
-    // dropping off a ledge, rolling on a side slope or sitting in deep water wears the machine
-    if (m.y - y > .7) hurt(m, (m.y - y - .7) * .05, m.x, y + .3, m.z, 'fall');
-    const tilt = Math.max(Math.abs(Math.atan2(hl - hr, Wd * 2)), Math.abs(Math.atan2(hf - hb, L * 2)) * .7);
-    if (tilt > .52) hurt(m, (tilt - .52) * .08 * dt, m.x, m.y + 1, m.z, 'tilt');
+  groundPose(m);
+  const y = m.gy;
+  let impact = 0;
+  if (dt > 0 && Math.hypot(m.x - (m.px ?? m.x), m.z - (m.pz ?? m.z)) < 3) {
+    // rolling on a side slope or sitting in deep water wears the machine
+    const tilt = Math.max(Math.abs(m.gr), Math.abs(m.gp) * .7);
+    if (tilt > .52) hurt(m, (tilt - .52) * .08 * dt * (m.ai ? .15 : 1), m.x, m.y + 1, m.z, 'tilt');
     const wet = wetAt(m.x, m.z);
     if (wet > s.ford + .25) { hurt(m, (wet - s.ford) * .006 * dt, m.x, m.y + 1, m.z, 'water'); if (Math.random() < dt * 3) spawn('splash', m.x, m.y + s.ford + .4, m.z, 1, [.75, .8, .82], { jitter: s.wid * .6, up: .3 }); }
     // the yard's workshop slowly fixes whatever is parked there
     if (inYard(m.x, m.z) && Math.abs(m.v) < .1 && m.hp < 1) m.hp = Math.min(1, m.hp + dt * .01);
-  }
-  m.y = lerp(m.y, y, k);
-  m.pitch = lerp(m.pitch, Math.atan2(hf - hb, L * 2), k);
-  m.roll = lerp(m.roll, Math.atan2(hl - hr, Wd * 2), k);
+    // The ground pushes the machine up at once, but it can only come down as fast as it falls: off a ledge it drops and
+    // lands, and over a crest it hangs level for a moment and then tips, rocking once as it comes down.
+    const n = dt > .02 ? 2 : 1, h = dt / n, KP = s.tracks ? 85 : 70, CP = s.tracks ? 13 : 12;
+    for (let i = 0; i < n; i++) {
+      if (y >= m.y - .03) { const ny = m.y + (y - m.y) * (1 - Math.exp(-h * 22)); m.vy = Math.min(0, (ny - m.y) / h); m.y = ny; }
+      else { m.vy -= 15 * h; m.y += m.vy * h; if (m.y <= y) { impact = Math.max(impact, -m.vy); m.y = y; m.vy = 0; } }
+      m.pv += ((m.gp - m.pitch) * KP - m.pv * CP) * h; m.pitch += m.pv * h;
+      m.rv += ((m.gr - m.roll) * KP - m.rv * CP) * h; m.roll += m.rv * h;
+    }
+    m.twist += (m.gtw - m.twist) * (1 - Math.exp(-dt * 10));
+    if (!(Math.abs(m.pitch) < 1.3 && Math.abs(m.roll) < 1.3 && Math.abs(m.y) < 1e4)) { m.y = y; m.pitch = m.gp; m.roll = m.gr; m.pv = m.rv = m.vy = 0; }
+    // dropping off a ledge is hard on a machine
+    if (impact > 4.5) hurt(m, (impact * impact / 30 - .67) * .1 * (m.ai ? .2 : 1), m.x, y + .3, m.z, 'fall');
+  } else { m.y = y; m.pitch = m.gp; m.roll = m.gr; m.twist = m.gtw || 0; m.pv = m.rv = m.vy = 0; }
+  m.px = m.x; m.pz = m.z;
   // the body rocks back when pulling away, dips when stopping and leans in turns
   if (dt > 0) {
     const acc = clamp((m.v - m.lastV) / dt, -12, 12); m.lastV = m.v;
@@ -1692,9 +1799,7 @@ function poseMachine(m, dt, inp) {
     }
     if (!(Math.abs(m.sPitch) < .2 && Math.abs(m.sRoll) < .2 && Math.abs(m.bob) < .5)) { m.sPitch = m.sRoll = m.bob = 0; m.sPitchV = m.sRollV = m.bobV = 0; }
     // dropping onto the ground after a ledge slams the suspension down
-    const vy = (y - m.y) * 12;
-    if (vy < -3.5 && !m.dropped) { m.dropped = true; m.bobV += vy * .05; quake(m.x, m.y, m.z, clamp(-vy * .05, 0, .5)); snd.clang(m.x, m.y, m.z, 46, clamp(-vy * .06, .1, .45)); dust(m.x, y + .2, m.z, 5, DIRT_C); }
-    else if (vy > -1) m.dropped = false;
+    if (impact > 2.4) { m.bobV -= impact * .05; quake(m.x, m.y, m.z, clamp(impact * .05, 0, .5)); snd.clang(m.x, m.y, m.z, 46, clamp(impact * .06, .1, .45)); dust(m.x, y + .2, m.z, 5, DIRT_C); }
     m.strain = lerp(m.strain || 0, clamp(Math.abs(inp.throttle) * clamp(1 - sp / (s.vmax * .6), 0, 1) * .7 + m.workSm, 0, 1), 1 - Math.exp(-dt * 4));
     m.steerVis = lerp(m.steerVis, inp.steer * (Math.abs(m.v) > .05 || inp.throttle ? 1 : .6), 1 - Math.exp(-dt * 3));
   }
@@ -1704,7 +1809,19 @@ function poseMachine(m, dt, inp) {
   m.group.position.set(m.x, m.y + shake + (m.bob || 0), m.z);
   m.group.rotation.set(-m.pitch + m.sPitch + shP, m.yaw, m.roll + m.sRoll + shR, 'YXZ');
   m.swayed = true;
-  if (m.front) m.front.rotation.y = m.steerVis * .5;
+  // the front frame swings at the hinge and rolls on its own axle; front wheels turn; every tyre stays on the ground
+  // while the body squats and leans above it, and flattens a little under the weight it carries
+  if (m.front) m.front.rotation.set(0, m.hinge ? m.art : 0, m.twist || 0);
+  if (m.cp) {
+    const lf = s.cap ? clamp(m.load.v / s.cap, 0, 1) : 0, bob = m.bob || 0;
+    for (const c of m.cp) {
+      if (!c.h) continue;
+      const heavy = m.type === 'loader' ? c.front : m.type === 'hauler' ? !c.front : true, sq = .025 + (heavy ? .04 * lf : 0) + clamp(-bob * .25, 0, .02);
+      c.h.position.y = c.y0 + clamp(c.res || 0, -.3, .3) - bob + m.sPitch * (c.lz ?? c.z) - m.sRoll * (c.lx ?? c.x) - c.r * sq;
+      c.h.scale.set(1 + sq * .6, 1 - sq, 1);
+      if (!m.hinge && c.front) c.h.rotation.y = m.art;
+    }
+  }
   m.group.updateMatrixWorld(true);
   for (const r of m.rams) r.update();
   m.mats.U.uGround.value = m.y; m.mats.U.uGrime.value = m.grime; m.mats.U.uDmg.value = 1 - m.hp;
@@ -1792,51 +1909,122 @@ function drive(m, dt, inp) {
   let lim = 1;
   if (grade > .35) lim = Math.max(0, 1 - (grade - .35) / .45);
   lim *= Math.max(.15, 1 - wetAt(m.x, m.z) / (s.ford * 2.2));
+  const lf = s.cap ? clamp(m.load.v / s.cap, 0, 1) : 0, soft = softAt(m.x, m.z), thr = m.hp <= 0 ? 0 : inp.throttle;
   if (m.type === 'dozer') lim *= 1 - .35 * m.load.v / s.cap;
   if (m.type === 'hauler') lim *= 1 - .25 * m.load.v / s.cap;
-  target *= lim * (m.hp <= 0 ? 0 : .55 + .45 * Math.min(1, m.hp / .5));   // a damaged machine loses power
-  if (grade > .2 && Math.abs(inp.throttle) > 0) m.work = Math.max(m.work, clamp(grade * 1.5, 0, .8));
-  m.v += clamp(target - m.v, -s.acc * dt * (inp.throttle === 0 ? 1.6 : 1), s.acc * dt);
-  if (Math.abs(m.v) < .01 && inp.throttle === 0) m.v = 0;
-  let yaw = m.yaw;
-  if (s.tracks) yaw += inp.steer * s.turn * dt;
-  else yaw += (m.v / s.wb) * Math.tan(inp.steer * .55) * dt;
-  let nx = clamp(m.x + fwdX(yaw) * m.v * dt, 3, N - 4), nz = clamp(m.z + fwdZ(yaw) * m.v * dt, 3, N - 4);
+  // skid steering scrubs speed off: one track is held back to turn
+  if (s.tracks) lim *= 1 - .22 * Math.min(1, Math.abs(m.om) / s.turn);
+  const power = m.hp <= 0 ? 0 : .55 + .45 * Math.min(1, m.hp / .5);   // a damaged machine loses power
+  target *= lim * power;
+  if (grade > .2 && Math.abs(thr) > 0) m.work = Math.max(m.work, clamp(grade * 1.5, 0, .8));
+  // ---- speed. The engine pulls hardest when the machine is well short of the speed asked for and eases off as it gets
+  // there; weight on a slope pulls it back (or on); soft ground and a biting blade drag on it; a load makes it slower off
+  // the mark and longer to stop.
+  const mass = 1 + (m.type === 'hauler' ? .55 : m.type === 'loader' ? .2 : 0) * lf;
+  const GS = 9.8 * .42, gs = GS * Math.sin(clamp(m.pitch, -.9, .9));          // what the slope takes from forward speed (m/s²)
+  let drag = soft * .7 + (m.type === 'dozer' && m.v > 0 ? Math.min(1.2, m.digSm * .9) : 0);
+  const v0 = m.v;
+  if (thr !== 0) {
+    m.brake = 0;
+    const span = s.vmax * .22, pull = clamp((target - m.v) / span, -1, 1) * s.acc / mass;
+    drag = Math.min(drag, .3 * Math.abs(target) / span * s.acc / mass);   // (drag slows it, it never stalls it outright)
+    m.v += (pull - gs) * dt;
+    // it can't be dragged backwards while it's trying to go forwards: the tracks or tyres just spin and dig
+    if (thr * m.v < 0 && thr * v0 >= 0) m.v = 0;
+  } else {
+    // off the throttle it rolls on for a moment while the brakes come on, then they haul it down and hold it
+    m.brake = Math.min(1, m.brake + dt / (s.tracks ? .18 : .4));
+    drag += lerp(.7, s.acc * 1.6 / mass, m.brake);
+    m.v -= gs * dt;
+    // too steep for the brakes to hold: it creeps down with everything locked
+    const sp = Math.sin(clamp(m.pitch, -.9, .9)), hold = (s.tracks ? .52 : .36) - soft * .06;
+    if (Math.abs(sp) > hold && Math.abs(m.v) < 2) { drag = Math.min(drag, GS * hold); m.work = Math.max(m.work, .3); }
+  }
+  { const dv = drag * dt; m.v = Math.abs(m.v) <= dv ? 0 : m.v - Math.sign(m.v) * dv; }
+  if (!(Math.abs(m.v) < 40)) m.v = 0;
+  // how much the tracks or tyres are slipping: bogged in soft ground, shoving a full blade or clawing up a bank they turn
+  // faster than the machine moves
+  const bog = clamp(soft * .6 + (m.type === 'dozer' ? lf * .5 + Math.min(.5, m.digSm * .5) : 0) + Math.max(0, grade * dir) * 1.6, 0, 1);
+  m.slipV = thr !== 0 ? (thr * s.vmax * power - m.v) * .4 * bog : 0;
+  if (Math.abs(m.slipV) > .5) m.work = Math.max(m.work, .7);
+  // ---- steering
+  let yaw = m.yaw, nx, nz;
+  if (s.tracks) {
+    // skid steer: the turn builds up and dies away (it's a heavy thing to swing), and soft ground or a loaded blade
+    // dug into the dirt makes it harder to slew
+    const grip = (1 - .25 * soft) * (m.type === 'dozer' ? 1 - .3 * lf * (m.blade < .3 ? 1 : .3) : 1) * power;
+    m.om += (inp.steer * s.turn * grip - m.om) * (1 - Math.exp(-dt * 6));
+    if (Math.abs(m.om) < 1e-4 && inp.steer === 0) m.om = 0;
+    if (inp.steer !== 0) m.work = Math.max(m.work, Math.abs(inp.steer) * (.35 + .3 * soft));
+    yaw += m.om * dt;
+    nx = m.x + fwdX(yaw) * m.v * dt; nz = m.z + fwdZ(yaw) * m.v * dt;
+  } else if (m.hinge) {
+    // articulated: rams bend the machine in the middle. The rear axle rolls straight ahead on its own heading, the
+    // front frame swings; bending it while standing still walks both ends sideways.
+    const A = m.hinge, g0 = m.art, rate = (Math.abs(m.v) > .3 ? 1.15 : .8) * power;
+    m.art += clamp(inp.steer * A.max - m.art, -rate * dt, rate * dt);
+    const gd = dt > 0 ? (m.art - g0) / dt : 0;
+    m.om = (m.v * Math.sin(m.art) - A.a * gd) / (A.b * Math.cos(m.art) + A.a);
+    if (gd !== 0) m.hyd = Math.max(m.hyd, .5);
+    yaw += m.om * dt;
+    nx = m.x - fx * A.b0 + fwdX(yaw) * (m.v * dt + A.b0); nz = m.z - fz * A.b0 + fwdZ(yaw) * (m.v * dt + A.b0);
+  } else {
+    // front-wheel steering: the wheels take a moment to come round
+    m.art += clamp(inp.steer * .55 - m.art, -1.8 * dt, 1.8 * dt);
+    m.om = (m.v / s.wb) * Math.tan(m.art);
+    yaw += m.om * dt;
+    nx = m.x + fwdX(yaw) * m.v * dt; nz = m.z + fwdZ(yaw) * m.v * dt;
+  }
+  // ---- across a very steep bank the whole machine slides sideways downhill
+  {
+    const sr = Math.sin(clamp(m.roll, -1, 1)), hold = (s.tracks ? .44 : .38) - soft * .08;
+    if (Math.abs(sr) > hold) { m.vs = clamp(m.vs - Math.sign(sr) * 9.8 * (Math.abs(sr) - hold) * 1.2 * dt, -2.5, 2.5); m.work = Math.max(m.work, .4); }
+    else m.vs *= Math.exp(-dt * 7);
+    if (Math.abs(m.vs) < .02) m.vs = 0;
+    nx += Math.cos(yaw) * m.vs * dt; nz -= Math.sin(yaw) * m.vs * dt;
+  }
+  nx = clamp(nx, 3, N - 4); nz = clamp(nz, 3, N - 4);
   const before = overlap(m, m.x, m.z, m.yaw);
   // two machines already caught inside each other (dropped off together, or shoved) ease apart instead of locking up
   if (before > .05) separate(m, dt);
   const after = overlap(m, nx, nz, yaw);
   if (after > before + 1e-4) {
-    if (Math.abs(m.v) > 1.3) {   // ran into another machine
+    if (Math.abs(m.v) > 2.2) {   // ran into another machine (a nudge at walking pace does no harm)
       const o = machines.reduce((a, q) => q !== m && Math.hypot(q.x - m.x, q.z - m.z) < Math.hypot(a.x - m.x, a.z - m.z) ? q : a, machines.find(q => q !== m) || m);
       // the crew drive carefully (their bumps are the planner's, not real crashes): only the player's knocks count
-      const imp = (m === machines[active] || o === machines[active]) ? (Math.abs(m.v) - 1.3) * .035 : 0, hx = (m.x + o.x) / 2, hz = (m.z + o.z) / 2;
+      const pl = boss ? null : machines[active], imp = (m === pl || o === pl) ? (Math.abs(m.v) - 2.2) * .018 : 0, hx = (m.x + o.x) / 2, hz = (m.z + o.z) / 2;
       hurt(m, imp, hx, m.y + 1, hz, 'bump'); if (o !== m) hurt(o, imp * .6, hx, o.y + 1, hz, 'bumped');
     }
-    m.v = 0; m.trackSpeed = 0; m.blocked = 'machine'; return;
+    m.v = 0; m.vs = 0; m.om = 0; m.slipV = 0; m.trackSpeed = 0; m.blocked = 'machine'; return;
   }
   m.blocked = '';
   // too deep: the machine won't move its nose (or tail, backing up) into water deeper than it can ford
-  if (m.v !== 0) {
-    const sg = Math.sign(m.v), reach = L + .4;
+  if (m.v !== 0 || m.vs !== 0) {
+    const sg = Math.sign(m.v) || 1, reach = L + .4;
     const depthAt = (x, z, y) => wetAt(x + Math.sin(y) * reach * sg, z + Math.cos(y) * reach * sg);
     const dNew = depthAt(nx, nz, yaw);
     if (dNew > s.ford && dNew > depthAt(m.x, m.z, m.yaw) - .005) {
-      m.v = 0; m.trackSpeed = 0;
+      m.v = 0; m.vs = 0; m.om = 0; m.slipV = 0; m.trackSpeed = 0;
       if (simTime - (m.deepT || -9) > 3) { m.deepT = simTime; say(m, `Too deep for the ${s.name.toLowerCase()}`); }
       m.blocked = 'deep';
       return;
     }
   }
-  const dist = Math.hypot(nx - m.x, nz - m.z) * Math.sign(m.v), dyaw = angWrap(yaw - m.yaw);
+  const dist = m.v * dt, dyaw = angWrap(yaw - m.yaw), slide = Math.abs(m.vs) * dt, spin = m.slipV * dt;
   m.x = nx; m.z = nz; m.yaw = yaw;
-  if (m.wheels) for (const w of m.wheels) w.rotation.x += dist / .88;
+  // every tyre and each track turns at exactly the speed the ground passes under it (the outside of a turn runs faster,
+  // the inside slower or backwards), plus whatever it is slipping
   if (m.tracks) {
-    const half = s.wid / 2 * .75, dl = dist - dyaw * half, dr = dist + dyaw * half;
+    const dl = dist - dyaw * m.tracks[0].x + spin, dr = dist - dyaw * m.tracks[1].x + spin;
     m.tracks[0].update(dl); m.tracks[1].update(dr);
     m.trackSpeed = Math.max(Math.abs(dl), Math.abs(dr)) / Math.max(dt, 1e-3);
-  } else m.trackSpeed = 0;
-  if (Math.abs(dist) + Math.abs(dyaw) < 1e-4) return;
+  } else {
+    m.trackSpeed = 0;
+    const dart = m.hinge ? m.art - (m.artWas ?? m.art) : 0; m.artWas = m.art;
+    for (const c of m.cp) if (c.w) c.w.rotation.x += (dist - (dyaw + (c.f ? dart : 0)) * c.x + spin) / c.r;
+    if (m.drum && m.type === 'roller') m.drum.rotation.x += (dist + spin) / .78;
+  }
+  if (Math.abs(dist) + Math.abs(dyaw) + slide < 1e-4) return;
   const cs = circlesOf(m, m.x, m.z, m.yaw);
   // knock trees over
   if (Math.abs(m.v) > .15 || Math.abs(dyaw) > .002) {
@@ -1868,15 +2056,22 @@ function drive(m, dt, inp) {
     }
   }
   // rolling over fill compacts it
-  for (const [cx, cz, r] of cs) cellsInCircle(cx, cz, r * .8, k => { COMP[k] = 1; });
+  for (const [cx, cz, r] of cs) cellsInCircle(cx, cz, r * .8, k => { COMP[k] |= 1; });
   // wheels and tracks wear the grass off where they run
   const pts = s.tracks ? [[1.2, 1.6], [-1.2, 1.6], [1.2, -1.6], [-1.2, -1.6], [1.2, 0], [-1.2, 0]]
     : m.type === 'hauler' ? [[1.3, 3.1], [-1.3, 3.1], [1.3, -.8], [-1.3, -.8], [1.3, -2.9], [-1.3, -2.9]] : [[1.18, 1.3], [-1.18, 1.3], [1.18, -1.6], [-1.18, -1.6]];
   const chance = Math.abs(dist) * (s.tracks ? .9 : .5) + Math.abs(dyaw) * (s.tracks ? 3 : 0);
   for (const [px, pz] of pts) {
-    if (Math.random() > chance) continue;
     const wx = m.x + Math.cos(m.yaw) * px + Math.sin(m.yaw) * pz, wz = m.z - Math.sin(m.yaw) * px + Math.cos(m.yaw) * pz;
     const k = cellOf(wx, wz);
+    // ruts: the first time a track or tyre runs over loose tipped soil or mud it presses it down (bit 2 of COMP: done)
+    if (!(COMP[k] & 2) && M[k] === 1 && D[k] && DECK[k] === 0 && W[k] < .05) {
+      const spoil = H[k] - H0[k], wetK = cMat[k * 4 + 3] > .2;
+      const press = Math.min(H[k] - BED[k], (spoil > .08 ? Math.min(.07, spoil * .14) : 0) + (wetK ? .035 : 0)) * (s.tracks ? 1 : 1.2);
+      COMP[k] |= 2;
+      if (press > .004) { H[k] -= press; dirty(k); if (wetK && Math.random() < .5) spawn('grain', wx, H[k] + .15, wz, 2, [.2, .15, .1], { jitter: .5, up: 1.5, size: .9 }); }
+    }
+    if (Math.random() > chance) continue;
     if (M[k] === 0 && !D[k]) { D[k] = 1; dirty(k); }
   }
   leavePrints(m, dist, dyaw);
@@ -2106,7 +2301,7 @@ function toolHauler(m, dt, inp) {
   m.bedLoad.material = loadMat(m.load) === 2 ? LOADMAT.gravel : LOADMAT.dirt;
 }
 // the equipment's moving parts (driven by the crew's scripts through m.work and m.cr)
-function toolRoller(m, dt) { m.drum.rotation.x += m.v * dt / .78; if (Math.abs(m.v) > .1) m.work = Math.max(m.work, .6); }
+function toolRoller(m, dt) { if (Math.abs(m.v) > .1) m.work = Math.max(m.work, .6); }
 function toolPaver(m, dt) {
   m.screed.position.y = .35 + Math.sin(simTime * 9) * .01 * (m.paving ? 1 : 0); m.hopperLoad.visible = !!m.paving;
   if (!m.paving) return;
@@ -2629,7 +2824,7 @@ const ICON = {
 };
 function select(i, stay = false) {
   if (!machines[i]) return;
-  if (boss && !stay) setBoss(false);
+  if (boss && !stay) { active = i; setBoss(false); }
   active = i;
   camOff = 0;
   machines.forEach(m => { if (m !== machines[i] && !m.ai) m.v = 0; });
@@ -3078,6 +3273,7 @@ function update(dt, draw = true) {
   scanTimer -= dt;
   if (scanTimer <= 0) { scanTimer = .5; scanWater(); }
   relaxFlip ^= 1;
+  slumpBudget = draw ? 3 : 0;
   if (relaxFlip) relax();
 
   updatePour(dt);
@@ -3114,14 +3310,15 @@ function setSpeed(v) {
   speed = v; const b = $('spdBtn'); if (b) { b.textContent = speed + 'X'; b.classList.toggle('on', speed > 1); }
 }
 // automatic sharpness: a phone that can't keep up draws at a slightly lower resolution (and goes back up when it can)
-const dprMax = Math.min(devicePixelRatio, Q.dpr);
+// it never goes below 1.25x on a phone (lower looks smeared on a small sharp screen)
+const dprMax = Math.min(devicePixelRatio, isTouch && quality !== 'low' ? 2 : Q.dpr), dprMin = Math.min(dprMax, isTouch ? 1.25 : 1);
 let dprNow = dprMax, frameAvg = 16, resT = 0;
 function adaptRes(ms) {
   frameAvg += (Math.min(ms, 100) - frameAvg) * .05; resT += ms;
   if (resT < 2000 || document.hidden) return;
   resT = 0;
   let next = dprNow;
-  if (frameAvg > 26) next = Math.max(.6, dprNow - .15);
+  if (frameAvg > 30) next = Math.max(dprMin, dprNow - .1);
   else if (frameAvg < 14.5) next = Math.min(dprMax, dprNow + .1);
   if (Math.abs(next - dprNow) > .01) { dprNow = next; renderer.setPixelRatio(dprNow); resize(); }
 }

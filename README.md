@@ -266,3 +266,26 @@ The owner chose "boss mode": you run the crew and give orders, and jump into a m
 - **Help screen** rewritten for boss mode.
 
 **Tested:** all 29 automatic checks pass (25 old, 4 new for boss mode). Screenshots on an iPhone-sized screen were checked for the layout. I can't measure the frame rate on a real phone from here, so please tell me if it's still laggy, and on which phone.
+
+### Round 11: crew that don't get stuck in the river, machines that move like machines, sharp phone graphics (owner: still buggy and unrealistic; blurry; crew stuck in the creek; annoying dripping river sound)
+
+**What was wrong in the owner's screenshot, and the fixes:**
+- **Blurry:** the automatic resolution added in round 10 had dropped to its floor, about a fifth of the phone's real sharpness. Phones now draw at up to 2x and never below 1.25x.
+- **Crew stuck in the creek, hauler broken down:** three bugs together. (1) In the boss view the crew's bumps into the machine you last drove counted as crashes, which wore the hauler down until it broke, and with no hauler the earthwork stalls. Crew bumps don't count any more; steep-slope and drop damage is much lighter for the crew; a nudge at walking pace does no harm to anyone. (2) Crossings were picked by checking only the line straight behind them, so on a bending creek the dirt pits ended up in the water and the excavators waded in. Now the whole work area must be dry, and rock armour is placed from the top of the fill, not from the water. (3) The mechanic tried for ever to reach a machine he couldn't walk up to; now he works from as close as he can get.
+- **Layout on a phone held upright:** the crew list sits under the money and contract, the orders are a row of buttons above the machine bar, and while driving the money and contract sit under the top buttons with the map below them.
+- **River sound:** the old one was a 4-second loop of rushing noise with hundreds of little rising "bubble" beeps, which sounded like dripping. Now it's a soft, broad rush with slow swells, 12 seconds long and about a third as loud.
+
+**Machines move like machines** (started by the visual agent before it ran out of time, finished and tested here):
+- Every tyre and each track touches the ground on its own. A track is a stiff beam that bridges dips and tips over a crest; tyres roll over bumps; the body sits on them. Drop off a ledge and it falls and lands.
+- The loader, hauler and roller bend in the middle like real articulated machines; the front frame visibly swings.
+- Tracked machines turn smoothly (the turn builds up and dies away), slow down while turning, and turn harder on soft ground or with a loaded blade.
+- Weight: off the throttle they roll a little, then the brakes hold; too steep and they creep down; across a very steep bank they slide sideways. Soft fresh dirt and mud drag on them; tracks and tyres slip when bogged, pushing a full blade or climbing.
+- Wheels and tracks turn exactly at ground speed (the outside of a turn faster); tyres squash under load.
+
+**Dirt:**
+- Tyres and tracks press ruts into freshly tipped soil and mud the first time they run over it.
+- Clods that land on a slope now roll down it and stop on the flat, instead of stopping dead.
+- When soil slumps down a heap's face, clods break off and roll down with it, so you see the slide.
+- The crew's fill moves on with the dirt actually delivered; it no longer grows by itself (it only creeps if nothing has arrived for 45 seconds, so a job can't freeze).
+
+**Tested:** all 29 automatic checks pass. In the tests the crew built a full bridge in 26-27 minutes of game time; a replay of the south creek job in the boss view finished in 20 minutes with the crew's machines at 98-100% condition. Phone screenshots (upright) were checked for the boss view, driving, the hauler tipping and the dozer pushing. Not checked: the frame rate on a real phone, and the new river sound by ear.

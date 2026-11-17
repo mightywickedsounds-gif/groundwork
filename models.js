@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { labelTexture } from './textures.js?v=10';
+import { labelTexture } from './textures.js?v=11';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const Y = V(0, 1, 0), Z = V(0, 0, 1);
@@ -148,8 +148,12 @@ function tireGeo(r, w) {
   tireCache.set(key, g);
   return g;
 }
+// A wheel sits in a holder that doesn't spin: the game moves the holder up and down with the ground, turns it to steer
+// and squashes it under load, and spins the tyre inside it (the tyre is what the builders get back).
 function wheel(p, r, w, M, x, y, z) {
-  const t = new THREE.Mesh(tireGeo(r, w), M.rubber); t.position.set(x, y, z); t.castShadow = true; t.receiveShadow = true; p.add(t);
+  const hold = new THREE.Group(); hold.position.set(x, y, z); p.add(hold);
+  const t = new THREE.Mesh(tireGeo(r, w), M.rubber); t.castShadow = true; t.receiveShadow = true; hold.add(t);
+  t.userData.r = r; t.userData.hold = hold; t.userData.y0 = y;
   cylX(t, r * .58, w * 1.0, M.paint, 0, 0, 0, 20);
   cylX(t, r * .3, w * 1.06, M.frame, 0, 0, 0, 12);
   for (let i = 0; i < 8; i++) { const a = i / 8 * Math.PI * 2; cylX(t, .025, w * 1.1, M.steel, 0, Math.cos(a) * r * .42, Math.sin(a) * r * .42, 6); }
@@ -206,7 +210,7 @@ function buildTrack(p, x, len, R, w, M) {
     for (const wh of wheels) wh.rotation.x += d / (wh === idler || wh === sprocket ? R : .17);
   }
   update(0);
-  return { update };
+  return { update, x, a };   // x: which side; a: half the length that sits on the ground
 }
 
 // A hydraulic ram between point a (on one part) and point b (on another): the chrome rod slides out of the barrel.
