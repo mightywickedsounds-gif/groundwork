@@ -58,7 +58,11 @@ export function makeCrew(G) {
         const x = pm.x + uz * off, z = pm.z - ux * off, sp = span(x, z, ux, uz);
         if (!sp || sp[0] > 14 || sp[1] - sp[0] < 2) continue;
         // the approach behind the line must be dry land
-        let wet = false; for (let d = -30; d < sp[0] - 1; d += 2) if (G.wAt(x + ux * d, z + uz * d) > .2) wet = true;
+        // ...and so must the whole work area behind it (dirt pits either side, the hauler's turning room): on a bending
+        // creek the line can be dry while the pits would be in the water
+        const back = (sp[0] + sp[1]) / 2 - ((sp[1] - sp[0]) / 2 + 1) - 36;
+        let wet = false;
+        for (let d = back; d < sp[0] - 1 && !wet; d += 2) for (const o of [-9, -4.5, 0, 4.5, 9]) if (G.wAt(x + ux * d + uz * o, z + uz * d - ux * o) > .1) { wet = true; break; }
         if (wet) continue;
         const width = sp[1] - sp[0], near = avoid && Math.abs(off) < 9 ? 12 : 0;   // keep the line off the player's machine
         const score = width + near + Math.abs(off) * .2 + Math.abs(da) * 4;
@@ -92,7 +96,7 @@ export function makeCrew(G) {
   // (the crew also keeps shaping it between loads), and the ground behind it is shaped into the embankment with side
   // slopes, so the earthwork can't stall or slide backwards.
   const fillStart = S => S.kind === 'bridge' ? S.sL - 14 : -S.cw - 2;
-  function advance(S, d) { if (S.front !== undefined) S.front = Math.min(endOf(S) + .6, S.front + d); }
+  function advance(S, d, fed = true) { if (S.front !== undefined) { S.front = Math.min(endOf(S) + .6, S.front + d); if (fed) S.fedT = S.stageT; } }
   function shapeFill(S, s0, s1) {
     const hw = S.w / 2 + 1.2;
     for (let s = s0; s <= s1; s += .5) {
@@ -525,7 +529,7 @@ export function makeCrew(G) {
   const STG = {
     culverts: { equip: ['crane'] },
     fill: { earth: true }, ramp: { earth: true },
-    riprap: { lead: ['excavator', 'dozer'], o: 3.6, dur: 40 },
+    riprap: { lead: ['excavator', 'dozer'], o: 0, dur: 40 },   // placed from the top of the fill, not from the water
     subbase: { lead: ['dozer', 'hauler', 'excavator'], follow: 'roller', equip: ['roller'], dur: 45 },
     base: { lead: ['dozer', 'hauler', 'excavator'], follow: 'roller', equip: ['roller'], dur: 38 },
     surface: { lead: ['paver'], follow: 'roller', equip: ['paver', 'roller'], dur: 55, concrete: ['paver', 'mixer'] },
@@ -775,7 +779,10 @@ export function makeCrew(G) {
     if (d.earth) {
       if (P.front === undefined) P.front = fillStart(P);
       const was = P.front;
-      advance(P, dt * .07);   // the crew keeps shaping between loads
+      // the fill moves on with the dirt that's delivered; between loads the crew only shape it slowly, and if nothing has
+      // arrived for a while (a machine broken down or boxed in) they make up for it so the job can't freeze
+      const idle = P.stageT - (P.fedT ?? 0);
+      advance(P, dt * (idle > 45 ? .06 : .012), false);
       if (Math.floor(P.front * 2) !== Math.floor(was * 2)) shapeFill(P, fillStart(P), P.front);
       P.head = P.front;
       if (P.front >= endOf(P) + .5) { shapeFill(P, fillStart(P), endOf(P) + .5); nextStage(P); }

@@ -126,6 +126,16 @@
     #orders button { min-width:128px; padding:11px 14px; font-size:13px; }
   }
 
+  /* phone held upright: crew list under the money and contract, orders in a row above the machine bar */
+  @media (max-aspect-ratio: 1/1) {
+    body.boss #crewList { top:calc(max(16px, env(safe-area-inset-top)) + 96px); width:min(200px, 52vw); }
+    body.boss #score { width:auto; min-width:150px; }
+    body.boss #orders { left:max(10px, env(safe-area-inset-left)); right:max(10px, env(safe-area-inset-right)); bottom:calc(max(14px, env(safe-area-inset-bottom)) + 54px); flex-direction:row; gap:6px; }
+    body.boss #orders button { flex:1; min-width:0; padding:12px 6px; font-size:12px; letter-spacing:.06em; }
+    body.boss #orders button.quiet { flex:.6; font-size:11px; }
+    body.boss #hint { bottom:auto; top:45%; }
+  }
+
   /* touch controls */
   #touch { display:none; }
   body.touch #touch { display:block; }

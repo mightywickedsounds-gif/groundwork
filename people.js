@@ -701,16 +701,17 @@ export function makePeople(G) {
     if (mech.st === 'walk') {
       const ax = tg.x + Math.cos(tg.yaw) * (G.SPEC[tg.type].wid / 2 + .7), az = tg.z - Math.sin(tg.yaw) * (G.SPEC[tg.type].wid / 2 + .7);
       if (Math.hypot(tg.x - m.x, tg.z - m.z) > 30) { mech.st = 'back'; return; }   // driven off
-      if (walk(p, ax, az, dt, .4)) { mech.st = 'fix'; mech.t = 0; hold(p, 'wrench'); }
+      // can't get right up to it (in the water, boxed in): he works from as close as he got
+      if (walk(p, ax, az, dt, .4) || mech.t > 30) { mech.st = 'fix'; mech.far = mech.t > 30; mech.t = 0; hold(p, 'wrench'); }
     } else if (mech.st === 'fix') {
       face(p, tg.x, tg.z, dt); p.pose = 'kneel'; p.ph += dt;
-      if (Math.hypot(tg.x - p.x, tg.z - p.z) > G.SPEC[tg.type].wid / 2 + 2.5) { mech.st = 'walk'; return; }
+      if (!mech.far && Math.hypot(tg.x - p.x, tg.z - p.z) > G.SPEC[tg.type].wid / 2 + 2.5) { mech.st = 'walk'; mech.t = 0; return; }
       tg.hp = Math.min(1, tg.hp + dt * .055);
       if (Math.random() < dt * 1.5) G.tok(p.x, p.y + .6, p.z, .35);
       if (Math.random() < dt * .7) { G.clang(p.x, p.y + .6, p.z); G.spawn('spark', p.x + Math.sin(p.yaw) * .5, p.y + .6, p.z + Math.cos(p.yaw) * .5, 5, [1, .75, .35], { jitter: .2 }); }
       if (tg.hp >= 1) { mech.st = 'back'; mech.t = 0; hold(p, 'toolbox'); G.say(tg, G.SPEC[tg.type].name + ' repaired'); }
     } else if (mech.st === 'back') {
-      if (walk(p, m.x + Math.cos(m.yaw) * 1.6, m.z - Math.sin(m.yaw) * 1.6, dt, .5)) { mech.st = 'return'; mech.t = 0; p.f.root.visible = false; m.worker.visible = true; }
+      if (walk(p, m.x + Math.cos(m.yaw) * 1.6, m.z - Math.sin(m.yaw) * 1.6, dt, .5) || mech.t > 40) { mech.st = 'return'; mech.t = 0; p.f.root.visible = false; m.worker.visible = true; }
     } else if (mech.st === 'return') {
       const [ex, ez] = mech.from, r = G.crewDrive(m, ex, ez, 4, .8); m.ai = r.c;
       if (r.there || mech.t > 150) { dropTruck(m); mech.m = null; mech.st = 'home'; }

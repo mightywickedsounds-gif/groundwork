@@ -495,7 +495,7 @@ let simTime = 0;
 // ---------------------------------------------------------------- scene, sky and light
 const canvas = $('view');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: !Q.post, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, Q.dpr));
+renderer.setPixelRatio(Math.min(devicePixelRatio, isTouch && quality !== 'low' ? 2 : Q.dpr));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = Q.soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -1655,9 +1655,9 @@ function poseMachine(m, dt, inp) {
   const k = dt > 0 ? 1 - Math.exp(-dt * 12) : 1;
   if (dt > 0) {
     // dropping off a ledge, rolling on a side slope or sitting in deep water wears the machine
-    if (m.y - y > .7) hurt(m, (m.y - y - .7) * .05, m.x, y + .3, m.z, 'fall');
+    if (m.y - y > .7) hurt(m, (m.y - y - .7) * .05 * (m.ai ? .2 : 1), m.x, y + .3, m.z, 'fall');
     const tilt = Math.max(Math.abs(Math.atan2(hl - hr, Wd * 2)), Math.abs(Math.atan2(hf - hb, L * 2)) * .7);
-    if (tilt > .52) hurt(m, (tilt - .52) * .08 * dt, m.x, m.y + 1, m.z, 'tilt');
+    if (tilt > .52) hurt(m, (tilt - .52) * .08 * dt * (m.ai ? .15 : 1), m.x, m.y + 1, m.z, 'tilt');
     const wet = wetAt(m.x, m.z);
     if (wet > s.ford + .25) { hurt(m, (wet - s.ford) * .006 * dt, m.x, m.y + 1, m.z, 'water'); if (Math.random() < dt * 3) spawn('splash', m.x, m.y + s.ford + .4, m.z, 1, [.75, .8, .82], { jitter: s.wid * .6, up: .3 }); }
     // the yard's workshop slowly fixes whatever is parked there
@@ -1810,7 +1810,7 @@ function drive(m, dt, inp) {
     if (Math.abs(m.v) > 1.3) {   // ran into another machine
       const o = machines.reduce((a, q) => q !== m && Math.hypot(q.x - m.x, q.z - m.z) < Math.hypot(a.x - m.x, a.z - m.z) ? q : a, machines.find(q => q !== m) || m);
       // the crew drive carefully (their bumps are the planner's, not real crashes): only the player's knocks count
-      const imp = (m === machines[active] || o === machines[active]) ? (Math.abs(m.v) - 1.3) * .035 : 0, hx = (m.x + o.x) / 2, hz = (m.z + o.z) / 2;
+      const pl = boss ? null : machines[active], imp = (m === pl || o === pl) ? (Math.abs(m.v) - 1.3) * .035 : 0, hx = (m.x + o.x) / 2, hz = (m.z + o.z) / 2;
       hurt(m, imp, hx, m.y + 1, hz, 'bump'); if (o !== m) hurt(o, imp * .6, hx, o.y + 1, hz, 'bumped');
     }
     m.v = 0; m.trackSpeed = 0; m.blocked = 'machine'; return;
@@ -3114,14 +3114,15 @@ function setSpeed(v) {
   speed = v; const b = $('spdBtn'); if (b) { b.textContent = speed + 'X'; b.classList.toggle('on', speed > 1); }
 }
 // automatic sharpness: a phone that can't keep up draws at a slightly lower resolution (and goes back up when it can)
-const dprMax = Math.min(devicePixelRatio, Q.dpr);
+// it never goes below 1.25x on a phone (lower looks smeared on a small sharp screen)
+const dprMax = Math.min(devicePixelRatio, isTouch && quality !== 'low' ? 2 : Q.dpr), dprMin = Math.min(dprMax, isTouch ? 1.25 : 1);
 let dprNow = dprMax, frameAvg = 16, resT = 0;
 function adaptRes(ms) {
   frameAvg += (Math.min(ms, 100) - frameAvg) * .05; resT += ms;
   if (resT < 2000 || document.hidden) return;
   resT = 0;
   let next = dprNow;
-  if (frameAvg > 26) next = Math.max(.6, dprNow - .15);
+  if (frameAvg > 30) next = Math.max(dprMin, dprNow - .1);
   else if (frameAvg < 14.5) next = Math.min(dprMax, dprNow + .1);
   if (Math.abs(next - dprNow) > .01) { dprNow = next; renderer.setPixelRatio(dprNow); resize(); }
 }

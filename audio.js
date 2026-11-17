@@ -111,15 +111,18 @@ export function pourSample(c, gravel, secs = 3) {
   let br = 0; for (let i = 0; i < n; i++) { br = (br + .02 * (R() * 2 - 1)) / 1.02; y[i] += br * 1.4; }
   return toBuffer(c, normalize(loopify(y, sr), .8));
 }
-// a babbling stream: a bed of rushing water with countless small bubbles popping on top
-export function streamSample(c, secs = 4) {
+// a river: a broad, soft rush of moving water (no bubbles or drips), with slow swells as the current surges.
+// Long, so the loop isn't noticed; the swells are whole cycles of the loop so it joins up without a seam.
+export function streamSample(c, secs = 12) {
   const sr = c.sampleRate, n = Math.floor(sr * secs) + Math.floor(sr * .06), R = rngS(77), y = new Float32Array(n), w = new Float32Array(n);
   for (let i = 0; i < n; i++) w[i] = R() * 2 - 1;
-  filt(w, biquad('bp', 700, .5, sr), .5, y); filt(w, biquad('bp', 2200, .7, sr), .25, y);
-  for (let t = 0; t < secs; t += -Math.log(1 - R()) / 90) {
-    const s0 = Math.floor(t * sr), len = Math.floor(sr * (.01 + R() * .03)), f0 = 350 + R() * 900, a = .15 + R() * .5;
-    let ph = 0;
-    for (let k = 0; k < len && s0 + k < n; k++) { const f = f0 * (1 + 1.6 * k / len); ph += 2 * Math.PI * f / sr; y[s0 + k] += Math.sin(ph) * a * Math.sin(Math.PI * k / len); }
+  filt(w, biquad('lp', 260, .5, sr), 1.1, y);      // the low roar of the volume of water
+  filt(w, biquad('bp', 600, .45, sr), .55, y);      // the body of the rush
+  filt(w, biquad('bp', 1500, .5, sr), .22, y);      // the hiss of the surface
+  let br = 0; for (let i = 0; i < n; i++) { br = (br + .02 * (R() * 2 - 1)) / 1.02; y[i] += br * 1.6; }
+  for (let i = 0; i < n; i++) {
+    const t = i / sr / secs * Math.PI * 2;
+    y[i] *= .8 + .12 * Math.sin(t * 3 + 1.3) + .08 * Math.sin(t * 7 + .4) + .05 * Math.sin(t * 13 + 2.2);
   }
   return toBuffer(c, normalize(loopify(y, sr), .8));
 }
@@ -388,9 +391,10 @@ export class Sound {
     const w = this.loop(this.brown, .9), wl = this.filt('lowpass', 380, .4); this.windG = this.gain(.05); w.connect(wl).connect(this.windG).connect(this.amb);
     const lv = this.loop(this.white), lb = this.filt('bandpass', 3800, .6); this.leafG = this.gain(.008); lv.connect(lb).connect(this.leafG).connect(this.amb);
     this.riverPan = this.panner(14); this.riverPan.connect(this.amb);
-    const r1 = this.loop(this.stream), rh = this.filt('highpass', 150, .5); this.riverG = this.gain(0);
+    // two copies of the rush at slightly different speeds, so together they never repeat the same way
+    const r1 = this.loop(this.stream), rh = this.filt('lowpass', 2200, .5); this.riverG = this.gain(0);
     r1.connect(rh).connect(this.riverG).connect(this.riverPan);
-    const r2 = this.loop(this.stream, .73), rl = this.filt('lowpass', 900, .5); this.bubbleG = this.gain(0); r2.connect(rl).connect(this.bubbleG).connect(this.riverPan);
+    const r2 = this.loop(this.stream, .87), rl = this.filt('lowpass', 700, .5); this.bubbleG = this.gain(0); r2.connect(rl).connect(this.bubbleG).connect(this.riverPan);
     // insects all around you; frogs by the marsh and along the water
     const cr = this.loop(this.crickets); this.cricketG = this.gain(.02); cr.connect(this.cricketG).connect(this.amb);
     const cr2 = this.loop(this.crickets, .93); const cg2 = this.gain(.012); cr2.connect(cg2).connect(this.amb);
@@ -410,8 +414,8 @@ export class Sound {
     this.leafG.gain.setTargetAtTime(.004 + gust * .012, t, .5);
     if (river) {
       this.setPos(this.riverPan, river.x, river.y, river.z);
-      this.riverG.gain.setTargetAtTime(river.amount * .35, t, .3);
-      this.bubbleG.gain.setTargetAtTime(river.amount * .25, t, .3);
+      this.riverG.gain.setTargetAtTime(river.amount * .13, t, .8);
+      this.bubbleG.gain.setTargetAtTime(river.amount * .1, t, .8);
     }
     this.cricketG.gain.setTargetAtTime(.012 + (1 - gust) * .02, t, 1);
     if (marsh) { this.setPos(this.frogPan, marsh.x, marsh.y, marsh.z); this.frogG.gain.setTargetAtTime(marsh.wet ? .35 : 0, t, 1); }
