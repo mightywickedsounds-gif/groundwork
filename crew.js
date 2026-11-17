@@ -164,8 +164,9 @@ export function makeCrew(G) {
     ax += px; az += pz;
     const [st, e] = steerTo(m, m.x + ax * 10, m.z + az * 10, false);
     c.steer = st;
+    // turn while moving (slower the sharper the turn); a tracked machine only spins on the spot for a sharp turn
     const tracks = G.SPEC[m.type].tracks;
-    c.throttle = tracks && Math.abs(e) > .6 ? 0 : speed * clamp(d / 8, .35, 1) * (Math.abs(e) > 1.2 ? .45 : 1);
+    c.throttle = tracks && Math.abs(e) > 1.3 ? 0 : speed * clamp(d / 8, .35, 1) * clamp(Math.cos(e) * 1.15, .3, 1);
     return false;
   }
   // follow the site line at sideways offset o, moving towards +s (dir 1) or -s (dir -1); rev = tail first
@@ -420,7 +421,24 @@ export function makeCrew(G) {
     }
     if (from[goal] < 0 && goal !== start) return null;
     const path = []; for (let n = goal; n >= 0 && n !== start; n = from[n]) path.push([(n % GN) * GS + 1, ((n / GN) | 0) * GS + 1]);
-    return path.reverse();
+    path.reverse();
+    // a driver doesn't follow grid squares: from each point, head straight for the furthest one still in clear sight
+    const clearLine = (ax, az, bx, bz) => {
+      const L = Math.hypot(bx - ax, bz - az), n = Math.ceil(L / 1.2); let ph = null;
+      for (let q = 0; q <= n; q++) {
+        const c = cellOf(ax + (bx - ax) * q / n, az + (bz - az) * q / n);
+        if (!ok(c) && c !== start) return false;
+        if (ph !== null && Math.abs(gH[c] - ph) > .5 * L / n + .3) return false;
+        ph = gH[c];
+      }
+      return true;
+    };
+    const out = []; let ax = x0, az = z0;
+    for (let i = 0; i < path.length;) {
+      let j = i; while (j + 1 < path.length && clearLine(ax, az, path[j + 1][0], path[j + 1][1])) j++;
+      out.push(path[j]); [ax, az] = path[j]; i = j + 1;
+    }
+    return out;
   }
   // drive somewhere, along a route when it is far or round water; returns true when there
   function travel(m, st, c, x, z, tol = 2.5, speed = .8) {
@@ -446,16 +464,37 @@ export function makeCrew(G) {
     const look = Math.max(7, turnR(m) * 1.3);
     while (st.pi < st.path.length - 1 && Math.hypot(st.path[st.pi][0] - m.x, st.path[st.pi][1] - m.z) < look) st.pi++;
     const [tx, tz] = st.path[st.pi];
-    goto(m, c, tx, tz, 0, speed, st.pi < st.path.length - 1);
+    // ease off coming up to a bend in the route
+    let sp = speed;
+    if (st.pi < st.path.length - 1) {
+      const [ux, uz] = st.path[st.pi + 1], a1 = Math.atan2(tx - m.x, tz - m.z), a2 = Math.atan2(ux - tx, uz - tz);
+      const bend = Math.abs(angWrap(a2 - a1)), near = Math.hypot(tx - m.x, tz - m.z);
+      if (near < 14) sp *= clamp(1 - bend * .45 * (1 - near / 14), .45, 1);
+    }
+    goto(m, c, tx, tz, 0, sp, st.pi < st.path.length - 1);
     return false;
   }
 
   // ------------------------------------------------------------ following the player in a loose convoy
+  // They drive along the track the player actually took (like a convoy following its leader), each a different way back
+  // and a little to one side, instead of chasing spots fixed beside the player that swing round whenever it turns.
   const SLOT = { dozer: [-7, -15], excavator: [7, -18], hauler: [0, -28] };   // [sideways, behind] the player
+  const TRAIL = { dozer: [-2.5, 14], excavator: [2.5, 25], hauler: [0, 36] }, trail = [];
+  function trailPoint(pm, side, back) {
+    let left = back, ax = pm.x, az = pm.z;
+    for (let i = trail.length - 1; i >= 0; i--) {
+      const [bx, bz] = trail[i], l = Math.hypot(bx - ax, bz - az);
+      if (l >= left) { const t = left / l, x = ax + (bx - ax) * t, z = az + (bz - az) * t, ux = (ax - bx) / l, uz = (az - bz) / l; return [x + uz * side, z - ux * side]; }
+      left -= l; ax = bx; az = bz;
+    }
+    return null;
+  }
   function convoy(m, st, dt, pm) {
     const c = ctl(), [side, back] = m.type === 'excavator' && stOf(m).side === -1 ? [-15, -24] : SLOT[m.type];
     const fx = Math.sin(pm.yaw), fz = Math.cos(pm.yaw), lx = Math.cos(pm.yaw), lz = -Math.sin(pm.yaw);
-    const x = clamp(pm.x + lx * side + fx * back, 5, 250), z = clamp(pm.z + lz * side + fz * back, 5, 250);
+    const [ts, tb] = m.type === 'excavator' && stOf(m).side === -1 ? [-2.5, 47] : TRAIL[m.type];
+    const tp = trailPoint(pm, ts, tb);
+    const x = clamp(tp ? tp[0] : pm.x + lx * side + fx * back, 5, 250), z = clamp(tp ? tp[1] : pm.z + lz * side + fz * back, 5, 250);
     const d = Math.hypot(x - m.x, z - m.z);
     if (d > (st.moving ? 4 : 11)) {
       st.moving = true;
@@ -837,6 +876,12 @@ export function makeCrew(G) {
 
   function update(dt) {
     const player = playerM();
+    // the player's track (a point every metre and a half), for the convoy to follow; a new machine starts a new one
+    if (player) {
+      const last = trail[trail.length - 1];
+      if (trail.owner !== player || (last && Math.hypot(player.x - last[0], player.z - last[1]) > 20)) { trail.length = 0; trail.owner = player; }
+      if (!last || trail.length === 0 || Math.hypot(player.x - trail[trail.length - 1][0], player.z - trail[trail.length - 1][1]) > 1.5) { trail.push([player.x, player.z]); if (trail.length > 300) trail.shift(); }
+    } else trail.length = 0;
     for (const m of G.machines) if (!ROLES.includes(m.type) && !m.equip) m.ai = null;
     if (!on) { for (const m of G.machines) m.ai = null; return; }
     gridT -= dt; if (gridT <= 0) { gridT = 2; buildGrid(); }

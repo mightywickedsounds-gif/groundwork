@@ -3,13 +3,13 @@
 // browser so nothing ever resets.
 import * as THREE from 'three';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
-import { makeTextures } from './textures.js?v=17';
-import * as MOD from './models.js?v=17';
-import { Sound } from './audio.js?v=17';
-import { makeCrew } from './crew.js?v=17';
-import { makeWorks } from './construct.js?v=17';
-import { makePeople } from './people.js?v=17';
-import { makeLandscape } from './landscape.js?v=17';
+import { makeTextures } from './textures.js?v=18';
+import * as MOD from './models.js?v=18';
+import { Sound } from './audio.js?v=18';
+import { makeCrew } from './crew.js?v=18';
+import { makeWorks } from './construct.js?v=18';
+import { makePeople } from './people.js?v=18';
+import { makeLandscape } from './landscape.js?v=18';
 
 const N = 256, NN = N * N;           // 256 x 256 cells, 1 m each
 const SAVE_KEY = 'groundwork.save.v3';   // v1 (the first, smaller valley) is left untouched in the browser
@@ -423,19 +423,21 @@ function displace(k, amt) {
 const pourQ = [];
 function updatePour(dt) {
   for (let i = pourQ.length - 1; i >= 0; i--) {
-    const q = pourQ[i], a = Math.min(q.rem, q.rate * dt);
+    const q = pourQ[i];
+    if (q.wait > 0) { q.wait -= dt; continue; }   // still falling
+    const a = Math.min(q.rem, q.rate * dt);
     H[q.k] += a; q.rem -= a; displace(q.k, a); dirty(q.k);
     if (q.rem <= 1e-5) { pourQ[i] = pourQ[pourQ.length - 1]; pourQ.pop(); }
   }
 }
-function giveTo(L, k, amount, defer = 0) {
+function giveTo(L, k, amount, defer = 0, wait = 0) {
   amount = Math.min(amount, L.v);
   if (amount <= 0) return 0;
   const g = L.g * (amount / L.v);
   const mat = loadMat(L);
   L.v -= amount; L.g -= g;
   if (L.v < 1e-4) { L.v = 0; L.g = 0; }
-  if (defer > 0) pourQ.push({ k, rem: amount, rate: amount / defer });
+  if (defer > 0) pourQ.push({ k, rem: amount, rate: amount / defer, wait });
   else { H[k] += amount; displace(k, amount); }
   if (amount > .05) COMP[k] = 0;
   if (amount > .02 || M[k] === 0) M[k] = mat;
@@ -476,7 +478,7 @@ function cutCircle(L, x, z, r, floorY, maxV) {
   return got;
 }
 // tip out a load: it lands as a cone (as tall as loose soil stands) and then slumps on its own if it is too steep
-function dropCircle(L, x, z, r, vol, defer = 0) {
+function dropCircle(L, x, z, r, vol, defer = 0, wait = 0) {
   vol = Math.min(vol, L.v);
   if (vol <= 0) return 0;
   const list = []; let sw = 0;
@@ -484,7 +486,7 @@ function dropCircle(L, x, z, r, vol, defer = 0) {
   cellsInCircle(x, z, R, (k, f) => { const w = Math.max(.04, 1 - f); list.push([k, w]); sw += w; });
   if (!list.length) { list.push([cellOf(x, z), 1]); sw = 1; }
   let put = 0; const total = vol;
-  for (const [k, w] of list) put += giveTo(L, k, total * w / sw, defer);
+  for (const [k, w] of list) put += giveTo(L, k, total * w / sw, defer, wait);
   // dirt landing in water: rings spread from it and it throws up muddy spray
   const k0 = cellOf(x, z);
   if (W[k0] > .08 && put > .02) {
@@ -493,6 +495,8 @@ function dropCircle(L, x, z, r, vol, defer = 0) {
   }
   return put;
 }
+
+const fallTime = h => clamp(Math.sqrt(2 * Math.max(0, h) / 9.8), .15, .9);
 
 // ---------------------------------------------------------------- graphics quality
 const isTouch = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in window;
@@ -790,7 +794,11 @@ function terrainMaterial() {
         vec2 gp1 = vTWP.xz * .25, gp2 = vTWP.zx * .071 + .37;
         float gmac = texture2D(tMacro, vTWP.xz * .011).r * .6 + texture2D(tMacro, vTWP.xz * .053).r * .4;
         vec3 gh = texture2D(tHgt, gp1).rgb;
-        vec3 gw = max(vMat.xyz, 0.) + 1e-4; gw = gw * (.35 + gh * 1.3); gw = gw * gw * gw; gw /= (gw.x + gw.y + gw.z);
+        vec3 gw = max(vMat.xyz, 0.) + 1e-4;
+        // a ragged edge: grass reaches into the dirt in clumps and dirt shows through the grass in patches
+        { float br = texture2D(tMacro, vTWP.xz * .07 + .41).r * .45 + texture2D(tMacro, vTWP.zx * .21 - .17).r * .35 + texture2D(tMacro, vTWP.xz * .71 + .9).r * .2;
+          gw.x *= .15 + br * 1.7; gw.y *= 1.4 - br * .8; }
+        gw = gw * (.35 + gh * 1.3); gw = gw * gw * gw; gw /= (gw.x + gw.y + gw.z);
         vec3 cG = mix(texture2D(tGrass, gp1).rgb, texture2D(tGrass, gp2).rgb, .4);
         // meadow patches: sun-dried yellow in places, deeper green in others
         { float gdry = texture2D(tMacro, vTWP.zx * .027 + .31).r, glush = texture2D(tMacro, vTWP.xz * .019 + .73).r;
@@ -944,10 +952,12 @@ const terrainMat = terrainMaterial();
 const waterMat = waterMaterial(); waterMat.uniforms.tN.value = T.water; waterMat.uniforms.uRip.value = ripU;
 
 // ---------------------------------------------------------------- how each cell looks (material mix, wetness, shading in hollows)
-const cMat = new Float32Array(NN * 4), cAO = new Float32Array(NN).fill(1);
+const cMat = new Float32Array(NN * 4), cAO = new Float32Array(NN).fill(1), cRaw = new Float32Array(NN * 3);
+const BLUR5 = Array.from({ length: 25 }, (_, q) => Math.exp(-(((q % 5) - 2) ** 2 + (((q / 5) | 0) - 2) ** 2) / 2.4));
 function cellLook(i0, i1, j0, j1) {
   i0 = Math.max(0, i0); j0 = Math.max(0, j0); i1 = Math.min(N - 1, i1); j1 = Math.min(N - 1, j1);
-  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+  const a0 = Math.max(0, i0 - 2), a1 = Math.min(N - 1, i1 + 2), b0 = Math.max(0, j0 - 2), b1 = Math.min(N - 1, j1 + 2);
+  for (let j = b0; j <= b1; j++) for (let i = a0; i <= a1; i++) {
     const k = j * N + i, h = H[k];
     const hl = H[i > 0 ? k - 1 : k], hr = H[i < N - 1 ? k + 1 : k], hd = H[j > 0 ? k - N : k], hu = H[j < N - 1 ? k + N : k];
     const lap = (hl + hr + hd + hu) * .25 - h;
@@ -955,6 +965,8 @@ function cellLook(i0, i1, j0, j1) {
     cAO[k] = clamp(1 - Math.max(0, lap) * .4 - Math.max(0, h2) * .15 + Math.max(0, -lap) * .05, .52, 1.05);
     let g = 0, d = 0, r = 0;
     if (M[k] === 2) r = 1; else if (M[k] === 1 || D[k]) d = 1; else g = 1;
+    // only driven over (not dug or dumped on): worn turf, half grass, not bare soil
+    if (d === 1 && M[k] === 0 && Math.abs(H[k] - H0[k]) < .1) { g = .45 + ih(i * 5 - 3, j * 3 + 7) * .3; d = 1 - g; }
     if (d === 1 && SEED[k] > 0) { g = SEED[k] * .95; d = 1 - g; }   // seeded soil greening over
     const sl = Math.abs(hl - hr) + Math.abs(hd - hu);
     if (g && sl > 1.1) { const f = clamp((sl - 1.1) / 1.2, 0, .85); g -= f; d += f; }
@@ -974,7 +986,26 @@ function cellLook(i0, i1, j0, j1) {
     else if ((i > 0 && W[k - 1] > .02) || (i < N - 1 && W[k + 1] > .02) || (j > 0 && W[k - N] > .02) || (j < N - 1 && W[k + N] > .02)) wet = .5;
     else if ((i > 1 && W[k - 2] > .02) || (i < N - 2 && W[k + 2] > .02) || (j > 1 && W[k - 2 * N] > .02) || (j < N - 2 && W[k + 2 * N] > .02)
       || (i > 0 && j > 0 && W[k - N - 1] > .02) || (i < N - 1 && j > 0 && W[k - N + 1] > .02) || (i > 0 && j < N - 1 && W[k + N - 1] > .02) || (i < N - 1 && j < N - 1 && W[k + N + 1] > .02)) wet = .26;
-    cMat[k * 4] = g; cMat[k * 4 + 1] = d; cMat[k * 4 + 2] = r; cMat[k * 4 + 3] = wet;
+    cRaw[k * 3] = g; cRaw[k * 3 + 1] = d; cRaw[k * 3 + 2] = r; cMat[k * 4 + 3] = wet;
+  }
+  // soften the edges between cells (grass into dirt into gravel) over a metre or so; the shader breaks the edge up
+  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+    const k = j * N + i;
+    for (let c = 0; c < 3; c++) {
+      let v = 0, w = 0;
+      for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) {
+        const ii = i + dx, jj = j + dz; if (ii < 0 || jj < 0 || ii >= N || jj >= N) continue;
+        const f = BLUR5[(dz + 2) * 5 + dx + 2]; v += cRaw[(jj * N + ii) * 3 + c] * f; w += f;
+      }
+      cMat[k * 4 + c] = v / w;
+    }
+    // where grass meets bare ground, push the line in and out a metre or so (so no edge is ruler-straight)
+    const g = cMat[k * 4], d = cMat[k * 4 + 1];
+    if (g > .02 && d > .02) {
+      const n = vnoise(i * .21 + 3.7, j * .21 - 8.1) + .45 * vnoise(i * .67 - 1.3, j * .67 + 2.9);   // about -.7 .. .7
+      const g2 = clamp(g + n * g * (1 - g) * 3.2, 0, 1), rest = g + d - g2;
+      cMat[k * 4] = g2; cMat[k * 4 + 1] = Math.max(0, rest);
+    }
   }
 }
 const hc = (i, j) => H[clamp(j, 0, N - 1) * N + clamp(i, 0, N - 1)];
@@ -1284,7 +1315,9 @@ const barkNTex = T.barkN.clone(); barkNTex.repeat.set(2, 5); barkNTex.needsUpdat
 const barkMat = new THREE.MeshStandardMaterial({ map: barkTex, normalMap: barkNTex, normalScale: new THREE.Vector2(1.4, 1.4), roughness: .95, color: 0xd8ccbc });
 folMat.onBeforeCompile = sh => leafy(sh, false); folMat.customProgramCacheKey = () => 'gw-fol';
 barkMat.onBeforeCompile = sh => leafy(sh, true); barkMat.customProgramCacheKey = () => 'gw-bark';
-const TREE_GEOS = [MOD.spruceGeo(1, 12), MOD.spruceGeo(2, 14.5), MOD.spruceGeo(3, 16.5), MOD.leafyGeo(1, 10), MOD.leafyGeo(2, 12)];
+// branches per tree by graphics setting (whorls on a spruce, leaf clusters on a broadleaf)
+const TD = { high: [16, 90], medium: [12, 64], low: [9, 44] }[quality];
+const TREE_GEOS = [MOD.spruceGeo(1, 12, TD[0]), MOD.spruceGeo(2, 14.5, TD[0]), MOD.spruceGeo(3, 16.5, TD[0]), MOD.leafyGeo(1, 10, TD[1]), MOD.leafyGeo(2, 12, TD[1])];
 const TREE_H = [12, 14.5, 16.5, 10, 12];
 // trees in the valley thin out (a dithered fade) when they stand between the camera and the machine you're watching
 function fadeable(mat, key) {
@@ -1539,7 +1572,8 @@ function updateGrass(dt, me) {
     // reeds and tall grass line the water's edge
     const bank = W[k - 1] > .05 || W[k + 1] > .05 || W[k - N] > .05 || W[k + N] > .05 || W[k - 2] > .05 || W[k + 2] > .05 || W[k - 2 * N] > .05 || W[k + 2 * N] > .05;
     const grow = SEED[k];   // seeded soil: the new grass comes up thin and short, then fills in
-    if (!bank && ((grow < .35 && (M[k] !== 0 || D[k])) || W[k + 1] > .005 || W[k + N] > .005)) continue;
+    const worn = D[k] && M[k] === 0 && Math.abs(H[k] - H0[k]) < .1;   // only driven over: flattened, thinner grass
+    if (!bank && ((grow < .35 && !worn && (M[k] !== 0 || D[k])) || W[k + 1] > .005 || W[k + N] > .005)) continue;
     if (!bank && Math.abs(H[k + 1] - H[k - 1]) + Math.abs(H[k + N] - H[k - N]) > 1.1) continue;
     for (let q = 0; q < (bank ? 3 : 2) && n < Q.grass; q++) {
       const hx = hashf(i + q * .37, j), hz = hashf(j + q * .51, i + 3.1);
@@ -1547,6 +1581,7 @@ function updateGrass(dt, me) {
       const patch = vnoise(i * .11 + 3.3, j * .11 - 1.7) + .5 * vnoise(i * .37, j * .37);   // about -.75 .. .75
       if (!bank && patch < -.18 && hz < .55) continue;
       if (grow > 0 && hz > grow) continue;
+      if (worn && !(grow > 0) && hz > .4) continue;
       const x = i + hx - .5, z = j + hz - .5, s = (.7 + hashf(i, j + q) * .7) * clamp(1 + patch * .9, .55, 1.7) * (grow > 0 ? .4 + grow * .6 : 1);
       { const dryp = clamp(vnoise(i * .07 - 9.1, j * .07 + 4.2) * 2.2 + .25, 0, 1), sh = .82 + hashf(j * 1.3 + q, i * .7) * .3;
         _gc.setRGB(sh * (1 + dryp * .22), sh * (1 + dryp * .06), sh * (1 - dryp * .25)); grassIM.setColorAt(n, _gc); }
@@ -1777,6 +1812,7 @@ const PK = {
   smoke: { life: [1.6, 2.6], s0: .3, s1: 2.4, a: .45, up: [1.4, 2.2], spread: .3, g: -.25, drag: .6 },
   splash: { life: [.5, .9], s0: .35, s1: .7, a: .7, up: [1.5, 3.2], spread: 1.8, g: 9, drag: .2 },
   leaf: { life: [1.5, 2.5], s0: .25, s1: .25, a: .9, up: [.2, 1.2], spread: 2.4, g: 1.2, drag: 1.5 },
+  fines: { life: [.45, .8], s0: .18, s1: .5, a: .45, up: [-1, -.2], spread: .5, g: 6, drag: 1.4 },   // fine soil falling with a stream
   spark: { life: [.25, .5], s0: .07, s1: .03, a: 1, up: [1.5, 4], spread: 5, g: 9.8, drag: .4 },
   grain: { life: [1.2, 2], s0: .11, s1: .09, a: 1, up: [-.5, .4], spread: .6, g: 9.8, drag: .15, land: true },
 };
@@ -1868,61 +1904,101 @@ function leavePrints(m, dist, dyaw) {
   for (const [px, pz, w] of pts) addPrint(m.x + c * px + sn * pz, m.z - sn * px + c * pz, m.yaw, w, .52, tyre);
 }
 
-// clods and stones that tumble out of buckets and beds (just for show: the ground has already been changed)
-const CMAX = quality === 'low' ? 360 : 900;
-const clodGeo = (() => { const g = new THREE.IcosahedronGeometry(.11, 1), p = g.attributes.position; for (let i = 0; i < p.count; i++) { const k = .75 + .45 * Math.abs(Math.sin(p.getX(i) * 41 + p.getY(i) * 23 + p.getZ(i) * 17)); p.setXYZ(i, p.getX(i) * k, p.getY(i) * k * .8, p.getZ(i) * k); } g.computeVertexNormals(); return g; })();
-const chunkIM = new THREE.InstancedMesh(clodGeo, new THREE.MeshStandardMaterial({ roughness: 1, map: T.dirt }), CMAX);
-chunkIM.castShadow = true; chunkIM.frustumCulled = false; scene.add(chunkIM);
-const cPos = new Float32Array(CMAX * 3), cVel = new Float32Array(CMAX * 3), cLife = new Float32Array(CMAX), cRot = new Float32Array(CMAX * 2), cS = new Float32Array(CMAX);
-let cNext = 0, chunksLive = 0;
-{ const col = new THREE.Color(); for (let i = 0; i < CMAX; i++) { chunkIM.setMatrixAt(i, _m4.makeScale(0, 0, 0)); chunkIM.setColorAt(i, col.setRGB(.4, .3, .2)); } }
-const CHUNK_DIRT = new THREE.Color(0x9a7352), CHUNK_GRAVEL = new THREE.Color(0x8c8880), _cc = new THREE.Color();
-function chunks(x, y, z, n, gravel, vx = 0, vz = 0, spread = 1) {
-  spawn('grain', x, y, z, n * 9, gravel ? [.55, .53, .5] : [.34, .24, .16], { jitter: spread, vx, vz, size: .75 });
-  n = Math.ceil(n * .55);
+// ---------------------------------------------------------------- soil you can see: the pieces of dirt and stone that
+// pour out of buckets and beds, bounce, roll down the face of the heap and settle on it. Mostly crumbs of 1-5 cm with
+// the odd clod. They're for show: the ground itself takes the soil as the stream lands (pourQ waits for the fall).
+// A settled piece stays on the surface until fresh soil buries it, then it's gone; the rest sink in after a while.
+const SMAX = { high: 7000, medium: 4200, low: 1800 }[quality];
+const soilGeo = (() => {
+  const g = new THREE.IcosahedronGeometry(1, 0), p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {   // knock the corners about (the same corner moves the same way on every face)
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i), k = .72 + .5 * Math.abs(Math.sin(x * 12.9 + y * 78.2 + z * 37.7));
+    p.setXYZ(i, x * k, y * k * .78, z * k);
+  }
+  g.computeVertexNormals(); return g;
+})();
+const soilMat = new THREE.MeshStandardMaterial({ map: T.dirt, roughness: .97, metalness: 0 });
+const soilIM = new THREE.InstancedMesh(soilGeo, soilMat, SMAX);
+soilIM.castShadow = quality !== 'low'; soilIM.receiveShadow = true; soilIM.frustumCulled = false; scene.add(soilIM);
+const sP = new Float32Array(SMAX * 3), sV = new Float32Array(SMAX * 3), sR = new Float32Array(SMAX * 3), sA = new Float32Array(SMAX * 2);
+const sS = new Float32Array(SMAX), sT = new Float32Array(SMAX), sF = new Float32Array(SMAX).fill(-1e9), sSt = new Uint8Array(SMAX);
+let sNext = 0, soilLive = 0, soilColDirty = false;
+{ const col = new THREE.Color(.4, .3, .2); for (let i = 0; i < SMAX; i++) { soilIM.setMatrixAt(i, _m4.makeScale(0, 0, 0)); soilIM.setColorAt(i, col); } }
+// (these tint the dirt photo, so they're light: the photo brings the brown)
+const SOIL_DIRT = [new THREE.Color(0xe2c2a2), new THREE.Color(0xc9a582), new THREE.Color(0xeed4b8), new THREE.Color(0xb48f6c)];
+const SOIL_GRAVEL = [new THREE.Color(0xf2efe8), new THREE.Color(0xd6d2ca), new THREE.Color(0xfffcf4), new THREE.Color(0xd8cdbf)];
+// n pieces from around (x, y, z). o: vx/vy/vz (thrown), lx/lz + w (spread along a line, the lip of a bucket),
+// jitter (round spread), big (size), floor (a surface to land on instead of the ground, e.g. a hauler's bed)
+function soil(x, y, z, n, gravel, o = {}) {
+  const pal = gravel ? SOIL_GRAVEL : SOIL_DIRT, jit = o.jitter ?? .3, w = o.w || 0;
   for (let q = 0; q < n; q++) {
-    const i = cNext; cNext = (cNext + 1) % CMAX;
-    cPos[i * 3] = x + (Math.random() - .5) * spread; cPos[i * 3 + 1] = y + (Math.random() - .5) * .3; cPos[i * 3 + 2] = z + (Math.random() - .5) * spread;
-    cVel[i * 3] = vx + (Math.random() - .5) * 1.2; cVel[i * 3 + 1] = Math.random() * 1.2; cVel[i * 3 + 2] = vz + (Math.random() - .5) * 1.2;
-    cLife[i] = 1.6 + Math.random(); cRot[i * 2] = Math.random() * 6; cRot[i * 2 + 1] = Math.random() * 6; cS[i] = .4 + Math.random() * Math.random() * 1.3;
-    _cc.copy(gravel ? CHUNK_GRAVEL : CHUNK_DIRT).multiplyScalar(.75 + Math.random() * .5);
-    chunkIM.setColorAt(i, _cc);
+    const i = sNext; sNext = (sNext + 1) % SMAX;
+    const t = (Math.random() - .5) * w;
+    sP[i * 3] = x + (o.lx || 0) * t + (Math.random() - .5) * jit; sP[i * 3 + 1] = y + (Math.random() - .5) * .15; sP[i * 3 + 2] = z + (o.lz || 0) * t + (Math.random() - .5) * jit;
+    sV[i * 3] = (o.vx || 0) + (Math.random() - .5) * .5; sV[i * 3 + 1] = (o.vy || 0) + (Math.random() - .5) * .4; sV[i * 3 + 2] = (o.vz || 0) + (Math.random() - .5) * .5;
+    const r = Math.random();
+    sS[i] = (gravel ? .012 + r * r * .035 : .009 + r * r * r * .065) * (o.big || 1);
+    sR[i * 3] = Math.random() * 6.3; sR[i * 3 + 1] = Math.random() * 6.3; sR[i * 3 + 2] = Math.random() * 6.3;
+    sA[i * 2] = .75 + Math.random() * .5; sA[i * 2 + 1] = .75 + Math.random() * .5;
+    sF[i] = o.floor ?? -1e9; sSt[i] = 1; sT[i] = o.floor !== undefined ? 1.2 + Math.random() : 5 + Math.random() * 7;
+    _cc.copy(pal[(Math.random() * pal.length) | 0]).multiplyScalar(.8 + Math.random() * .4);
+    soilIM.setColorAt(i, _cc);
   }
-  chunkIM.instanceColor.needsUpdate = true;
-  chunksLive = 3;
+  soilColDirty = true; soilLive = 14;
 }
+const _cc = new THREE.Color(), _eu = new THREE.Euler();
+// the old call: n "clods" thrown from a point (a spill off a blade, a slump, a tyre) - now a handful of pieces each
+function chunks(x, y, z, n, gravel, vx = 0, vz = 0, spread = 1) { soil(x, y, z, Math.ceil(n * 7), gravel, { vx, vz, jitter: spread, big: 1.3 }); }
+const groundY = (x, z) => hAt(x, z);
+// a few loose crumbs (shed from a full bucket, flicked up by a tyre or track): col says dirt or gravel
+function crumbs(x, y, z, n, col, o = {}) { soil(x, y, z, n * 3, col[0] > .45, { vx: o.vx, vz: o.vz, vy: (o.up || 0) * .25, jitter: o.jitter ?? .3, big: .7 }); }
 function updateChunks(dt) {
-  if (chunksLive <= 0) return;
-  chunksLive -= dt;
-  for (let i = 0; i < CMAX; i++) {
-    if (cLife[i] <= 0) continue;
-    cLife[i] -= dt;
-    cVel[i * 3 + 1] -= 9.8 * dt;
-    let x = cPos[i * 3] + cVel[i * 3] * dt, y = cPos[i * 3 + 1] + cVel[i * 3 + 1] * dt, z = cPos[i * 3 + 2] + cVel[i * 3 + 2] * dt;
-    const g = hAt(x, z) + .05 * cS[i];
-    if (y < g) {
-      const vy = cVel[i * 3 + 1];
-      if (vy < -1.2) {   // lands: a puff of dust for the big ones and a small bounce
-        if (vy < -2.5 && cS[i] > .9 && Math.random() < .5) spawn('dust', x, g + .1, z, 1, DIRT_C, { alpha: .3, size: .55 });
-        cVel[i * 3] *= .6; cVel[i * 3 + 2] *= .6; cVel[i * 3 + 1] = -vy * .2;
-      } else cVel[i * 3 + 1] = 0;
-      y = g;
-      // on the ground it rolls down whatever slope it's on (a heap's face, the side of a pit) and stops on the flat
-      const gx = (hAt(x + .4, z) - hAt(x - .4, z)) * 1.25, gz = (hAt(x, z + .4) - hAt(x, z - .4)) * 1.25, sl = Math.hypot(gx, gz);
-      if (sl > .4) { cVel[i * 3] -= gx * 6.5 * dt; cVel[i * 3 + 2] -= gz * 6.5 * dt; }
-      const f = Math.exp(-dt * (sl > .4 ? 1.2 : 5));
-      cVel[i * 3] *= f; cVel[i * 3 + 2] *= f;
-      const hs = Math.hypot(cVel[i * 3], cVel[i * 3 + 2]);
-      if (hs > .4) { cLife[i] = Math.max(cLife[i], .6); cRot[i * 2] += hs * dt * 3 / Math.max(.3, cS[i]); }
-      else cLife[i] = Math.min(cLife[i], 1.1);
+  if (soilLive <= 0) return;
+  soilLive -= dt;
+  if (soilColDirty) { soilIM.instanceColor.needsUpdate = true; soilColDirty = false; }
+  let any = false;
+  for (let i = 0; i < SMAX; i++) {
+    const st = sSt[i]; if (!st) continue;
+    any = true;
+    const s = sS[i];
+    let x = sP[i * 3], y = sP[i * 3 + 1], z = sP[i * 3 + 2];
+    if (st === 1) {   // in the air, or bouncing and rolling
+      sV[i * 3 + 1] -= 9.8 * dt;
+      x += sV[i * 3] * dt; y += sV[i * 3 + 1] * dt; z += sV[i * 3 + 2] * dt;
+      const fl = Math.max(groundY(x, z), sF[i]) + s * .55;
+      if (y <= fl) {
+        const vy = sV[i * 3 + 1];
+        y = fl;
+        if (vy < -1.6) {   // a hit: a small bounce, kicked off sideways, spinning
+          sV[i * 3 + 1] = -vy * (.12 + Math.random() * .22);
+          const kick = -vy * .22; sV[i * 3] = sV[i * 3] * .45 + (Math.random() - .5) * kick; sV[i * 3 + 2] = sV[i * 3 + 2] * .45 + (Math.random() - .5) * kick;
+          sR[i * 3] += Math.random() * 2;
+          if (s > .04 && vy < -4 && Math.random() < .15) spawn('dust', x, y + .05, z, 1, DIRT_C, { alpha: .25, size: .45 });
+        } else {
+          sV[i * 3 + 1] = 0;
+          // rolling: down any slope steeper than loose soil lies at, slowing on the flat
+          const e = .35, gx = (groundY(x + e, z) - groundY(x - e, z)) / (2 * e), gz = (groundY(x, z + e) - groundY(x, z - e)) / (2 * e), sl = Math.hypot(gx, gz);
+          if (sF[i] < -1e8 && sl > .6) { const acc = 9.8 * (sl - .55) / sl * 1.4; sV[i * 3] -= gx * acc * dt; sV[i * 3 + 2] -= gz * acc * dt; }
+          const f = Math.exp(-dt * (sl > .6 ? 1.6 : 7)); sV[i * 3] *= f; sV[i * 3 + 2] *= f;
+          const hs = Math.hypot(sV[i * 3], sV[i * 3 + 2]);
+          sR[i * 3] += hs * dt / s * .9;
+          if (hs < .07 && sl < .75) sSt[i] = 2;   // settled
+        }
+      } else { sR[i * 3 + 1] += dt * 5; sR[i * 3 + 2] += dt * 3; }
+      sP[i * 3] = x; sP[i * 3 + 1] = y; sP[i * 3 + 2] = z;
+    } else {   // settled: buried by fresh soil, dropped from under (the heap slumped), or slowly sinking in
+      const g = Math.max(groundY(x, z), sF[i]);
+      if (g > y + s * .1) { sSt[i] = 0; soilIM.setMatrixAt(i, _m4.makeScale(0, 0, 0)); continue; }
+      if (g < y - s * 1.5) { sSt[i] = 1; }
+      sT[i] -= dt;
+      if (sT[i] <= 0) { sSt[i] = 0; soilIM.setMatrixAt(i, _m4.makeScale(0, 0, 0)); continue; }
     }
-    cPos[i * 3] = x; cPos[i * 3 + 1] = y; cPos[i * 3 + 2] = z;
-    cRot[i * 2] += dt * 6; cRot[i * 2 + 1] += dt * 4;
-    const s = cLife[i] > 0 ? cS[i] * Math.min(1, cLife[i] * 2.5) : 0;
-    _q.setFromEuler(new THREE.Euler(cRot[i * 2], cRot[i * 2 + 1], 0));
-    chunkIM.setMatrixAt(i, _m4.compose(_v.set(x, y, z), _q, _s.set(s, s, s)));
+    const k = s * Math.min(1, sT[i] * .8);
+    _eu.set(sR[i * 3], sR[i * 3 + 1], sR[i * 3 + 2]); _q.setFromEuler(_eu);
+    soilIM.setMatrixAt(i, _m4.compose(_v.set(x, sSt[i] === 2 ? y - s * (1 - Math.min(1, sT[i] * .8)) : y, z), _q, _s.set(k * sA[i * 2], k, k * sA[i * 2 + 1])));
   }
-  chunkIM.instanceMatrix.needsUpdate = true;
+  soilIM.instanceMatrix.needsUpdate = true;
+  if (any) soilLive = Math.max(soilLive, 1);
 }
 
 // ---------------------------------------------------------------- machines
@@ -2016,6 +2092,15 @@ function softAt(x, z) {
   if (W[k] > .1) v += .5; else if (cMat[k * 4 + 3] > .2 && (D[k] || M[k] === 1)) v += .35;
   return Math.min(1, v);
 }
+// the crew's hands on the controls: a driver eases the wheel round and feeds the throttle in, and goes through a stop
+// between forward and reverse, instead of snapping the controls about like a robot
+function aiHands(m, a, dt) {
+  const h = m.hands || (m.hands = { steer: 0, throttle: 0, out: {} });
+  h.steer += clamp(a.steer - h.steer, -dt * 2.4, dt * 2.4);
+  const t = a.throttle * h.throttle < -1e-3 ? 0 : a.throttle;
+  h.throttle += clamp(t - h.throttle, -dt * 2.6, dt * (Math.abs(t) > Math.abs(h.throttle) ? 1.5 : 2.6));
+  return Object.assign(h.out, a, { steer: h.steer, throttle: h.throttle });
+}
 function circlesOf(m, x, z, yaw) { return SPEC[m.type].circ.map(([oz, r]) => [x + Math.sin(yaw) * oz, z + Math.cos(yaw) * oz, r]); }
 function overlap(m, x, z, yaw) {
   const A = circlesOf(m, x, z, yaw); let pen = 0;
@@ -2024,6 +2109,21 @@ function overlap(m, x, z, yaw) {
     for (const b of circlesOf(o, o.x, o.z, o.yaw)) for (const a of A) {
       const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
       if (d < a[2] + b[2]) pen += a[2] + b[2] - d;
+    }
+  }
+  return pen;
+}
+// an unfinished bridge deck is off limits to the machine you drive (formwork and wet concrete over the river): how
+// far its circles reach into one
+function sitePen(m, x, z, yaw) {
+  let pen = 0;
+  for (const P of crew.roads) {
+    if (P.done || P.kind !== 'bridge') continue;
+    const hw = P.w / 2 + .5;
+    for (const [cx, cz, r] of circlesOf(m, x, z, yaw)) {
+      const dx = cx - P.P[0], dz = cz - P.P[1], ss = dx * P.u[0] + dz * P.u[1], oo = dx * P.p[0] + dz * P.p[1];
+      const es = Math.min(ss - (P.sL - .5), (P.sR + .5) - ss) + r, eo = hw - Math.abs(oo) + r;
+      if (es > 0 && eo > 0) pen += Math.min(es, eo);
     }
   }
   return pen;
@@ -2214,14 +2314,14 @@ function machineFx(m, dt, isActive) {
     for (let q = 0; q < n; q++) {
       const sx = Math.random() < .5 ? -1 : 1, out = (1.5 + Math.random() * 2) * sx;
       _w.set(sx * 1.95, m.blade + .15 + Math.random() * .5, 2.85); m.group.localToWorld(_w);
-      spawn('grain', _w.x, _w.y, _w.z, 2, col, { jitter: .25, vx: Math.cos(m.yaw) * out + Math.sin(m.yaw) * m.v, vz: -Math.sin(m.yaw) * out + Math.cos(m.yaw) * m.v, up: -3.5, size: .9 });
+      crumbs(_w.x, _w.y, _w.z, 2, col, { jitter: .25, vx: Math.cos(m.yaw) * out + Math.sin(m.yaw) * m.v, vz: -Math.sin(m.yaw) * out + Math.cos(m.yaw) * m.v, up: -3.5, size: .9 });
       if (Math.random() < .25) chunks(_w.x, _w.y + .2, _w.z, 1, grav, Math.cos(m.yaw) * out * .7 + Math.sin(m.yaw) * m.v, -Math.sin(m.yaw) * out * .7 + Math.cos(m.yaw) * m.v, .3);
     }
     if (Math.random() < dt * 6) { _w.set(0, m.blade + .2, 3.0); m.group.localToWorld(_w); spawn('dust', _w.x, _w.y, _w.z, 1, grav ? GRAVEL_C : DIRT_C, { jitter: 3, alpha: .4, size: 1.1 }); }
   }
   if ((m.type === 'excavator' || m.type === 'loader') && m.load.v > .3 && m.bucket && Math.random() < dt * (m.type === 'excavator' ? 5 + Math.abs(m.swingRate || 0) * 14 : Math.abs(m.v) * 1.6)) {
     _w.set((Math.random() - .5) * (m.type === 'loader' ? 2.4 : .8), 0, m.type === 'loader' ? .8 : .7); m.bucket.localToWorld(_w);
-    spawn('grain', _w.x, _w.y, _w.z, 2, m.load.g > m.load.v * .5 ? [.55, .53, .5] : [.33, .23, .15], { jitter: .3, size: .8 });
+    crumbs(_w.x, _w.y, _w.z, 2, m.load.g > m.load.v * .5 ? [.55, .53, .5] : [.33, .23, .15], { jitter: .3, size: .8 });
   }
   m.mats.glass.opacity = cabView && m === machines[active] ? .06 : .32;
   for (const b of m.beacons) b.material.emissiveIntensity = isActive ? (Math.sin(simTime * 9) > .55 ? 4 : .25) : .1;
@@ -2367,6 +2467,14 @@ function drive(m, dt, inp) {
     m.v = 0; m.vs = 0; m.om = 0; m.slipV = 0; m.trackSpeed = 0; m.blocked = 'machine'; return;
   }
   m.blocked = '';
+  if (m === machines[active] && !boss && !m.ai && crew.roads.length) {
+    const sb = sitePen(m, m.x, m.z, m.yaw), sa = sitePen(m, nx, nz, yaw);
+    if (sa > sb + 1e-4) {
+      m.v = 0; m.vs = 0; m.om = 0; m.slipV = 0; m.trackSpeed = 0; m.blocked = 'site';
+      if (simTime - (m.siteT || -9) > 3) { m.siteT = simTime; say(m, 'BRIDGE NOT FINISHED'); }
+      return;
+    }
+  }
   // too deep: the machine won't move its nose (or tail, backing up) into water deeper than it can ford
   if (m.v !== 0 || m.vs !== 0) {
     const sg = Math.sign(m.v) || 1, reach = L + .4;
@@ -2438,7 +2546,7 @@ function drive(m, dt, inp) {
       const spoil = H[k] - H0[k], wetK = cMat[k * 4 + 3] > .2;
       const press = Math.min(H[k] - BED[k], (spoil > .08 ? Math.min(.07, spoil * .14) : 0) + (wetK ? .035 : 0)) * (s.tracks ? 1 : 1.2);
       COMP[k] |= 2;
-      if (press > .004) { H[k] -= press; dirty(k); if (wetK && Math.random() < .5) spawn('grain', wx, H[k] + .15, wz, 2, [.2, .15, .1], { jitter: .5, up: 1.5, size: .9 }); }
+      if (press > .004) { H[k] -= press; dirty(k); if (wetK && Math.random() < .5) crumbs(wx, H[k] + .15, wz, 2, [.2, .15, .1], { jitter: .5, up: 1.5, size: .9 }); }
     }
     if (Math.random() > chance) continue;
     if (M[k] === 0 && !D[k]) { D[k] = 1; dirty(k); }
@@ -2453,7 +2561,7 @@ function drive(m, dt, inp) {
       if (W[k] > .03 || DECK[k] > 0) continue;
       const bare = M[k] === 2 || M[k] === 1 || D[k] ? 1 : .12, gy = hAt(wx, wz);
       if (Math.random() < dt * sp * 2.4 * bare) spawn('dust', wx, gy + .15, wz, 1, M[k] === 2 ? GRAVEL_C : bare < 1 ? [.5, .47, .36] : DIRT_C, { alpha: .25 + Math.min(.3, sp * .04), size: .6 + sp * .09, vx: -fx * m.v * .25, vz: -fz * m.v * .25 });
-      if (bare === 1 && sp > 1.2 && Math.random() < dt * sp * 1.6) spawn('grain', wx, gy + .12, wz, 2, M[k] === 2 ? [.55, .53, .5] : [.3, .21, .14], { jitter: .45, vx: -fx * m.v * .3, vz: -fz * m.v * .3, up: -3, size: .7 });
+      if (bare === 1 && sp > 1.2 && Math.random() < dt * sp * 1.6) crumbs(wx, gy + .12, wz, 2, M[k] === 2 ? [.55, .53, .5] : [.3, .21, .14], { jitter: .45, vx: -fx * m.v * .3, vz: -fz * m.v * .3, up: -3, size: .7 });
     }
   }
 }
@@ -2499,7 +2607,7 @@ function toolDozer(m, dt, inp) {
     if (m.load.v > .4) {
       const n = Math.min(6, Math.floor(m.v * dt * 25 * Math.min(1, m.load.v / 3) + Math.random()));
       const top = Math.cbrt(m.load.v / 1.25) * .8;
-      for (let q = 0; q < n; q++) { _p.set((Math.random() - .5) * 3.2, m.blade + top * (.5 + Math.random() * .5), 2.9 + top * .5); m.group.localToWorld(_p); spawn('grain', _p.x, _p.y, _p.z, 1, loadMat(m.load) === 2 ? [.55, .53, .5] : [.36, .26, .17], { jitter: .2, vx: Math.sin(m.yaw) * (m.v + .8), vz: Math.cos(m.yaw) * (m.v + .8), up: .3, size: .8 }); }
+      for (let q = 0; q < n; q++) { _p.set((Math.random() - .5) * 3.2, m.blade + top * (.5 + Math.random() * .5), 2.9 + top * .5); m.group.localToWorld(_p); crumbs(_p.x, _p.y, _p.z, 1, loadMat(m.load) === 2 ? [.55, .53, .5] : [.36, .26, .17], { jitter: .2, vx: Math.sin(m.yaw) * (m.v + .8), vz: Math.cos(m.yaw) * (m.v + .8), up: .3, size: .8 }); }
     }
     if (m.load.v > .3 && Math.random() < dt * 9) { _p.set(0, m.blade + .4, 3.3); m.group.localToWorld(_p); dust(_p.x, _p.y, _p.z, 2, loadMat(m.load) === 2 ? GRAVEL_C : DIRT_C); }
     if (m.load.v > 1.5 && Math.random() < dt * 7) { _p.set((Math.random() - .5) * 3, m.blade + 1.4, 3.0); m.group.localToWorld(_p); chunks(_p.x, _p.y, _p.z, 1, loadMat(m.load) === 2, Math.sin(m.yaw) * m.v, Math.cos(m.yaw) * m.v, .3); }
@@ -2552,8 +2660,12 @@ function toolLoader(m, dt, inp) {
   // the stream of dirt falling out while the bucket tips
   if (m.pourT > 0) {
     m.pourT -= dt;
-    _p.set(0, -.3, 1.0); m.bucket.localToWorld(_p);
-    chunks(_p.x, _p.y, _p.z, Math.ceil(dt * 90), m.pourG, 0, 0, 1.6);
+    // the whole lip of the bucket lets go: thousands of crumbs and the odd clod
+    _p.set(0, -.25, 1.05); m.bucket.localToWorld(_p);
+    _w.set(1, 0, 0).transformDirection(m.bucket.matrixWorld);
+    const n = Math.min(240, Math.ceil(dt * (m.pourV || 1) * 2200)), fx = Math.sin(m.yaw), fz = Math.cos(m.yaw);
+    soil(_p.x, _p.y, _p.z, n, m.pourG, { lx: _w.x, lz: _w.z, w: 2.3, jitter: .18, vx: fx * .7 + m.v * fx, vz: fz * .7 + m.v * fz, vy: -.4, floor: m.pourFloor });
+    for (let q = 0; q < 4; q++) { const t = (Math.random() - .5) * 2.2; spawn('fines', _p.x + _w.x * t, _p.y, _p.z + _w.z * t, 1, m.pourG ? GRAVEL_C : DIRT_C, { jitter: .2, vx: fx * .6, vz: fz * .6 }); }
     m.pour += dt * 4;
   }
   if (inp.act) {
@@ -2563,14 +2675,14 @@ function toolLoader(m, dt, inp) {
       _p.set(0, -.45, .97); m.bucket.localToWorld(_p);
       const h = haulerNear(_p.x, _p.z, 3.4);
       const vol = m.load.v, grav = loadMat(m.load) === 2;
-      m.pourT = .55; m.pourG = grav;
+      m.pourT = .55; m.pourG = grav; m.pourV = vol; m.pourFloor = undefined;
       if (h && m.arm > .55) {
         const got = transfer(m.load, h.load, SPEC.hauler.cap);
-        if (got <= 0) say(m, 'Hauler full');
-        else { dust(_p.x, _p.y - 1, _p.z, 14, grav ? GRAVEL_C : DIRT_C); snd.dump(_p.x, _p.y - 1, _p.z, got, grav); snd.clang(_p.x, _p.y - 1, _p.z, 95, .25); }
+        if (got <= 0) { say(m, 'Hauler full'); m.pourT = 0; }
+        else { m.pourFloor = h.y + 1.7 + h.load.v / SPEC.hauler.cap * 1.2; dust(_p.x, _p.y - 1, _p.z, 14, grav ? GRAVEL_C : DIRT_C); snd.dump(_p.x, _p.y - 1, _p.z, got, grav); snd.clang(_p.x, _p.y - 1, _p.z, 95, .25); }
       } else {
         if (h) say(m, isTouch ? 'Raise bucket higher' : 'Raise bucket higher <kbd>R</kbd>');
-        dropCircle(m.load, _p.x, _p.z, 1.6, m.load.v, .7);
+        dropCircle(m.load, _p.x, _p.z, 1.6, m.load.v, .7, fallTime(_p.y - hAt(_p.x, _p.z)) * .8);
         dust(_p.x, hAt(_p.x, _p.z) + .5, _p.z, 16, grav ? GRAVEL_C : DIRT_C);
         snd.dump(_p.x, hAt(_p.x, _p.z), _p.z, vol, grav);
       }
@@ -2613,15 +2725,15 @@ function toolExcavator(m, dt, inp) {
         dust(tx, g + .3, tz, 12, loadMat(m.load) === 2 ? GRAVEL_C : DIRT_C);
       } else {
         const grav = loadMat(m.load) === 2, vol = m.load.v;
-        _p.set(0, .2, .5); m.bucket.localToWorld(_p);
-        chunks(_p.x, _p.y, _p.z, 26, grav, 0, 0, .9);
+        m.pourT = .5; m.pourG = grav; m.pourV = vol; m.pourFloor = truck ? truck.y + 1.7 + truck.load.v / SPEC.hauler.cap * 1.2 : undefined;
         if (truck) {
           const got = transfer(m.load, truck.load, SPEC.hauler.cap);
           if (got <= 0) say(m, 'Hauler full');
           else { snd.dump(tx, truck.y + 2.5, tz, got, grav); snd.clang(tx, truck.y + 2, tz, 90, .3); }
           dust(tx, truck.y + 3, tz, 12, grav ? GRAVEL_C : DIRT_C);
         } else {
-          dropCircle(m.load, tx, tz, 1.4, m.load.v, .6);
+          _p.set(0, .2, .5); m.bucket.localToWorld(_p);
+          dropCircle(m.load, tx, tz, 1.4, m.load.v, .6, fallTime(_p.y - g) * .8);
           dust(tx, g + .5, tz, 14, grav ? GRAVEL_C : DIRT_C);
           snd.dump(tx, g, tz, vol, grav);
         }
@@ -2630,6 +2742,13 @@ function toolExcavator(m, dt, inp) {
     if (m.act >= 1) m.act = -1;
   }
   m.curl = lerp(m.curl, curlT, 1 - Math.exp(-dt * 6));
+  if (m.pourT > 0) {   // the bucket opening: soil runs off its lip
+    m.pourT -= dt;
+    _p.set(0, .05, .55); m.bucket.localToWorld(_p);
+    _w.set(1, 0, 0).transformDirection(m.bucket.matrixWorld);
+    soil(_p.x, _p.y, _p.z, Math.min(200, Math.ceil(dt * (m.pourV || 1) * 2400)), m.pourG, { lx: _w.x, lz: _w.z, w: 1.1, jitter: .2, vy: -.3, floor: m.pourFloor });
+    for (let q = 0; q < 3; q++) spawn('fines', _p.x, _p.y, _p.z, 1, m.pourG ? GRAVEL_C : DIRT_C, { jitter: .5 });
+  }
   const L1 = 4.6, L2 = 3.3;
   const ty = y + 1.0 - (m.y + 2.15), r = m.reach;
   let d = clamp(Math.hypot(r, ty), 1.6, L1 + L2 - .05);
@@ -2660,7 +2779,8 @@ function toolHauler(m, dt, inp) {
     const put = dropCircle(m.load, _p.x, _p.z, 1.7, Math.min(m.load.v, 3.5 * dt));
     m.pour += put; m.pourG = grav;
     _p.set(0, 1.4, -4.9); m.group.localToWorld(_p);
-    chunks(_p.x, _p.y, _p.z, Math.ceil(dt * 70), grav, -Math.sin(m.yaw) * 1.2, -Math.cos(m.yaw) * 1.2, 2.2);
+    soil(_p.x, _p.y, _p.z, Math.min(220, Math.ceil(put * 1800) + 2), grav, { lx: Math.cos(m.yaw), lz: -Math.sin(m.yaw), w: 2.5, jitter: .3, vx: -Math.sin(m.yaw) * 1.3, vz: -Math.cos(m.yaw) * 1.3, vy: -.2 });
+    if (put > .005) for (let q = 0; q < 3; q++) { const t = (Math.random() - .5) * 2.4; spawn('fines', _p.x + Math.cos(m.yaw) * t, _p.y, _p.z - Math.sin(m.yaw) * t, 1, grav ? GRAVEL_C : DIRT_C, { jitter: .3, vx: -Math.sin(m.yaw), vz: -Math.cos(m.yaw) }); }
     if (Math.random() < dt * 22) spawn('dust', _p.x, hAt(_p.x, _p.z) + .4, _p.z, 3, grav ? GRAVEL_C : DIRT_C, { jitter: 2.4, size: 1.5, alpha: .8 });
     m.work = Math.max(m.work, .5);
   }
@@ -3636,7 +3756,7 @@ function update(dt, draw = true) {
   land.update(dt);
   growSeed(dt);
   for (const m of machines) {
-    m.ctl = m.hp <= 0 ? ZERO : m === me ? inp : (m.ai || ZERO);
+    m.ctl = m.hp <= 0 ? ZERO : m === me ? inp : m.ai ? aiHands(m, m.ai, dt) : ZERO;
     drive(m, dt, m.ctl);
   }
   for (const m of machines) {

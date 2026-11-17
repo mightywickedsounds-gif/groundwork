@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { labelTexture } from './textures.js?v=17';
+import { labelTexture } from './textures.js?v=18';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const Y = V(0, 1, 0), Z = V(0, 0, 1);
@@ -864,50 +864,83 @@ function trunkGeo(R, h, rTop, rBot, flare) {
   g.computeVertexNormals();
   return g;
 }
-export function spruceGeo(seed, h = 13) {
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+// A spruce: whorls of branches up a tapering trunk. Each branch is two crossed cards of photographed fir twigs (one
+// lying flat, one on edge) so it has body from any side; it sags in the middle and lifts a little at the tip, longer
+// low down and short near the spire. Normals point out from the trunk (soft, rounded light); the inside is darker.
+// detail = how many whorls (High has the most; Low about as many as before).
+export function spruceGeo(seed, h = 13, detail = 14) {
   const R = seeded(seed), B = cardBuilder();
-  const cw = h * .48;
-  for (let k = 0; k < 3; k++) {
-    const a = k * Math.PI / 3 + R() * .3, dx = Math.cos(a) * cw / 2, dz = Math.sin(a) * cw / 2;
-    B.quad([[-dx, h * .03, -dz], [dx, h * .03, dz], [dx, h, dz], [-dx, h, -dz]], [[.5, 0], [.75, 0], [.75, 1], [.5, 1]],
-      [nrm(-dx, .4, -dz), nrm(dx, .4, dz), nrm(dx, .9, dz), nrm(-dx, .9, -dz)], [.5, .5, 1, 1]);
+  // a thin core so the crown isn't see-through at the middle from a distance
+  const cw = h * .16;
+  for (let k = 0; k < 2; k++) {
+    const a = k * Math.PI / 2 + R() * .3, dx = Math.cos(a) * cw / 2, dz = Math.sin(a) * cw / 2;
+    B.quad([[-dx, h * .1, -dz], [dx, h * .1, dz], [dx, h, dz], [-dx, h, -dz]], [[.5, 0], [.75, 0], [.75, 1], [.5, 1]],
+      [nrm(-dx, .3, -dz), nrm(dx, .3, dz), nrm(dx, .9, dz), nrm(-dx, .9, -dz)], [.35, .35, .8, .8]);
   }
-  const levels = 12;
+  const levels = detail, per = detail >= 14 ? 7 : detail >= 11 ? 6 : 5;
+  const outN = (x, y, z, t) => nrm(x, .55 + t * .5 + Math.max(0, y - h * .9) * .2, z);
   for (let l = 0; l < levels; l++) {
-    const t = l / (levels - 1), y = h * (.13 + t * .8), len = h * .34 * Math.pow(1 - t, .85) + .4, nb = 5 + (R() * 2 | 0);
+    const t = l / (levels - 1), y0 = h * (.12 + t * .84) + (R() - .5) * h * .015;
+    const nb = per + (R() * 2 | 0) - (t > .85 ? 2 : 0);
     for (let b = 0; b < nb; b++) {
-      const a = b / nb * 6.283 + l * 1.3 + R() * .5, dx = Math.cos(a), dz = Math.sin(a), droop = .22 + R() * .22 + (1 - t) * .15;
-      const ex = dx * len * Math.cos(droop), ey = y - len * Math.sin(droop), ez = dz * len * Math.cos(droop);
-      const sx = -dz, sz = dx, wb = len * .1, we = len * .34, curl = len * .06;
+      const a = b / nb * 6.283 + l * 2.39 + (R() - .5) * .6, dx = Math.cos(a), dz = Math.sin(a), sx = -dz, sz = dx;
+      const len = (h * .33 * Math.pow(1 - t, .9) + .35) * (.82 + R() * .36);
+      const sag = .2 + (1 - t) * .3 + R() * .15, lift = .12 + R() * .12;
+      // base at the trunk, a middle point sagging down, the tip lifting a little
+      const P0 = [dx * .06, y0, dz * .06];
+      const m = len * .55, P1 = [dx * m, y0 - m * Math.sin(sag), dz * m];
+      const P2 = [dx * len, P1[1] - (len - m) * Math.sin(sag - lift), dz * len];
+      const w0 = len * .08, w1 = len * .3, w2 = len * .2;
       const dense = R() < .5, v0 = dense ? 0 : .5, v1 = dense ? .5 : 1;
-      const cb = .45 + t * .25, ce = Math.min(1, cb + .35);
-      B.quad([[dx * .08 - sx * wb, y, dz * .08 - sz * wb], [ex - sx * we, ey + curl, ez - sz * we], [ex + sx * we, ey + curl, ez + sz * we], [dx * .08 + sx * wb, y, dz * .08 + sz * wb]],
-        [[0, v0], [.5, v0], [.5, v1], [0, v1]],
-        [nrm(dx - sx * .3, .8, dz - sz * .3), nrm(dx - sx * .4, .6, dz - sz * .4), nrm(dx + sx * .4, .6, dz + sz * .4), nrm(dx + sx * .3, .8, dz + sz * .3)], [cb, ce, ce, cb]);
+      const cb = .38 + t * .25, cm = Math.min(1, cb + .3), ce = Math.min(1, cb + .5);
+      // flat card (across the branch) and on-edge card (up and down), each in two lengths
+      for (const [ax, ay, az, k] of [[sx, 0, sz, 1], [0, 1, 0, .62]]) {
+        const q = (P, w) => [[P[0] - ax * w * k, P[1] - ay * w * k, P[2] - az * w * k], [P[0] + ax * w * k, P[1] + ay * w * k, P[2] + az * w * k]];
+        const [a0, b0] = q(P0, w0), [a1, b1] = q(P1, w1), [a2, b2] = q(P2, w2);
+        B.quad([a0, a1, b1, b0], [[0, v0], [.27, v0], [.27, v1], [0, v1]], [outN(a0[0], a0[1], a0[2], t), outN(a1[0], a1[1], a1[2], t), outN(b1[0], b1[1], b1[2], t), outN(b0[0], b0[1], b0[2], t)], [cb, cm, cm, cb]);
+        B.quad([a1, a2, b2, b1], [[.27, v0], [.5, v0], [.5, v1], [.27, v1]], [outN(a1[0], a1[1], a1[2], t), outN(a2[0], a2[1], a2[2], t), outN(b2[0], b2[1], b2[2], t), outN(b1[0], b1[1], b1[2], t)], [cm, ce, ce, cm]);
+      }
     }
+  }
+  // the spire: a few short shoots pointing up round the leader
+  for (let k = 0; k < 3; k++) {
+    const a = k * 2.09 + R(), dx = Math.cos(a) * .25, dz = Math.sin(a) * .25, y0 = h * .9;
+    B.quad([[-dx, y0, -dz], [dx, y0, dz], [dx * .3, h * 1.03, dz * .3], [-dx * .3, h * 1.03, -dz * .3]], [[0, 0], [0, .5], [.5, .5], [.5, 0]],
+      [nrm(-dx, 1, -dz), nrm(dx, 1, dz), [0, 1, 0], [0, 1, 0]], [.8, .8, 1, 1]);
   }
   const trunk = trunkGeo(R, h * .96, .08 * h / 10, .3 * h / 10, 1.6);
   return { fol: B.geo(), trunk };
 }
-export function leafyGeo(seed, h = 11) {
+// A broadleaf tree: a few limbs up and out from the trunk, each carrying a lump of leaf clusters, so the crown has an
+// uneven, lumpy outline (not a ball). Smaller cards, more of them; light rounded over each lump; darker inside.
+export function leafyGeo(seed, h = 11, detail = 70) {
   const R = seeded(seed + 50), B = cardBuilder();
-  const cy = h * .66, rx = h * .3, ry = h * .24;
-  for (let i = 0; i < 44; i++) {
+  const lobes = [], nl = 4 + (R() * 2 | 0), parts = [trunkGeo(R, h * .62, .14, .3, 1.3)];
+  for (let i = 0; i < nl; i++) {
+    const a = i / nl * 6.283 + R() * .8, out = h * (.13 + R() * .14), up = h * (.6 + R() * .22);
+    lobes.push({ x: Math.cos(a) * out, y: up, z: Math.sin(a) * out, r: h * (.15 + R() * .07) });
+    // the limb from the trunk to the lump
+    const sy = h * (.42 + R() * .12), L = Math.hypot(Math.cos(a) * out, up - sy, Math.sin(a) * out);
+    const br = new THREE.CylinderGeometry(.04, .1, L, 6, 1).translate(0, L / 2, 0);
+    br.rotateZ(-Math.atan2(out, up - sy)); br.rotateY(-a); br.translate(0, sy, 0); parts.push(br);
+  }
+  lobes.push({ x: 0, y: h * .84, z: 0, r: h * .17 });   // the crown's top
+  const cy = h * .7;
+  for (let i = 0; i < detail; i++) {
+    const L = lobes[i % lobes.length];
     let px, py, pz; do { px = R() * 2 - 1; py = R() * 2 - 1; pz = R() * 2 - 1; } while (px * px + py * py + pz * pz > 1);
-    const c = [px * rx, cy + py * ry, pz * rx], out = nrm(px + (R() - .5) * .8, py + .3 + (R() - .5) * .8, pz + (R() - .5) * .8);
+    const c = [L.x + px * L.r, L.y + py * L.r * .8, L.z + pz * L.r];
+    const out = nrm(px + (R() - .5) * .9, py + .35 + (R() - .5) * .9, pz + (R() - .5) * .9);
     let ux = -out[2], uz = out[0]; const ul = Math.hypot(ux, uz) || 1; ux /= ul; uz /= ul;
     const vx = out[1] * uz, vy = out[2] * ux - out[0] * uz, vz = -out[1] * ux;
-    const s = h * .2 * (.8 + R() * .5) / 2, lo = R() < .5 ? .5 : 0;
+    const s = h * .13 * (.75 + R() * .5) / 2, lo = R() < .5 ? .5 : 0;
     const P = (a, b) => [c[0] + ux * a * s + vx * b * s, c[1] + vy * b * s, c[2] + uz * a * s + vz * b * s];
-    const shade = .55 + (py + 1) * .25;
-    const nn = p => nrm(p[0], p[1] - cy + ry * .3, p[2]);
+    // light: rounded over this lump and the crown as a whole, darker towards the middle of the tree
+    const nn = p => nrm((p[0] - L.x) + p[0] * .5, (p[1] - L.y) * .8 + (p[1] - cy) * .3 + L.r * .4, (p[2] - L.z) + p[2] * .5);
+    const inner = Math.hypot(c[0], c[2]) / (h * .35), shade = clamp(.42 + (py + 1) * .2 + inner * .25, .35, 1.1);
     const ps = [P(-1, -1), P(1, -1), P(1, 1), P(-1, 1)];
     B.quad(ps, [[.75, lo], [1, lo], [1, lo + .5], [.75, lo + .5]], ps.map(nn), [shade * .85, shade * .85, shade * 1.1, shade * 1.1]);
-  }
-  const parts = [trunkGeo(R, h * .62, .14, .3, 1.3)];
-  for (let i = 0; i < 4; i++) {
-    const a = i / 4 * 6.283 + R(), len = h * .3, br = new THREE.CylinderGeometry(.05, .11, len, 6, 1).translate(0, len / 2, 0);
-    br.rotateZ(.75); br.rotateY(a); br.translate(0, h * .5, 0); parts.push(br);
   }
   return { fol: B.geo(), trunk: mergeGeometries(parts.map(p => p.toNonIndexed())) };
 }
