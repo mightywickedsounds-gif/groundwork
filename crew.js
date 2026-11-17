@@ -62,7 +62,7 @@ export function makeCrew(G) {
         // creek the line can be dry while the pits would be in the water
         const back = (sp[0] + sp[1]) / 2 - ((sp[1] - sp[0]) / 2 + 1) - 36;
         let wet = false;
-        for (let d = back; d < sp[0] - 1 && !wet; d += 2) for (const o of [-9, -4.5, 0, 4.5, 9]) if (G.wAt(x + ux * d + uz * o, z + uz * d - ux * o) > .1) { wet = true; break; }
+        for (let d = back; d < sp[0] - 1 && !wet; d += 2) for (const o of [-9, -4.5, 0, 4.5, 9]) if (G.wAt(x + ux * d + uz * o, z + uz * d - ux * o) > .3) { wet = true; break; }   // shallow edges are fine
         if (wet) continue;
         const width = sp[1] - sp[0], near = avoid && Math.abs(off) < 9 ? 12 : 0;   // keep the line off the player's machine
         const score = width + near + Math.abs(off) * .2 + Math.abs(da) * 4;
@@ -913,8 +913,13 @@ export function makeCrew(G) {
         if (bd > 1e8) return 'TOO FAR FROM THE BANK';
       }
       buildGrid();
-      const S = siteAt({ x: bx, z: bz }, false);
-      if (!S) return 'TAP A RIVER OR CREEK';
+      let S = siteAt({ x: bx, z: bz }, false);
+      // no good line from that exact spot (a bend, a steep bank): try the banks round about, nearest first
+      for (let r = 6; !S && r <= 36; r += 6) for (let a = 0; a < 12 && !S; a++) {
+        const px = bx + Math.cos(a / 12 * 6.283) * r, pz = bz + Math.sin(a / 12 * 6.283) * r;
+        if (G.wAt(px, pz) < .02) S = siteAt({ x: px, z: pz }, false);
+      }
+      if (!S) return 'NO ROOM TO BUILD HERE';
       const h = findHead(S); if (h === null) return 'ALREADY CROSSED HERE';
       begin(plan(S), h); return '';
     },
