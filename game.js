@@ -3,12 +3,12 @@
 // browser so nothing ever resets.
 import * as THREE from 'three';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
-import { makeTextures } from './textures.js?v=14';
-import * as MOD from './models.js?v=14';
-import { Sound } from './audio.js?v=14';
-import { makeCrew } from './crew.js?v=14';
-import { makeWorks } from './construct.js?v=14';
-import { makePeople } from './people.js?v=14';
+import { makeTextures } from './textures.js?v=15';
+import * as MOD from './models.js?v=15';
+import { Sound } from './audio.js?v=15';
+import { makeCrew } from './crew.js?v=15';
+import { makeWorks } from './construct.js?v=15';
+import { makePeople } from './people.js?v=15';
 
 const N = 256, NN = N * N;           // 256 x 256 cells, 1 m each
 const SAVE_KEY = 'groundwork.save.v3';   // v1 (the first, smaller valley) is left untouched in the browser
@@ -720,10 +720,9 @@ function terrainMaterial() {
         vec3 gh = texture2D(tHgt, gp1).rgb;
         vec3 gw = max(vMat.xyz, 0.) + 1e-4; gw = gw * (.35 + gh * 1.3); gw = gw * gw * gw; gw /= (gw.x + gw.y + gw.z);
         vec3 cG = mix(texture2D(tGrass, gp1).rgb, texture2D(tGrass, gp2).rgb, .4);
-        cG *= vec3(.92, 1.06, .78);   // the photo is a late-summer lawn: a touch greener for a valley meadow
         // meadow patches: sun-dried yellow in places, deeper green in others
         { float gdry = texture2D(tMacro, vTWP.zx * .027 + .31).r, glush = texture2D(tMacro, vTWP.xz * .019 + .73).r;
-          cG = mix(cG, cG * vec3(1.42, 1.2, .72), smoothstep(.5, .78, gdry) * .75);
+          cG = mix(cG, cG * vec3(1.18, 1.08, .82), smoothstep(.5, .78, gdry) * .6);
           cG = mix(cG, cG * vec3(.72, .9, .7), smoothstep(.52, .8, glush) * .7); }
         vec3 cD = mix(texture2D(tDirt, gp1).rgb, texture2D(tDirt, gp2).rgb, .35);
         // fine grit and small stones up close
@@ -1124,7 +1123,8 @@ function leafy(sh, trunk) {
 }
 const folMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: T.foliage, alphaTest: .42, side: THREE.DoubleSide, roughness: .88, alphaToCoverage: true });
 const barkTex = T.bark.clone(); barkTex.repeat.set(2, 5); barkTex.needsUpdate = true;
-const barkMat = new THREE.MeshStandardMaterial({ map: barkTex, roughness: .95, color: 0xd2c2ac });
+const barkNTex = T.barkN.clone(); barkNTex.repeat.set(2, 5); barkNTex.needsUpdate = true;
+const barkMat = new THREE.MeshStandardMaterial({ map: barkTex, normalMap: barkNTex, normalScale: new THREE.Vector2(1.4, 1.4), roughness: .95, color: 0xd8ccbc });
 folMat.onBeforeCompile = sh => leafy(sh, false); folMat.customProgramCacheKey = () => 'gw-fol';
 barkMat.onBeforeCompile = sh => leafy(sh, true); barkMat.customProgramCacheKey = () => 'gw-bark';
 const TREE_GEOS = [MOD.spruceGeo(1, 12), MOD.spruceGeo(2, 14.5), MOD.spruceGeo(3, 16.5), MOD.leafyGeo(1, 10), MOD.leafyGeo(2, 12)];
@@ -1388,7 +1388,13 @@ function buildFarForest() {
   const put = (geo, mat, list, shadow) => {
     if (!list.length) return;
     const im = new THREE.InstancedMesh(geo, mat, list.length);
-    list.forEach(([x, y, z, s, ry], i) => { _q.setFromAxisAngle(_ax.set(0, 1, 0), ry); _m4.compose(_v.set(x, y, z), _q, _s.set(s, s, s)); im.setMatrixAt(i, _m4); });
+    list.forEach(([x, y, z, s, ry], i) => {
+      _q.setFromAxisAngle(_ax.set(0, 1, 0), ry); _m4.compose(_v.set(x, y, z), _q, _s.set(s, s, s)); im.setMatrixAt(i, _m4);
+      // no two trees quite the same green (from the tree's own position: no new random draws)
+      const h = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453, f = h - Math.floor(h), g2 = Math.sin(x * 3.1 + z * 1.7) * .5 + .5;
+      im.setColorAt(i, _gc.setRGB(.82 + f * .3 + g2 * .06, .86 + f * .26, .8 + f * .22 - g2 * .08));
+    });
+    if (im.instanceColor) im.instanceColor.needsUpdate = true;
     im.castShadow = shadow; im.receiveShadow = true; scene.add(im); farForest.push(im);
   };
   near.forEach((l, v) => { put(TREE_GEOS[v].fol, folMat, l, false); put(TREE_GEOS[v].trunk, barkMat, l, false); });

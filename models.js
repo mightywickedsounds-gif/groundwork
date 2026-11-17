@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { labelTexture } from './textures.js?v=14';
+import { labelTexture } from './textures.js?v=15';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const Y = V(0, 1, 0), Z = V(0, 0, 1);
@@ -830,6 +830,20 @@ function cardBuilder() {
 const nrm = (x, y, z) => { const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; };
 function seeded(seed) { let s = (seed * 9301 + 49297) % 2147483647 || 1; return () => { s = (s * 16807) % 2147483647; return s / 2147483647; }; }
 // Atlas: branch A u 0-.5 v .5-1, branch B u 0-.5 v 0-.5, whole spruce u .5-.75, leaf clumps u .75-1 (v .5-1 and 0-.5)
+// A trunk: tapering, flared into roots at the foot, with a slight lean and a few bulges, so no two are the same
+// (from the tree's own seeded numbers). Open at the bottom (it stands in the ground).
+function trunkGeo(R, h, rTop, rBot, flare) {
+  const g = new THREE.CylinderGeometry(rTop, rBot, h, 10, 8, true).translate(0, h / 2, 0), p = g.attributes.position;
+  const lx = (R() - .5) * .04 * h, lz = (R() - .5) * .04 * h, ph = R() * 6.28, roots = 4 + (R() * 3 | 0), rp = R() * 6.28;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i), t = y / h, a = Math.atan2(z, x);
+    let k = 1 + flare * Math.exp(-y / (.035 * h + .25)) * (.6 + .4 * Math.max(0, Math.cos(roots * a + rp)));   // root flare, lobed
+    k *= 1 + .06 * Math.sin(y * 1.7 + ph) * Math.sin(a * 3 + ph);                                                // bulges
+    p.setXYZ(i, x * k + lx * t * t, y, z * k + lz * t * t);
+  }
+  g.computeVertexNormals();
+  return g;
+}
 export function spruceGeo(seed, h = 13) {
   const R = seeded(seed), B = cardBuilder();
   const cw = h * .48;
@@ -852,7 +866,7 @@ export function spruceGeo(seed, h = 13) {
         [nrm(dx - sx * .3, .8, dz - sz * .3), nrm(dx - sx * .4, .6, dz - sz * .4), nrm(dx + sx * .4, .6, dz + sz * .4), nrm(dx + sx * .3, .8, dz + sz * .3)], [cb, ce, ce, cb]);
     }
   }
-  const trunk = new THREE.CylinderGeometry(.08 * h / 10, .3 * h / 10, h * .96, 8, 1).translate(0, h * .48, 0);
+  const trunk = trunkGeo(R, h * .96, .08 * h / 10, .3 * h / 10, 1.6);
   return { fol: B.geo(), trunk };
 }
 export function leafyGeo(seed, h = 11) {
@@ -870,19 +884,28 @@ export function leafyGeo(seed, h = 11) {
     const ps = [P(-1, -1), P(1, -1), P(1, 1), P(-1, 1)];
     B.quad(ps, [[.75, lo], [1, lo], [1, lo + .5], [.75, lo + .5]], ps.map(nn), [shade * .85, shade * .85, shade * 1.1, shade * 1.1]);
   }
-  const parts = [new THREE.CylinderGeometry(.14, .3, h * .62, 8, 1).translate(0, h * .31, 0)];
+  const parts = [trunkGeo(R, h * .62, .14, .3, 1.3)];
   for (let i = 0; i < 4; i++) {
     const a = i / 4 * 6.283 + R(), len = h * .3, br = new THREE.CylinderGeometry(.05, .11, len, 6, 1).translate(0, len / 2, 0);
     br.rotateZ(.75); br.rotateY(a); br.translate(0, h * .5, 0); parts.push(br);
   }
   return { fol: B.geo(), trunk: mergeGeometries(parts.map(p => p.toNonIndexed())) };
 }
-// distant trees: two crossed pictures of a whole spruce
+// distant trees: two crossed pictures of a whole spruce, inside a six-sided cone of the same picture so the crown
+// looks solid from above too (the boss view looks down on the far forest)
 export function farCardGeo() {
   const B = cardBuilder(), h = 14, w = 7;
   for (let k = 0; k < 2; k++) {
     const a = k * Math.PI / 2, dx = Math.cos(a) * w / 2, dz = Math.sin(a) * w / 2;
     B.quad([[-dx, 0, -dz], [dx, 0, dz], [dx, h, dz], [-dx, h, -dz]], [[.5, 0], [.75, 0], [.75, 1], [.5, 1]], [[0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0]], [.75, .75, 1, 1]);
+  }
+  const n = 6, rb = w * .46, y0 = h * .12;
+  for (let k = 0; k < n; k++) {
+    const a0 = (k + .25) / n * 6.283, a1 = (k + 1.25) / n * 6.283, am = (a0 + a1) / 2;
+    const p0 = [Math.cos(a0) * rb, y0, Math.sin(a0) * rb], p1 = [Math.cos(a1) * rb, y0, Math.sin(a1) * rb], top = [0, h, 0];
+    const nn = nrm(Math.cos(am), .55, Math.sin(am));
+    // a triangle drawn as a quad with two corners at the top
+    B.quad([p0, p1, top, top], [[.5, 0], [.75, 0], [.625, 1], [.625, 1]], [nn, nn, [0, 1, 0], [0, 1, 0]], [.7, .7, 1, 1]);
   }
   return B.geo();
 }
