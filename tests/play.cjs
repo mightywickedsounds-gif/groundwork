@@ -237,12 +237,12 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   const ls = await p.evaluate(() => {
     GW.crew.cancel();
     const Y = GW.YARD, N = 256, H = GW.H;
-    const dryRound = (x, z, r) => { for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) { const k = (z + dz) * N + x + dx; if (GW.W[k] > .01 || GW.M[k] === 2) return false; } return true; };
-    let at = null;
-    for (let d = 16; d < 70 && !at; d += 3) for (let a = 0; a < 16 && !at; a++) {
-      const x = Math.round((Y.x0 + Y.x1) / 2 + Math.cos(a / 16 * 6.28) * d), z = Math.round((Y.z0 + Y.z1) / 2 + Math.sin(a / 16 * 6.28) * d);
-      if (x > 12 && z > 12 && x < N - 12 && z < N - 12 && dryRound(x, z, 9) && !(x > Y.x0 - 10 && x < Y.x1 + 10 && z > Y.z0 - 10 && z < Y.z1 + 10)) at = [x, z];
-    }
+    // dry, not gravel, and fairly level (a lawn-sized patch, not a hillside)
+    const dryRound = (x, z, r) => { let lo = 1e9, hi = -1e9; for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) { const k = (z + dz) * N + x + dx; if (GW.W[k] > .01 || GW.M[k] === 2) return false; lo = Math.min(lo, H[k]); hi = Math.max(hi, H[k]); } return hi - lo < 2.2; };
+    const yc = [(Y.x0 + Y.x1) / 2, (Y.z0 + Y.z1) / 2], cand = [];
+    for (let z = 14; z < N - 14; z += 4) for (let x = 14; x < N - 14; x += 4) if (!(x > Y.x0 - 10 && x < Y.x1 + 10 && z > Y.z0 - 10 && z < Y.z1 + 10)) cand.push([x, z]);
+    cand.sort((a, b) => Math.hypot(a[0] - yc[0], a[1] - yc[1]) - Math.hypot(b[0] - yc[0], b[1] - yc[1]));
+    const at = cand.find(([x, z]) => dryRound(x, z, 9));
     const [x, z] = at, inC = (r, fn) => { for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) if (dx * dx + dz * dz <= r * r) fn((z + dz) * N + x + dx); };
     let sd = 7;
     inC(6, k => { sd = (sd * 16807) % 2147483647; H[k] += (sd / 2147483647 - .3) * .5; GW.D[k] = 1; GW.M[k] = 1; GW.dirty(k); });
