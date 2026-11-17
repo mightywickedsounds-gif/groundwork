@@ -3,12 +3,13 @@
 // browser so nothing ever resets.
 import * as THREE from 'three';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
-import { makeTextures } from './textures.js?v=16';
-import * as MOD from './models.js?v=16';
-import { Sound } from './audio.js?v=16';
-import { makeCrew } from './crew.js?v=16';
-import { makeWorks } from './construct.js?v=16';
-import { makePeople } from './people.js?v=16';
+import { makeTextures } from './textures.js?v=17';
+import * as MOD from './models.js?v=17';
+import { Sound } from './audio.js?v=17';
+import { makeCrew } from './crew.js?v=17';
+import { makeWorks } from './construct.js?v=17';
+import { makePeople } from './people.js?v=17';
+import { makeLandscape } from './landscape.js?v=17';
 
 const N = 256, NN = N * N;           // 256 x 256 cells, 1 m each
 const SAVE_KEY = 'groundwork.save.v3';   // v1 (the first, smaller valley) is left untouched in the browser
@@ -383,6 +384,7 @@ function treeFall(t, fx, fz) {
   let dx = t.x - fx, dz = t.z - fz; const l = Math.hypot(dx, dz) || 1;
   if (l < .01) { dx = 1; dz = 0; }
   t.dx = dx / l; t.dz = dz / l; t.st = 1; t.a = 0; t.y = hAt(t.x, t.z) - .1; t.dirty = true;
+  shadeMap = null;   // the ferns and bushes round it are worked out again
   treeGrid[t.k] = -1;
   dust(t.x, t.y + .5, t.z, 10, [.45, .4, .3]);
   spawn('leaf', t.x, t.y + 6 * t.s, t.z, 10, [.25, .36, .14], { jitter: 3 });
@@ -483,6 +485,12 @@ function dropCircle(L, x, z, r, vol, defer = 0) {
   if (!list.length) { list.push([cellOf(x, z), 1]); sw = 1; }
   let put = 0; const total = vol;
   for (const [k, w] of list) put += giveTo(L, k, total * w / sw, defer);
+  // dirt landing in water: rings spread from it and it throws up muddy spray
+  const k0 = cellOf(x, z);
+  if (W[k0] > .08 && put > .02) {
+    ripple(x, z, .35 + Math.min(1, put) * .8);
+    if (Math.random() < .5) spawn('splash', x, H[k0] + W[k0], z, 2 + Math.min(6, put * 4) | 0, [.62, .6, .52], { jitter: R * .8, up: .7 + Math.min(.6, put) });
+  }
   return put;
 }
 
@@ -693,7 +701,71 @@ const POST = Q.post && (quality === 'high' || !isTouch) && renderer.capabilities
     },
   };
 })() : null;
+// ---------------------------------------------------------------- reflections in the water (High; Medium on computers)
+// The scene is drawn a second time, smaller, from the camera mirrored under the water in view, and the water shows
+// that picture, rippled by its surface. Rivers slope, so water far above or below that level fades back to the
+// painted reflection (sky and an uneven tree line).
+const REFL = (quality === 'high' || (quality === 'medium' && !isTouch)) && renderer.capabilities.isWebGL2 ? (() => {
+  const rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false });
+  const vcam = new THREE.PerspectiveCamera(), scale = quality === 'high' ? .5 : .33;
+  const plane = new THREE.Plane(), cp = new THREE.Vector4(), q4 = new THREE.Vector4(), up = new THREE.Vector3(0, 1, 0);
+  const rp = new THREE.Vector3(), cw = new THREE.Vector3(), rot = new THREE.Matrix4(), look = new THREE.Vector3(), tgt = new THREE.Vector3(), view = new THREE.Vector3(), sz = new THREE.Vector2();
+  const U = () => waterMat.uniforms;
+  let level = null, findT = 0;
+  // the water being looked at: the first wet cell along the view, else the nearest round the camera
+  function find() {
+    level = null;
+    _v.set(0, 0, -1).applyQuaternion(camera.quaternion); const fx = _v.x, fz = _v.z, fl = Math.hypot(fx, fz) || 1;
+    for (let d = 3; d < 90; d += 2) {
+      const x = camera.position.x + fx / fl * d, z = camera.position.z + fz / fl * d;
+      if (x < 1 || z < 1 || x > N - 2 || z > N - 2) break;
+      const k = cellOf(x, z); if (W[k] > .05) { level = H[k] + W[k]; return; }
+    }
+    let best = 1e9;
+    for (let dz = -30; dz <= 30; dz += 2) for (let dx = -30; dx <= 30; dx += 2) {
+      const x = camera.position.x + dx, z = camera.position.z + dz; if (x < 1 || z < 1 || x > N - 2 || z > N - 2) continue;
+      const k = cellOf(x, z), dd = dx * dx + dz * dz; if (W[k] > .05 && dd < best) { best = dd; level = H[k] + W[k]; }
+    }
+  }
+  return {
+    render() {
+      findT -= 1; if (findT <= 0) { findT = 8; find(); }
+      U().uRefl.value = 0;
+      if (level === null) return;
+      cw.setFromMatrixPosition(camera.matrixWorld); rp.set(cw.x, level, cw.z);
+      view.subVectors(rp, cw); if (view.dot(up) > -.05) return;   // the camera is at or under the water
+      renderer.getDrawingBufferSize(sz);
+      const w = Math.max(2, sz.x * scale | 0), h = Math.max(2, sz.y * scale | 0); if (rt.width !== w || rt.height !== h) rt.setSize(w, h);
+      // the mirrored camera (the same construction as three.js's Reflector)
+      view.reflect(up).negate().add(rp);
+      rot.extractRotation(camera.matrixWorld); look.set(0, 0, -1).applyMatrix4(rot).add(cw);
+      tgt.subVectors(rp, look).reflect(up).negate().add(rp);
+      vcam.position.copy(view); vcam.up.set(0, 1, 0).applyMatrix4(rot).reflect(up); vcam.lookAt(tgt);
+      vcam.near = camera.near; vcam.far = camera.far; vcam.updateMatrixWorld(); vcam.projectionMatrix.copy(camera.projectionMatrix);
+      const M4 = U().uReflM.value;
+      M4.set(.5, 0, 0, .5, 0, .5, 0, .5, 0, 0, .5, .5, 0, 0, 0, 1); M4.multiply(vcam.projectionMatrix); M4.multiply(vcam.matrixWorldInverse);
+      // cut away everything under the water (an oblique near plane)
+      plane.setFromNormalAndCoplanarPoint(up, rp); plane.applyMatrix4(vcam.matrixWorldInverse);
+      cp.set(plane.normal.x, plane.normal.y, plane.normal.z, plane.constant);
+      const pm = vcam.projectionMatrix.elements;
+      q4.set((Math.sign(cp.x) + pm[8]) / pm[0], (Math.sign(cp.y) + pm[9]) / pm[5], -1, (1 + pm[10]) / pm[14]);
+      cp.multiplyScalar(2 / cp.dot(q4)); pm[2] = cp.x; pm[6] = cp.y; pm[10] = cp.z + 1 - .003; pm[14] = cp.w;
+      vcam.projectionMatrixInverse.copy(vcam.projectionMatrix).invert();
+      // no water, dust or grass in the mirror image (they'd cost the most and show the least), and reuse the shadows
+      const hid = [];
+      for (const c of tchunks) if (c.wmesh && c.wmesh.visible) { c.wmesh.visible = false; hid.push(c.wmesh); }
+      for (const o of [ringWater, puffs, grassIM]) if (o && o.visible) { o.visible = false; hid.push(o); }
+      const au = renderer.shadowMap.autoUpdate; renderer.shadowMap.autoUpdate = false;
+      const old = renderer.getRenderTarget();
+      renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, vcam); renderer.setRenderTarget(old);
+      renderer.shadowMap.autoUpdate = au;
+      for (const o of hid) o.visible = true;
+      U().tRefl.value = rt.texture; U().uRefl.value = 1; U().uLevel.value = level;
+    },
+  };
+})() : null;
 function drawFrame() {
+  if (REFL) REFL.render();
   renderer.getDrawingBufferSize(_bs);
   pMat.uniforms.uScale.value = _bs.y * .5 * camera.projectionMatrix.elements[5];
   if (POST) POST.render(); else renderer.render(scene, camera);
@@ -703,13 +775,13 @@ function drawFrame() {
 function terrainMaterial() {
   const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: .96, metalness: 0, vertexColors: true });
   m.onBeforeCompile = sh => {
-    Object.assign(sh.uniforms, { tGrass: { value: T.grass }, tDirt: { value: T.dirt }, tGravel: { value: T.gravel }, tHgt: { value: T.heights }, tMacro: { value: T.macro } });
+    Object.assign(sh.uniforms, { tGrass: { value: T.grass }, tDirt: { value: T.dirt }, tGravel: { value: T.gravel }, tHgt: { value: T.heights }, tMacro: { value: T.macro }, uTime: waterMat.uniforms.uTime });
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nattribute vec4 aMat;\nattribute vec2 aDig;\nvarying vec4 vMat;\nvarying vec2 vDig;\nvarying vec3 vTWP;')
       .replace('#include <project_vertex>', '#include <project_vertex>\nvMat = aMat;\nvDig = aDig;\nvTWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        uniform sampler2D tGrass, tDirt, tGravel, tHgt, tMacro; varying vec4 vMat; varying vec2 vDig; varying vec3 vTWP;
+        uniform sampler2D tGrass, tDirt, tGravel, tHgt, tMacro; uniform float uTime; varying vec4 vMat; varying vec2 vDig; varying vec3 vTWP;
         vec3 gwPerturb(vec3 surf_pos, vec3 surf_norm, vec2 dHdxy, float faceDirection) {
           vec3 vSigmaX = normalize(dFdx(surf_pos)); vec3 vSigmaY = normalize(dFdy(surf_pos)); vec3 vN = surf_norm;
           vec3 R1 = cross(vSigmaY, vN); vec3 R2 = cross(vN, vSigmaX); float fDet = dot(vSigmaX, R1) * faceDirection;
@@ -744,6 +816,13 @@ function terrainMaterial() {
         gcol *= mix(.78, 1.15, gmac);
         float gwet = clamp(vMat.w, 0., 1.);
         gcol *= mix(1., .55, gwet);
+        // under shallow water: a greenish-brown cast, and sunlight focused by the ripples dancing on the bed
+        { float under = smoothstep(.6, .62, vMat.w), wd = clamp((vMat.w - .6) / .3, 0., 1.);
+          gcol = mix(gcol, gcol * vec3(.78, .86, .7), under);
+          vec2 cp = vTWP.xz * .42;
+          float c1 = texture2D(tMacro, cp + vec2(uTime * .031, uTime * .017)).r, c2 = texture2D(tMacro, cp.yx * 1.13 - vec2(uTime * .022, uTime * .036)).r;
+          float caus = pow(clamp(1. - abs(c1 - c2) * 3.2, 0., 1.), 7.);
+          gcol *= 1. + caus * under * (1. - wd) * 1.4; }
         diffuseColor.rgb *= gcol;`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, .3, gwet * .85);\nroughnessFactor = mix(roughnessFactor, .82, clamp((vDig.x - vTWP.y - .2) * 2., 0., 1.) * gw.y * (1. - gwet));')
       .replace('#include <normal_fragment_maps>', `
@@ -755,13 +834,23 @@ function terrainMaterial() {
   return m;
 }
 // ---------------------------------------------------------------- water (ripples that follow the current, reflections, foam)
+// Rings on the water: dirt dropped in, machines wading, splashes. A short list of (x, z, start time, strength); each
+// spreads out and fades over a few seconds.
+const RIPN = 16, ripU = Array.from({ length: RIPN }, () => new THREE.Vector4(0, 0, -100, 0));
+let ripI = 0;
+function ripple(x, z, str) {
+  for (const r of ripU) if (simTime - r.z < .3 && Math.abs(r.x - x) + Math.abs(r.y - z) < 1.2) return;   // one is enough
+  ripU[ripI].set(x, z, simTime, clamp(str, .1, 1.5)); ripI = (ripI + 1) % RIPN;
+}
 function waterMaterial() {
   return new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, fog: true,
     uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
       uTime: { value: 0 }, tN: { value: null }, uSun: { value: SUN_DIR.clone() }, uSunCol: { value: new THREE.Color(1, .92, .8) },
       uSky: { value: new THREE.Color(.13, .3, .68) }, uHor: { value: FOG.clone().multiplyScalar(1.05) },
-      uDeep: { value: new THREE.Color(.008, .045, .05) }, uShallow: { value: new THREE.Color(.1, .17, .12) },
+      // forest water: tea-brown in the shallows, dark olive deeper, near-black in the deep
+      uDeep: { value: new THREE.Color(.006, .026, .02) }, uShallow: { value: new THREE.Color(.11, .1, .05) },
+      tRefl: { value: null }, uReflM: { value: new THREE.Matrix4() }, uRefl: { value: 0 }, uLevel: { value: 0 }, uRip: { value: [] },
     }]),
     vertexShader: `
       #include <common>
@@ -779,9 +868,11 @@ function waterMaterial() {
       #include <common>
       #include <fog_pars_fragment>
       uniform float uTime; uniform sampler2D tN; uniform vec3 uSun, uSunCol, uSky, uHor, uDeep, uShallow;
+      uniform sampler2D tRefl; uniform mat4 uReflM; uniform float uRefl, uLevel; uniform vec4 uRip[${RIPN}];
       varying float vW; varying vec2 vFlow; varying vec3 vWP;
       void main() {
-        if (vW < 0.008) discard;
+        // vW is the depth of water over the drawn ground, so the edge is where the surface meets the bank
+        if (vW <= 0.) discard;
         vec2 fl = vFlow, uv = vWP.xz * .16;
         float speed = length(fl), dist = length(cameraPosition - vWP), calm = 1. / (1. + dist * .018);
         float ph = fract(uTime * .12), w1 = abs(ph - .5) * 2.;
@@ -792,29 +883,56 @@ function waterMaterial() {
         vec3 n1 = mix(a1.xyz, a2.xyz, w1) * 2. - 1., n2 = b1.xyz * 2. - 1., n3 = b2.xyz * 2. - 1.;
         // still water is nearly a mirror; the faster it runs the more it is broken up (and less so far away, where
         // fine ripples would only sparkle)
-        float chop = (.16 + min(speed, 2.5) * .5) * mix(.3, 1., calm);
-        vec3 nt = normalize(vec3((n1.xy * .9 + n2.xy * .5 + n3.xy * .35 * calm) * chop, 1.));
+        float chop = (.12 + min(speed, 2.5) * .5) * mix(.3, 1., calm);
+        vec2 slope = (n1.xy * .9 + n2.xy * .5 + n3.xy * .35 * calm) * chop;
+        // rings spreading from where something hit the water
+        float rfoam = 0.;
+        for (int i = 0; i < ${RIPN}; i++) {
+          vec4 r = uRip[i]; float age = uTime - r.z;
+          if (age < 0. || age > 5.) continue;
+          vec2 d = vWP.xz - r.xy; float dd = length(d) + .001, x = dd - age * 1.9;
+          float env = exp(-x * x * 2.5) * r.w * exp(-age * .7) / (1. + dd * .5);
+          slope += d / dd * cos(x * 8.) * env * 1.1;
+          rfoam += env * smoothstep(1.2, 0., age) * smoothstep(.4, 0., abs(x));
+        }
+        // the shore: small waves running up the bank
+        float lap = .5 + .5 * sin(uTime * 1.4 - vW * 34. + (a1.a + b1.a) * 5.);
+        slope += vec2(a2.a - .5, b1.a - .5) * smoothstep(.15, .0, vW) * lap * .25;
+        vec3 nt = normalize(vec3(slope, 1.));
         vec3 N = normalize(vec3(nt.x, nt.z, nt.y));
         vec3 V = normalize(cameraPosition - vWP);
         float fres = .02 + .98 * pow(1. - max(dot(N, V), 0.), 5.);
         vec3 R = reflect(-V, N); R.y = abs(R.y);
-        // what it mirrors: sky overhead, haze lower down, and the dark line of the forest along the banks
+        // what it mirrors: sky overhead, haze lower down, and the uneven dark line of the forest round the water
         vec3 skyc = mix(uHor, uSky, clamp(R.y * 1.7, 0., 1.));
-        skyc = mix(vec3(.018, .04, .022), skyc, smoothstep(.04, .3, R.y + (n2.x + n1.y) * .05));
+        float az = atan(R.z, R.x);
+        float treeTop = .09 + .1 * texture2D(tN, vec2(az * .32, .13)).a + .06 * texture2D(tN, vec2(az * 1.9, .61)).a;
+        vec3 forest = vec3(.016, .036, .02) * (.7 + .7 * texture2D(tN, vec2(az * 3.1, R.y * 2.)).a);
+        skyc = mix(forest, skyc, smoothstep(treeTop - .015, treeTop + .03, R.y + (n2.x + n1.y) * .03));
+        // the real mirror image of the banks, trees and machines (High; Medium on computers), rippled by the surface
+        if (uRefl > 0.) {
+          vec4 rq = uReflM * vec4(vWP.x, uLevel, vWP.z, 1.);
+          vec2 ruv = rq.xy / rq.w + N.xz * (.025 + .02 * calm);
+          float rw = uRefl * (1. - smoothstep(.4, 2., abs(vWP.y - uLevel)))
+            * smoothstep(0., .04, ruv.x) * smoothstep(1., .96, ruv.x) * smoothstep(0., .04, ruv.y) * smoothstep(1., .96, ruv.y);
+          skyc = mix(skyc, texture2D(tRefl, ruv).rgb, rw);
+        }
         float sd = max(dot(R, uSun), 0.);
         float spec = pow(sd, 420.) * 14. + pow(sd, 48.) * .3;
-        // depth: the bed shows through the shallows, then green, then near-black water
-        float depthF = 1. - exp(-vW * 1.5);
+        // depth: the bed shows through the shallows, then tea-brown water, then near-black
+        float depthF = 1. - exp(-vW * 1.6);
         vec3 body = mix(uShallow, uDeep, depthF) * (.7 + .3 * max(dot(N, uSun), 0.));
         body = mix(body, uDeep * .45, smoothstep(.9, 2.4, vW));
         vec3 col = mix(body, skyc, fres) + uSunCol * spec;
-        // foam: a line along the edge, streaks where the current is fast, white water where it is fast and shallow
+        // foam: lapping along the edge, streaks where the current is fast, white water where it is fast and shallow
         float fn = mix(a1.a, a2.a, w1) * .6 + texture2D(tN, uv * 3.7 - fl * uTime * .3).a * .4;
         float rush = smoothstep(.7, 2.2, speed), rapid = rush * smoothstep(.7, .12, vW);
-        float foam = smoothstep(.6 - rapid * .25, .86 - rapid * .2, fn) * (smoothstep(.16, .0, vW) * .85 + rush * .45 + rapid * .5);
-        foam = clamp(foam, 0., 1.);
+        float edge = smoothstep(.0, .015, vW) * smoothstep(.1, .02, vW) * (.35 + .65 * lap);
+        float foam = smoothstep(.6 - rapid * .25, .86 - rapid * .2, fn) * (edge * .9 + rush * .45 + rapid * .5);
+        foam = clamp(foam + rfoam * .5 + edge * smoothstep(.45, .7, fn) * .4, 0., 1.);
         col = mix(col, vec3(.86, .89, .87) * (.75 + .25 * max(dot(N, uSun), 0.)), foam * .8);
-        float alpha = clamp(.3 + depthF * .66 + fres * .45 + foam * .5, 0., .98) * smoothstep(.008, .07, vW);
+        // clear at the very edge, so the wet bed shows; thicker with depth and at a glancing angle
+        float alpha = clamp(.12 + depthF * .82 + fres * .5 + foam * .5, 0., .98) * smoothstep(.0, .035, vW);
         gl_FragColor = vec4(col, alpha);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -823,7 +941,7 @@ function waterMaterial() {
   });
 }
 const terrainMat = terrainMaterial();
-const waterMat = waterMaterial(); waterMat.uniforms.tN.value = T.water;
+const waterMat = waterMaterial(); waterMat.uniforms.tN.value = T.water; waterMat.uniforms.uRip.value = ripU;
 
 // ---------------------------------------------------------------- how each cell looks (material mix, wetness, shading in hollows)
 const cMat = new Float32Array(NN * 4), cAO = new Float32Array(NN).fill(1);
@@ -837,11 +955,21 @@ function cellLook(i0, i1, j0, j1) {
     cAO[k] = clamp(1 - Math.max(0, lap) * .4 - Math.max(0, h2) * .15 + Math.max(0, -lap) * .05, .52, 1.05);
     let g = 0, d = 0, r = 0;
     if (M[k] === 2) r = 1; else if (M[k] === 1 || D[k]) d = 1; else g = 1;
+    if (d === 1 && SEED[k] > 0) { g = SEED[k] * .95; d = 1 - g; }   // seeded soil greening over
     const sl = Math.abs(hl - hr) + Math.abs(hd - hu);
     if (g && sl > 1.1) { const f = clamp((sl - 1.1) / 1.2, 0, .85); g -= f; d += f; }
     const w = W[k];
     if (w > .05 && M[k] === 0 && !D[k]) { g = 0; d = .7; r = .3; }
     let wet = 0;
+    // banks: the grass gives way to wet mud and pebbles for a metre or two from the water (only how it looks)
+    if (g > 0 && w <= .02) {
+      let near = 0;
+      for (let dz = -2; dz <= 2 && near < 2; dz++) for (let dx = -2; dx <= 2; dx++) {
+        const ii = i + dx, jj = j + dz; if (ii < 0 || jj < 0 || ii >= N || jj >= N || W[jj * N + ii] <= .05) continue;
+        near = Math.max(near, Math.abs(dx) + Math.abs(dz) <= 1 ? 2 : 1);
+      }
+      if (near) { const mud = (near === 2 ? .75 : .4) * (.75 + .5 * (ih(i * 3 + 1, j * 7 - 2) + .5)) * g; g -= mud; d += mud * .75; r += mud * .25; }
+    }
     if (w > .02) wet = clamp(.6 + w * .3, 0, 1);
     else if ((i > 0 && W[k - 1] > .02) || (i < N - 1 && W[k + 1] > .02) || (j > 0 && W[k - N] > .02) || (j < N - 1 && W[k + N] > .02)) wet = .5;
     else if ((i > 1 && W[k - 2] > .02) || (i < N - 2 && W[k + 2] > .02) || (j > 1 && W[k - 2 * N] > .02) || (j < N - 2 && W[k + 2 * N] > .02)
@@ -892,9 +1020,11 @@ function lump(x, z, md, mr, spoil) {
   const c = spoil > 0 ? Math.max(0, vnoise(x * 3.1 - 4.7, z * 3.1 + 1.9)) * spoil * .22 : 0;
   return n * (md * .1 + mr * .13) + c * md;
 }
+// turf is never flat: low hummocks a few centimetres high (only how it's drawn, near the camera)
+const hum = (x, z) => (vnoise(x * .9 + 11.3, z * .9 - 5.7) * .6 + vnoise(x * 2.6 - 3.1, z * 2.6 + 8.2) * .4) * .09;
 function hDraw(x, z, F) {
   const m = matAt(x, z), spoil = F === 1 ? 0 : clamp((bil(H, x, z) - bil(H0, x, z)) / .5, 0, 1);
-  return (F === 1 ? hc(Math.round(x), Math.round(z)) : hSmooth(x, z)) + lump(x, z, m[1], m[2] * (1 - m[3] * .5), spoil);
+  return (F === 1 ? hc(Math.round(x), Math.round(z)) : hSmooth(x, z) + hum(x, z) * m[0] * (1 - m[3])) + lump(x, z, m[1], m[2] * (1 - m[3] * .5), spoil);
 }
 
 // ---------------------------------------------------------------- terrain chunks: near the camera they are drawn at half a metre
@@ -932,6 +1062,7 @@ function fillChunk(c) {
   const P = g.attributes.position.array, Nr = g.attributes.normal.array, C = g.attributes.color.array, A = g.attributes.aMat.array, DG = g.attributes.aDig.array;
   const ex = nx + 2, hh = new Float32Array(ex * (nz + 2)), st = 1 / F;
   for (let b = -1; b <= nz; b++) for (let a = -1; a <= nx; a++) hh[(b + 1) * ex + a + 1] = hDraw(c.i0 + a * st, c.j0 + b * st, F);
+  c.hh = hh; c.hhF = F;   // kept for the water, which meets this drawn ground at the shore
   for (let b = 0; b < nz; b++) for (let a = 0; a < nx; a++) {
     const v = b * nx + a, x = c.i0 + a * st, z = c.j0 + b * st, h = hh[(b + 1) * ex + a + 1];
     P[v * 3] = x; P[v * 3 + 1] = h; P[v * 3 + 2] = z;
@@ -952,43 +1083,68 @@ function fillChunk(c) {
   for (const a of ['position', 'normal', 'color', 'aMat', 'aDig']) g.attributes[a].needsUpdate = true;
   g.computeBoundingSphere();
 }
-function chunkWaterGeo(c) {
-  const nx = c.i1 - c.i0 + 1, nz = c.j1 - c.j0 + 1, idx = [];
+// The water of a chunk, on the same grid as its ground (half a metre near the camera). Each point gets the water level
+// (a dry cell beside water takes its neighbours' level) and the depth over the ground as drawn, so the shoreline is
+// exactly where the surface meets the bank, curving with it instead of following the 1 m cells.
+function chunkWaterGeo(c, F = 1) {
+  const nx = (c.i1 - c.i0) * F + 1, nz = (c.j1 - c.j0) * F + 1, idx = [];
   for (let b = 0; b < nz - 1; b++) for (let a = 0; a < nx - 1; a++) { const p = b * nx + a, q = p + 1, r = p + nx, s = r + 1; idx.push(p, r, q, q, r, s); }
   const g = new THREE.BufferGeometry(); g.setIndex(idx);
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nx * nz * 3), 3).setUsage(THREE.DynamicDrawUsage));
   g.setAttribute('aW', new THREE.BufferAttribute(new Float32Array(nx * nz), 1).setUsage(THREE.DynamicDrawUsage));
   g.setAttribute('aFlow', new THREE.BufferAttribute(new Float32Array(nx * nz * 2), 2).setUsage(THREE.DynamicDrawUsage));
-  g.userData = { nx, nz };
+  g.userData = { nx, nz, F };
   return g;
 }
+const _wl = new Float32Array((CH + 3) * (CH + 3)), _wvx = new Float32Array(_wl.length), _wvz = new Float32Array(_wl.length);
 function fillWater(c) {
-  const g = c.wmesh.geometry, { nx, nz } = g.userData;
+  const F = c.hhF || 1, st = 1 / F;
+  let g = c.wmesh.geometry;
+  if (g.userData.F !== F) { g.dispose(); g = c.wmesh.geometry = chunkWaterGeo(c, F); }
+  const { nx, nz } = g.userData;
   const P = g.attributes.position.array, Dp = g.attributes.aW.array, Fl = g.attributes.aFlow.array;
+  // level and current of each cell, one cell beyond the chunk all round
+  const ci0 = c.i0 - 1, cj0 = c.j0 - 1, cw = c.i1 - c.i0 + 3, chn = c.j1 - c.j0 + 3;
   let wet = false;
-  for (let b = 0; b < nz; b++) for (let a = 0; a < nx; a++) {
-    const v = b * nx + a, i = c.i0 + a, j = c.j0 + b, k = j * N + i, w = W[k];
-    P[v * 3] = i; P[v * 3 + 2] = j;
+  for (let qb = 0; qb < chn; qb++) for (let qa = 0; qa < cw; qa++) {
+    const q = qb * cw + qa, i = clamp(ci0 + qa, 0, N - 1), j = clamp(cj0 + qb, 0, N - 1), k = j * N + i, w = W[k];
     if (w > .012) {
-      wet = true;
-      P[v * 3 + 1] = H[k] + w; Dp[v] = w;
+      if (qa > 0 && qb > 0 && qa < cw - 1 && qb < chn - 1) wet = true;
+      _wl[q] = H[k] + w;
       let vx = (FR[k] - FL[k] + (i > 0 ? FR[k - 1] : 0) - (i < N - 1 ? FL[k + 1] : 0)) * .5;
       let vz = (FD[k] - FU[k] + (j > 0 ? FD[k - N] : 0) - (j < N - 1 ? FU[k + N] : 0)) * .5;
       const dd = Math.max(w, .08); vx /= dd; vz /= dd;
       const sp = Math.hypot(vx, vz); if (sp > 2.5) { vx *= 2.5 / sp; vz *= 2.5 / sp; }
-      Fl[v * 2] = vx; Fl[v * 2 + 1] = vz;
+      _wvx[q] = vx; _wvz[q] = vz;
     } else {
-      let lvl = -1e9;
-      if (i > 0 && W[k - 1] > .012) lvl = Math.max(lvl, H[k - 1] + W[k - 1]);
-      if (i < N - 1 && W[k + 1] > .012) lvl = Math.max(lvl, H[k + 1] + W[k + 1]);
-      if (j > 0 && W[k - N] > .012) lvl = Math.max(lvl, H[k - N] + W[k - N]);
-      if (j < N - 1 && W[k + N] > .012) lvl = Math.max(lvl, H[k + N] + W[k + N]);
-      if (lvl > -1e8) { P[v * 3 + 1] = lvl; Dp[v] = Math.max(-2, lvl - H[k]); } else { P[v * 3 + 1] = H[k] - .3; Dp[v] = -1; }
-      Fl[v * 2] = Fl[v * 2 + 1] = 0;
+      let lvl = NaN;
+      if (i > 0 && W[k - 1] > .012) lvl = H[k - 1] + W[k - 1];
+      if (i < N - 1 && W[k + 1] > .012) lvl = Math.max(lvl || -1e9, H[k + 1] + W[k + 1]);
+      if (j > 0 && W[k - N] > .012) lvl = Math.max(lvl || -1e9, H[k - N] + W[k - N]);
+      if (j < N - 1 && W[k + N] > .012) lvl = Math.max(lvl || -1e9, H[k + N] + W[k + N]);
+      _wl[q] = lvl; _wvx[q] = _wvz[q] = 0;
     }
   }
   c.wet = wet; c.wmesh.visible = wet;
-  if (wet) { g.attributes.position.needsUpdate = true; g.attributes.aW.needsUpdate = true; g.attributes.aFlow.needsUpdate = true; }
+  if (!wet) return;
+  const hh = c.hh, ex = nx + 2;
+  for (let b = 0; b < nz; b++) for (let a = 0; a < nx; a++) {
+    const v = b * nx + a, x = c.i0 + a * st, z = c.j0 + b * st;
+    const i = Math.min(Math.floor(x), c.i1 - (x >= c.i1 ? 1 : 0)), j = Math.min(Math.floor(z), c.j1 - (z >= c.j1 ? 1 : 0)), fx = x - i, fz = z - j;
+    const q = (j - cj0) * cw + (i - ci0);
+    let sl = 0, sw = 0, svx = 0, svz = 0;
+    for (let e = 0; e < 4; e++) {
+      const qq = q + (e & 1) + (e >> 1) * cw, L = _wl[qq];
+      if (L !== L) continue;   // no water near this corner
+      const wgt = ((e & 1) ? fx : 1 - fx) * ((e >> 1) ? fz : 1 - fz) + 1e-4;
+      sl += L * wgt; svx += _wvx[qq] * wgt; svz += _wvz[qq] * wgt; sw += wgt;
+    }
+    P[v * 3] = x; P[v * 3 + 2] = z;
+    const ground = hh && hh.length === ex * (nz + 2) ? hh[(b + 1) * ex + a + 1] : bil(H, x, z);
+    if (sw > 0) { const lvl = sl / sw; P[v * 3 + 1] = lvl; Dp[v] = lvl - ground; Fl[v * 2] = svx / sw; Fl[v * 2 + 1] = svz / sw; }
+    else { P[v * 3 + 1] = ground - .3; Dp[v] = -1; Fl[v * 2] = Fl[v * 2 + 1] = 0; }
+  }
+  g.attributes.position.needsUpdate = true; g.attributes.aW.needsUpdate = true; g.attributes.aFlow.needsUpdate = true;
 }
 const chunkTiles = c => { const t = []; for (let tj = Math.floor(c.j0 / TILE); tj <= Math.min(NT - 1, Math.floor(c.j1 / TILE)); tj++) for (let ti = Math.floor(c.i0 / TILE); ti <= Math.min(NT - 1, Math.floor(c.i1 / TILE)); ti++) t.push(tj * NT + ti); return t; };
 for (const c of tchunks) c.tiles = chunkTiles(c);
@@ -1017,6 +1173,7 @@ function updateTerrainChunks(dt, focus, all = false) {
       scene.add(c.mesh); c.lod = lod;
     }
     fillChunk(c);
+    if (c.wmesh) fillWater(c);   // the shore follows the ground as now drawn
     chunkDirty[c.cj * NCH + c.ci] = 0;
   }
   for (const c of tchunks) {
@@ -1195,6 +1352,7 @@ function updateTrees(dt, terrainChanged) {
 let stumpIM = null, stumpDirty = true;
 function drawStumps() {
   stumpDirty = false;
+  if (stumpIM && stumpIM.instanceMatrix.count < trees.length) { scene.remove(stumpIM); stumpIM = null; }   // planted trees added since
   if (!stumpIM) {
     const g = new THREE.CylinderGeometry(.2, .27, .5, 9); g.translate(0, .2, 0);
     const top = new THREE.MeshStandardMaterial({ color: 0xd8b77f, roughness: .9 });
@@ -1293,7 +1451,7 @@ const rockMat = new THREE.MeshStandardMaterial({ map: T.rock, roughness: .88, me
 const boulderMat = new THREE.MeshStandardMaterial({ map: T.boulder, normalMap: T.boulderN, roughness: .9, metalness: 0 });
 let rockIMs = [], rockShapes = null, rocksBuilt = false;
 fetch('assets/rocks.bin').then(r => r.ok ? r.arrayBuffer() : Promise.reject(new Error('rocks.bin')))
-  .then(b => { rockShapes = MOD.parseRocks(b); if (rocksBuilt) buildRocks(); }).catch(() => {});
+  .then(b => { rockShapes = MOD.parseRocks(b); if (rocksBuilt) buildRocks(); grassDirty = true; }).catch(() => {});
 function buildRocks() {
   for (const im of rockIMs) scene.remove(im);
   rocksBuilt = true;
@@ -1380,22 +1538,140 @@ function updateGrass(dt, me) {
     if (W[k] > .005) continue;
     // reeds and tall grass line the water's edge
     const bank = W[k - 1] > .05 || W[k + 1] > .05 || W[k - N] > .05 || W[k + N] > .05 || W[k - 2] > .05 || W[k + 2] > .05 || W[k - 2 * N] > .05 || W[k + 2 * N] > .05;
-    if (!bank && (M[k] !== 0 || D[k] || W[k + 1] > .005 || W[k + N] > .005)) continue;
+    const grow = SEED[k];   // seeded soil: the new grass comes up thin and short, then fills in
+    if (!bank && ((grow < .35 && (M[k] !== 0 || D[k])) || W[k + 1] > .005 || W[k + N] > .005)) continue;
     if (!bank && Math.abs(H[k + 1] - H[k - 1]) + Math.abs(H[k + N] - H[k - N]) > 1.1) continue;
     for (let q = 0; q < (bank ? 3 : 2) && n < Q.grass; q++) {
       const hx = hashf(i + q * .37, j), hz = hashf(j + q * .51, i + 3.1);
       if (dd > R * R * .55 && hx < .5) continue;
       const patch = vnoise(i * .11 + 3.3, j * .11 - 1.7) + .5 * vnoise(i * .37, j * .37);   // about -.75 .. .75
       if (!bank && patch < -.18 && hz < .55) continue;
-      const x = i + hx - .5, z = j + hz - .5, s = (.7 + hashf(i, j + q) * .7) * clamp(1 + patch * .9, .55, 1.7);
+      if (grow > 0 && hz > grow) continue;
+      const x = i + hx - .5, z = j + hz - .5, s = (.7 + hashf(i, j + q) * .7) * clamp(1 + patch * .9, .55, 1.7) * (grow > 0 ? .4 + grow * .6 : 1);
       { const dryp = clamp(vnoise(i * .07 - 9.1, j * .07 + 4.2) * 2.2 + .25, 0, 1), sh = .82 + hashf(j * 1.3 + q, i * .7) * .3;
         _gc.setRGB(sh * (1 + dryp * .22), sh * (1 + dryp * .06), sh * (1 - dryp * .25)); grassIM.setColorAt(n, _gc); }
       _q.setFromAxisAngle(_ax.set(0, 1, 0), hx * 6.28);
-      _m4.compose(_v.set(x, hAt(x, z) - .03, z), _q, _s.set(s * (bank ? .8 : 1), s * (.8 + hz * .5) * (bank ? 2.6 + hz * 1.4 : 1), s * (bank ? .8 : 1)));
+      _m4.compose(_v.set(x, hAt(x, z) - .03 + (bank ? 0 : hum(x, z)), z), _q, _s.set(s * (bank ? .8 : 1), s * (.8 + hz * .5) * (bank ? 2.6 + hz * 1.4 : 1), s * (bank ? .8 : 1)));
       grassIM.setMatrixAt(n++, _m4);
     }
   }
   grassIM.count = n; grassIM.instanceMatrix.needsUpdate = true; if (grassIM.instanceColor) grassIM.instanceColor.needsUpdate = true;
+  fillPlants(cx, cz);
+}
+
+// ---------------------------------------------------------------- wild plants and pebbles near the camera
+// Ferns under the trees, bushes at the forest edge, patches of dandelions, celandine and wood sorrel in the meadows,
+// the odd nettle or dock; pebbles along the banks, in the shallows and on bare ground. Placed from each cell's own
+// numbers (no random draws), so they always come back in the same places; gone where the ground is dug or driven.
+let shadeMap = null;   // standing trees close to each cell
+function buildShade() {
+  shadeMap = new Uint8Array(NN);
+  for (const t of trees) {
+    if (t.st !== 0) continue;
+    const ti = Math.round(t.x), tj = Math.round(t.z);
+    for (let dz = -6; dz <= 6; dz++) for (let dx = -6; dx <= 6; dx++) {
+      const i = ti + dx, j = tj + dz; if (i < 0 || j < 0 || i >= N || j >= N || dx * dx + dz * dz > 36) continue;
+      const k = j * N + i; if (shadeMap[k] < 255) shadeMap[k]++;
+    }
+  }
+}
+const QP = { high: 2600, medium: 1200, low: 0 }[quality];
+const plantMat = new THREE.MeshStandardMaterial({ map: T.plants, alphaTest: .45, alphaToCoverage: true, side: THREE.DoubleSide, roughness: .8 });
+plantMat.onBeforeCompile = sh => {
+  sh.uniforms.uTime = grassU.uTime;
+  sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;\nattribute float aCell;\nvarying float gV;')
+    .replace('#include <uv_vertex>', `#include <uv_vertex>
+      gV = uv.y; vMapUv = vec2(mod(aCell, 4.) * .25, aCell < 3.5 ? .5 : 0.) + uv * vec2(.25, .5);`)
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+      #ifdef USE_INSTANCING
+        vec4 gIP = instanceMatrix * vec4(0., 0., 0., 1.);
+        float sway = sin(uTime * 1.3 + gIP.x * .35 + gIP.z * .27) + .5 * sin(uTime * 2.3 + gIP.x * .9 - gIP.z * .4);
+        transformed.x += sway * .035 * position.y * position.y / .62; transformed.z += sway * .025 * position.y * position.y / .62;
+      #endif`);
+  sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float gV;')
+    .replace('#include <map_fragment>', '#include <map_fragment>\n diffuseColor.rgb *= mix(.68, 1., smoothstep(0., .35, gV));')
+    .replace('#include <normal_fragment_begin>', THREE.ShaderChunk.normal_fragment_begin.replace('normal *= faceDirection;', ''));
+};
+let plantIM = null, plantCell = null;
+if (QP > 0) {
+  const g = MOD.tuftGeo(); g.scale(1, 2, 1);   // square cards (the plant pictures are square)
+  plantCell = new THREE.InstancedBufferAttribute(new Float32Array(QP), 1); plantCell.setUsage(THREE.DynamicDrawUsage);
+  g.setAttribute('aCell', plantCell);
+  plantIM = new THREE.InstancedMesh(g, plantMat, QP);
+  plantIM.receiveShadow = true; plantIM.castShadow = false; plantIM.frustumCulled = false; plantIM.count = 0; scene.add(plantIM);
+}
+// pebbles: small copies of the scanned boulders, three shapes (made once the boulders have loaded)
+const QPB = { high: 1500, medium: 700, low: 0 }[quality];
+let pebIMs = null;
+function pebbleMeshes() {
+  if (pebIMs || !rockShapes || !QPB) return pebIMs;
+  pebIMs = [0, 2, 4].map(a => {
+    const im = new THREE.InstancedMesh(rockShapes[a % rockShapes.length], boulderMat, Math.ceil(QPB / 3));
+    im.receiveShadow = true; im.castShadow = quality === 'high'; im.frustumCulled = false; im.count = 0; scene.add(im);
+    return im;
+  });
+  return pebIMs;
+}
+const PLANT = [   // cells in assets/plants.png and their size across (m)
+  null, null,
+  [2, .34, .14], [3, .3, .12], [4, .3, .12],   // dandelions, celandine, wood sorrel
+  [5, 1.1, .8], [6, .65, .3], [7, .55, .3],    // bush, nettles, dock
+];
+function fillPlants(cx, cz) {
+  if (!plantIM) return;
+  if (!shadeMap) buildShade();
+  const peb = pebbleMeshes();
+  const R = Q.grassR * 1.2, i0 = Math.max(2, Math.floor(cx - R)), i1 = Math.min(N - 3, Math.ceil(cx + R)), j0 = Math.max(2, Math.floor(cz - R)), j1 = Math.min(N - 3, Math.ceil(cz + R));
+  let n = 0;
+  const pn = [0, 0, 0], pcap = peb ? peb[0].instanceMatrix.count : 0;
+  // what the grounds crew planted (growing from small)
+  for (const g of garden) {
+    if (n >= QP || (g.x - cx) ** 2 + (g.z - cz) ** 2 > R * R * 1.4) continue;
+    const sc = g.s * (.35 + .65 * g.g) / .62;
+    _q.setFromAxisAngle(_ax.set(0, 1, 0), g.x * 7.3 + g.z);
+    _m4.compose(_v.set(g.x, hAt(g.x, g.z) - .04, g.z), _q, _s.set(sc, sc, sc));
+    _gc.setRGB(1, 1, .96); plantIM.setColorAt(n, _gc); plantCell.array[n] = g.c; plantIM.setMatrixAt(n++, _m4);
+  }
+  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+    const dd = (i - cx) ** 2 + (j - cz) ** 2; if (dd > R * R) continue;
+    const k = j * N + i, w = W[k], h1 = hashf(i * .913 + 5.1, j * 1.37 - 2.2), h2 = hashf(j * .71 + 1.3, i * 1.91 + .4);
+    const nearW = W[k - 1] > .05 || W[k + 1] > .05 || W[k - N] > .05 || W[k + N] > .05 || W[k - 2] > .05 || W[k + 2] > .05 || W[k - 2 * N] > .05 || W[k + 2 * N] > .05;
+    // pebbles
+    if (peb && dd < R * R * .6) {
+      const pp = w > .005 ? (w < .5 ? .3 : 0) : nearW ? .45 : (M[k] !== 0 || D[k]) ? .06 : .008;
+      for (let q = 0; q < 2; q++) {
+        const hp = hashf(i * 1.77 + q * 3.1, j * .57 - q), sh = (i * 7 + j * 13 + q) % 3;
+        if (hp >= pp || pn[sh] >= pcap) continue;
+        const x = i + hashf(i + q, j * 2.1) - .5, z = j + hashf(j * 1.9 + q, i) - .5, size = .05 + hashf(i * 3.3, j * 4.4 + q) ** 2 * .22 * (nearW || w > .005 ? 1.3 : 1);
+        _q.setFromEuler(new THREE.Euler((hp - .5) * .8, hp * 40, (h2 - .5) * .6));
+        _m4.compose(_v.set(x, hAt(x, z) - size * .35, z), _q, _s.set(size / 1.1, size / 1.1 * (.6 + h1 * .5), size / 1.1));
+        peb[sh].setMatrixAt(pn[sh]++, _m4);
+      }
+    }
+    // plants: on undisturbed grass, dry and not too steep, away from the water's edge (the reeds are there)
+    if (n >= QP || w > .005 || nearW || M[k] !== 0 || D[k]) continue;
+    if (Math.abs(H[k + 1] - H[k - 1]) + Math.abs(H[k + N] - H[k - N]) > 1.1) continue;
+    const shd = shadeMap[k];
+    let cell = -1, size = 0;
+    if (shd >= 2) { if (h1 < .1) { cell = h2 < .5 ? 0 : 1; size = .9 + h2 * .7; } else if (h1 > .985) { cell = 5; size = 1 + h2 * .6; } }
+    else if (shd === 1) { if (h1 < .045) { cell = h2 < .3 ? 0 : 5; size = cell ? 1.1 + h2 * .8 : .9 + h2 * .5; } }
+    else {
+      const fl = vnoise(i * .05 + 7.7, j * .05 - 3.1) + .5 * vnoise(i * .19, j * .19);
+      if (fl > .12 && h1 < .08) { const t = PLANT[2 + clamp(Math.floor((vnoise(i * .03 - 2.2, j * .03 + 5.1) + .5) * 3), 0, 2)]; cell = t[0]; size = t[1] + h2 * t[2]; }
+      else if (h1 > .994) { cell = 5; size = .9 + h2 * .6; }
+      else if (h1 > .986) { cell = 7; size = .55 + h2 * .3; }
+      else if (h1 > .98) { cell = 6; size = .65 + h2 * .3; }
+    }
+    if (cell < 0 || (dd > R * R * .5 && size < .6)) continue;   // small flowers only close up
+    const x = i + h2 - .5, z = j + hashf(i * 2.3, j * .3) - .5, sc = size / .62;
+    _q.setFromAxisAngle(_ax.set(0, 1, 0), h2 * 40);
+    _m4.compose(_v.set(x, hAt(x, z) - .04 + hum(x, z), z), _q, _s.set(sc, sc * (.85 + hashf(i * 5.3, j * 2.9) * .3), sc));
+    { const t = .82 + hashf(j * 2.7, i * 1.3) * .3; _gc.setRGB(t, t, t * .95); plantIM.setColorAt(n, _gc); }
+    plantCell.array[n] = cell;
+    plantIM.setMatrixAt(n++, _m4);
+  }
+  plantIM.count = n; plantIM.instanceMatrix.needsUpdate = true; plantCell.needsUpdate = true; if (plantIM.instanceColor) plantIM.instanceColor.needsUpdate = true;
+  if (peb) peb.forEach((im, a) => { im.count = pn[a]; im.instanceMatrix.needsUpdate = true; });
 }
 
 // the forest beyond the work site (fixed scenery)
@@ -1431,6 +1707,37 @@ function buildFarForest() {
   near.forEach((l, v) => { put(TREE_GEOS[v].fol, folMat, l, false); put(TREE_GEOS[v].trunk, barkMat, l, false); });
   put(MOD.farCardGeo(), folMat, far, false);
 }
+
+// ---------------------------------------------------------------- seeded ground, planted bushes, flowers and saplings
+// Seeded soil (landscape.js) greens over in about a minute and a half and turns back into meadow. Digging, burying or
+// flooding it stops that. Planted bushes and flowers grow to full size in two minutes, saplings in five.
+const SEED = new Float32Array(NN), seedH = new Map();   // growth 0..1; the height it was seeded at
+const garden = [];                                       // { x, z, c: picture in plants.png, s: size, g: grown 0..1 }
+const canSeed = k => W[k] < .03 && M[k] !== 2 && (D[k] || M[k] === 1) && !(SEED[k] > 0);
+function seedCell(k) { if (!canSeed(k)) return false; SEED[k] = .01; seedH.set(k, H[k]); return true; }
+function plantThing(kind, x, z, size, cell) {
+  if (kind === 'tree') {
+    const hue = hashf(x * .37, z * .91) * .6, k = cellOf(x, z);   // a spruce or a broadleaf
+    const t = { x, z, k, s: size, r: hashf(z, x) * 6.28, st: 0, a: 0, dx: 1, dz: 0, t: 0, g: .14, y: hAt(x, z) - .15, dirty: true, hue, planted: 1 };
+    treeGrid[k] = trees.length; trees.push(t); buildTreeMeshes(); shadeMap = null;
+  } else garden.push({ x, z, c: kind === 'bush' ? 5 : cell || 2, s: size, g: .2 });
+  grassDirty = true;
+}
+let growT = 0;
+function growSeed(dt) {
+  growT -= dt; if (growT > 0) return; growT = 1;
+  for (const [k, h] of seedH) {
+    if (Math.abs(H[k] - h) > .06 || W[k] > .05) { SEED[k] = 0; seedH.delete(k); dirty(k); continue; }
+    const old = SEED[k]; SEED[k] = Math.min(1, old + (.7 + .6 * hashf(k * .37, k * .11)) / 90);
+    if (SEED[k] >= 1) { SEED[k] = 0; seedH.delete(k); M[k] = 0; D[k] = 0; dirty(k); }
+    else if (Math.floor(old * 6) !== Math.floor(SEED[k] * 6)) dirty(k);
+  }
+  let grew = false;
+  for (const g of garden) if (g.g < 1) { g.g = Math.min(1, g.g + 1 / 120); grew = true; }
+  for (const t of trees) if (t.planted && t.st === 0 && t.g < 1) { t.g = Math.min(1, t.g + 1 / 300); t.dirty = true; }
+  if (grew && (growT2 = (growT2 || 0) - 1) <= 0) { growT2 = 4; grassDirty = true; }
+}
+let growT2 = 0;
 
 // ---------------------------------------------------------------- dust, smoke and spray
 const PMAX = 6000;
@@ -1919,9 +2226,22 @@ function machineFx(m, dt, isActive) {
   m.mats.glass.opacity = cabView && m === machines[active] ? .06 : .32;
   for (const b of m.beacons) b.material.emissiveIntensity = isActive ? (Math.sin(simTime * 9) > .55 ? 4 : .25) : .1;
   // driving through water throws spray
-  if (Math.abs(m.v) > .8 && wetAt(m.x, m.z) > .15) {
+  const wd = wetAt(m.x, m.z);
+  if (wd > .1) {
+    // a wake: rings off the machine as it moves (and small ones from the engine shaking it when it sits)
+    m.wakeT = (m.wakeT || 0) - dt;
+    if (m.wakeT <= 0) {
+      const sp = Math.abs(m.v), fx = Math.sin(m.yaw) * Math.sign(m.v || 1), fz = Math.cos(m.yaw) * Math.sign(m.v || 1);
+      m.wakeT = sp > .3 ? .28 : .9;
+      ripple(m.x + fx * s.len * .45, m.z + fz * s.len * .45, sp > .3 ? .3 + Math.min(1, sp / 3) * .9 : .15);
+    }
+  }
+  if (Math.abs(m.v) > .8 && wd > .15) {
     m.splashT -= dt;
     spawn('splash', m.x, m.y + .3, m.z, 2, [.75, .8, .82], { jitter: s.wid });
+    // a bow wave pushed up at the front, thrown out to the sides
+    const fx = Math.sin(m.yaw) * Math.sign(m.v), fz = Math.cos(m.yaw) * Math.sign(m.v), sp = Math.abs(m.v);
+    for (const side of [-1, 1]) spawn('splash', m.x + fx * s.len * .5 + fz * side * s.wid * .4, m.y + .15, m.z + fz * s.len * .5 - fx * side * s.wid * .4, 1 + (sp > 2 ? 1 : 0), [.8, .84, .85], { jitter: .4, up: .4 + sp * .15, vx: (fx * .6 + fz * side) * sp * .6, vz: (fz * .6 - fx * side) * sp * .6 });
     if (m.splashT <= 0) { m.splashT = .7; snd.splash(m.x, m.y, m.z, Math.min(1, Math.abs(m.v) / 3)); }
     m.grime = Math.max(.12, m.grime - dt * .04);
   }
@@ -2429,10 +2749,16 @@ const people = makePeople({
   boss: () => boss,
   built: S => { stats.money += 600; toast(({ shed: 'Shed', workshop: 'Workshop' }[S.kind] || 'Cabin') + ' finished', 3600, '+$600'); snd.chime(); checkContract(); renderJobs(); save(); },
 });
+// the grounds crew (landscape.js): finish grading, seeding and planting, on the boss's order
+const land = makeLandscape({
+  clamp, H, W, M, D, dirty, hAt, spawn, YARD, get kit() { return people.kit; },
+  toast: (m, ms) => toast(m, ms || 2200), canSeed, seedCell, plant: plantThing,
+  landscaped: J => { stats.money += 500; toast('Landscaping finished', 3600, '+$500'); snd.chime(); checkContract(); renderJobs(); save(); },
+});
 function setCrew(v, quiet) {
   // the crew's fifth machine: a second excavator, parked in the yard the first time the crew comes on
   if (v && machines.filter(m => m.type === 'excavator' && !m.equip).length < 2) { const m = makeMachine('excavator', YARD.x1 - 4, YARD.z1 - 6, Math.PI); poseMachine(m, 0, ZERO); renderBar(); }
-  crew.setOn(v); people.setOn(crew.on);
+  crew.setOn(v); people.setOn(crew.on); land.setOn(crew.on);
   localStorage.setItem('groundwork.crew', crew.on ? '1' : '0');
   $('mCrew').textContent = 'Crew: ' + (crew.on ? 'on' : 'off');
   // with the crew on, hand the player the loader so all three workers have a machine
@@ -2909,7 +3235,7 @@ $('bossBtn').onclick = e => { e.currentTarget.blur(); setBoss(true); };
 function refreshOrders() {
   document.querySelectorAll('#orders button').forEach(b => b.classList.toggle('on', b.dataset.o === order));
   const h = $('hint');
-  h.textContent = order === 'cross' ? 'TAP A RIVER OR CREEK' : order === 'build' ? 'TAP WHERE TO BUILD' : '';
+  h.textContent = order === 'cross' ? 'TAP A RIVER OR CREEK' : order === 'build' ? 'TAP WHERE TO BUILD' : order === 'land' ? 'TAP WHERE TO LANDSCAPE' : '';
   h.style.display = order ? 'block' : 'none';
 }
 $('orders').addEventListener('click', e => {
@@ -2917,17 +3243,18 @@ $('orders').addEventListener('click', e => {
   const o = b.dataset.o;
   if (o === 'stop') {
     order = null; refreshOrders();
-    if (crew.site) { crew.cancel(); toast('Job stopped'); } else toast('No crossing to stop');
+    if (crew.site) { crew.cancel(); toast('Job stopped'); } else if (land.job) { land.cancel(); toast('Landscaping stopped'); } else toast('No job to stop');
     return;
   }
   order = order === o ? null : o; refreshOrders();
 });
 function doOrder(o, x, z) {
-  const why = o === 'cross' ? crew.orderAt(x, z) : people.orderAt(x, z, 'cabin');
+  const why = o === 'cross' ? crew.orderAt(x, z) : o === 'land' ? land.orderAt(x, z) : people.orderAt(x, z, 'cabin');
   if (why) { toast(why, 2200); return; }
   order = null; refreshOrders();
   // look at the whole job: from the dirt pit to the water (or the building site), a little up from the bottom bar
   if (o === 'cross' && crew.site) { const [x, zz] = crew.pt(crew.site, crew.site.Ls * .55); bossCam.x = x; bossCam.z = zz + 6; }
+  else if (o === 'land' && land.job) { bossCam.x = land.job.x; bossCam.z = land.job.z + 6; }
   else if (people.site) { bossCam.x = people.site.x; bossCam.z = people.site.z + 6; }
 }
 let crewHtml = '';
@@ -2939,12 +3266,15 @@ function bossHud() {
   }
   const bw = people.doing();
   h += `<button data-b="1" class="${/WAITING|OFF/.test(bw) ? 'idle' : ''}"><span>Builders</span><span>${bw}</span></button>`;
+  const lw = land.doing();
+  h += `<button data-l="1" class="${/WAITING|OFF/.test(lw) ? 'idle' : ''}"><span>Grounds</span><span>${lw}</span></button>`;
   if (h !== crewHtml) { crewHtml = h; $('crewList').innerHTML = h; }
   renderJobs();
 }
 $('crewList').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return; b.blur();
   if (b.dataset.b) { const S = people.site; if (S) { bossCam.x = S.x; bossCam.z = S.z; } return; }
+  if (b.dataset.l) { const J = land.job; if (J) { bossCam.x = J.x; bossCam.z = J.z; } return; }
   const m = machines[+b.dataset.i]; if (m) { bossCam.x = m.x; bossCam.z = m.z; }   // look at it; tap it on the ground to drive it
 });
 $('mbar').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { select(+b.dataset.i); b.blur(); } });
@@ -3053,7 +3383,7 @@ $('wNew').onclick = async () => {
 };
 
 // ---------------------------------------------------------------- saving (nothing ever resets)
-let noSave = false, crewSave = null, peopleSave = null;
+let noSave = false, crewSave = null, peopleSave = null, landSave = null;
 function b64(arr) {
   const u = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength); let s = '';
   for (let i = 0; i < u.length; i += 32768) s += String.fromCharCode.apply(null, u.subarray(i, i + 32768));
@@ -3075,7 +3405,10 @@ function saveData() {
       logs: trees.map((t, i) => t.st === 1 || t.st === 2 ? [i, +t.x.toFixed(2), +t.z.toFixed(2), +t.dx.toFixed(3), +t.dz.toFixed(3)] : null).filter(Boolean),
       rocks: rocks.map(r => [+r.x.toFixed(2), +r.z.toFixed(2), +r.rx.toFixed(2), +r.ry.toFixed(2)]),
       mach: machines.filter(m => !m.equip).map(m => ({ type: m.type, x: +m.x.toFixed(3), z: +m.z.toFixed(3), yaw: +m.yaw.toFixed(4), load: m.load, blade: m.blade, arm: m.arm, swing: m.swing, reach: m.reach, tip: m.tip, tipping: m.tipping, grime: +m.grime.toFixed(3), hp: +m.hp.toFixed(3) })),
-      crew: crew.serialize(), people: people.serialize(),
+      crew: crew.serialize(), people: people.serialize(), land: land.serialize(),
+      planted: trees.filter(t => t.planted).map(t => [+t.x.toFixed(2), +t.z.toFixed(2), +t.s.toFixed(3), +t.r.toFixed(3), +t.hue.toFixed(3), +t.g.toFixed(3)]),
+      garden: garden.map(g => [+g.x.toFixed(2), +g.z.toFixed(2), g.c, +g.s.toFixed(3), +g.g.toFixed(3)]),
+      seeded: [...seedH].map(([k, h]) => [k, +SEED[k].toFixed(3), +h.toFixed(3)]),
       cut: trees.map((t, i) => t.cut ? [i, +t.sx.toFixed(2), +t.sz.toFixed(2), t.lim ? 1 : 0, t.stump === 0 ? 0 : 1] : null).filter(Boolean),
       jobs: jobs.map(j => ({ type: j.type, x0: j.x0, z0: j.z0, x1: j.x1, z1: j.z1, target: j.target, base: j.base, goal: j.goal })),
     };
@@ -3099,6 +3432,10 @@ function load() {
     generate(seed, 'relax');
     H.set(unb64(data.H, Float32Array)); W.set(unb64(data.W, Float32Array));
     M.set(unb64(data.M, Uint8Array)); D.set(unb64(data.D, Uint8Array));
+    for (const [x, z, s, r, hue, g] of data.planted || []) { const k = cellOf(x, z); treeGrid[k] = trees.length; trees.push({ x, z, k, s, r, st: 0, a: 0, dx: 1, dz: 0, t: 0, g, y: 0, dirty: true, hue, planted: 1 }); }
+    for (const [x, z, c, s, g] of data.garden || []) garden.push({ x, z, c, s, g });
+    for (const [k, gr, h] of data.seeded || []) { SEED[k] = gr; seedH.set(k, h); }
+    landSave = data.land || null;
     for (const i of data.gone || []) if (trees[i]) { trees[i].st = 3; trees[i].g = 0; treeGrid[trees[i].k] = -1; }
     for (const t of trees) t.y = hAt(t.x, t.z) - .15;
     for (const [i, x, z, dx, dz] of data.logs || []) { const t = trees[i]; if (!t) continue; Object.assign(t, { st: 2, a: 1, x, z, dx, dz }); treeGrid[t.k] = -1; }
@@ -3149,7 +3486,9 @@ function shakeCamera(dt, m) {
   camFov = lerp(camFov, want, 1 - Math.exp(-dt * 2.5));
   if (Math.abs(camera.fov - camFov) > .02) { camera.fov = camFov; camera.updateProjectionMatrix(); }
 }
+let camFix = null;   // tests: a fixed camera [x, y, z, lookX, lookY, lookZ]
 function updateCamera(dt) {
+  if (camFix) { camera.position.set(camFix[0], camFix[1], camFix[2]); _cam.copy(camera.position); camera.lookAt(camFix[3], camFix[4], camFix[5]); return; }
   if (boss) {   // looking down on the valley from behind and above the point being watched
     if (camera.near !== .3) { camera.near = .3; camera.updateProjectionMatrix(); }
     bossCam.x = clamp(bossCam.x, 0, N); bossCam.z = clamp(bossCam.z, 0, N);
@@ -3294,6 +3633,8 @@ function update(dt, draw = true) {
   }
   crew.update(dt);
   people.update(dt);
+  land.update(dt);
+  growSeed(dt);
   for (const m of machines) {
     m.ctl = m.hp <= 0 ? ZERO : m === me ? inp : (m.ai || ZERO);
     drive(m, dt, m.ctl);
@@ -3402,6 +3743,7 @@ function start() {
   for (const m of machines) poseMachine(m, 0, ZERO);
   crew.restore(crewSave);
   people.restore(peopleSave);
+  land.restore(landSave);
   setCrew(localStorage.getItem('groundwork.crew') === '1' || boss, true);
   select(active, true);
   document.body.classList.toggle('boss', boss);
@@ -3416,11 +3758,12 @@ function start() {
   if (!resumed && !localStorage.getItem('groundwork.seenHelp')) showHelp(true);
   if (!resumed) save();
   // test hook: run the game forward without drawing (used by the automated checks)
-  window.GW = { prints: treadIM, post: POST, SPRINGS, drop: (x, z, v) => dropCircle({ v, g: 0 }, x, z, 6, v), people, works, CULVERTS, DECK, get eroded() { return eroded; }, flux: { FL, FR, FU, FD }, H0, crew, setCrew, dirty, snd, goal, GOALS, RIVERS, YARD, GRAVEL, CAMP, MARSH, SPEC, riverAt, tchunks, machines, H, W, M, D, BED, stats, hAt, select, save, trees, rocks, renderer, scene, camera, get jobs() { return jobs; }, get active() { return active; }, setBoss, get boss() { return boss; }, bossCam, bossTap, groundAt, doOrder, contract, CONTRACTS, checkContract, riverSpot,
+  window.GW = { land, SEED, garden, seedH, prints: treadIM, post: POST, SPRINGS, drop: (x, z, v) => dropCircle({ v, g: 0 }, x, z, 6, v), people, works, CULVERTS, DECK, get eroded() { return eroded; }, flux: { FL, FR, FU, FD }, H0, crew, setCrew, dirty, snd, goal, GOALS, RIVERS, YARD, GRAVEL, CAMP, MARSH, SPEC, riverAt, tchunks, machines, H, W, M, D, BED, stats, hAt, select, save, trees, rocks, renderer, scene, camera, get jobs() { return jobs; }, get active() { return active; }, setBoss, get boss() { return boss; }, bossCam, bossTap, groundAt, doOrder, contract, CONTRACTS, checkContract, riverSpot,
     draw(n = 1) { for (let i = 0; i < n; i++) { Object.assign(inp, ZERO); update(1 / 30, true); } drawFrame(); },   // tests: one drawn frame while paused
     step(n, input = {}) { for (let i = 0; i < n; i++) { Object.assign(inp, ZERO, input); if (i > 0) inp.act = false; update(1 / 30); } },
     pause(on) { paused = !!on; },
     cab(on) { cabView = !!on; },
+    camFix(v) { camFix = v; },
     camSet(off, pitch, dist) { camOff = off; camPitch = pitch; camDist = dist; lastDrag = performance.now(); },
     render() { updateCamera(1); camera.position.copy(_cam); drawFrame(); } };
   requestAnimationFrame(t => { last = t; frame(t); });

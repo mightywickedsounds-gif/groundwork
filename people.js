@@ -13,7 +13,7 @@
 // Every piece of every building is plain data (a list built from the building's size), so a site saves as a few numbers
 // and a string of which pieces are in.
 import * as THREE from 'three';
-import { buildPerson, toolMesh } from './models.js?v=16';
+import { buildPerson, toolMesh } from './models.js?v=17';
 
 export function makePeople(G) {
   const { clamp, angWrap } = G;
@@ -809,6 +809,8 @@ export function makePeople(G) {
   }
   return {
     update, setOn, serialize, restore, lend,
+    // the landscaping crew (landscape.js) walks and moves with the same code
+    kit: { addPerson, walk, animate, hold, face, standY },
     get on() { return on; }, get sites() { return sites; }, get site() { return cur; }, get people() { return crew; }, get mech() { return mech; },
     get logTruck() { return logTruck; }, get flatbed() { return flatbed; },
     begin,
