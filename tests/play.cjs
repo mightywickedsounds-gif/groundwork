@@ -144,7 +144,7 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
     m.x = 124; m.z = 180; m.yaw = 0; m.arm = .7; m.load.v = 3; m.load.g = 0; GW.step(5);
     const tip = new m.bucket.position.constructor(0, -.45, .97); m.bucket.localToWorld(tip);
     const before = []; for (let dz = -3; dz <= 3; dz++) for (let dx = -3; dx <= 3; dx++) before.push(GW.H[(Math.round(tip.z) + dz) * 256 + Math.round(tip.x) + dx]);
-    GW.step(30, { act: true });
+    GW.step(60, { act: true });   // tip, and let it fall
     let top = 0, i = 0; for (let dz = -3; dz <= 3; dz++) for (let dx = -3; dx <= 3; dx++) top = Math.max(top, GW.H[(Math.round(tip.z) + dz) * 256 + Math.round(tip.x) + dx] - before[i++]);
     return { left: +m.load.v.toFixed(2), top: +top.toFixed(2) };
   });
@@ -237,12 +237,12 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   const ls = await p.evaluate(() => {
     GW.crew.cancel();
     const Y = GW.YARD, N = 256, H = GW.H;
-    const dryRound = (x, z, r) => { for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) { const k = (z + dz) * N + x + dx; if (GW.W[k] > .01 || GW.M[k] === 2) return false; } return true; };
-    let at = null;
-    for (let d = 16; d < 70 && !at; d += 3) for (let a = 0; a < 16 && !at; a++) {
-      const x = Math.round((Y.x0 + Y.x1) / 2 + Math.cos(a / 16 * 6.28) * d), z = Math.round((Y.z0 + Y.z1) / 2 + Math.sin(a / 16 * 6.28) * d);
-      if (x > 12 && z > 12 && x < N - 12 && z < N - 12 && dryRound(x, z, 9) && !(x > Y.x0 - 10 && x < Y.x1 + 10 && z > Y.z0 - 10 && z < Y.z1 + 10)) at = [x, z];
-    }
+    // dry, not gravel, and fairly level (a lawn-sized patch, not a hillside)
+    const dryRound = (x, z, r) => { let lo = 1e9, hi = -1e9; for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) { const k = (z + dz) * N + x + dx; if (GW.W[k] > .01 || GW.M[k] === 2) return false; lo = Math.min(lo, H[k]); hi = Math.max(hi, H[k]); } return hi - lo < 2.2; };
+    const yc = [(Y.x0 + Y.x1) / 2, (Y.z0 + Y.z1) / 2], cand = [];
+    for (let z = 14; z < N - 14; z += 4) for (let x = 14; x < N - 14; x += 4) if (!(x > Y.x0 - 10 && x < Y.x1 + 10 && z > Y.z0 - 10 && z < Y.z1 + 10)) cand.push([x, z]);
+    cand.sort((a, b) => Math.hypot(a[0] - yc[0], a[1] - yc[1]) - Math.hypot(b[0] - yc[0], b[1] - yc[1]));
+    const at = cand.find(([x, z]) => dryRound(x, z, 9));
     const [x, z] = at, inC = (r, fn) => { for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) if (dx * dx + dz * dz <= r * r) fn((z + dz) * N + x + dx); };
     let sd = 7;
     inC(6, k => { sd = (sd * 16807) % 2147483647; H[k] += (sd / 2147483647 - .3) * .5; GW.D[k] = 1; GW.M[k] = 1; GW.dirty(k); });
@@ -267,6 +267,25 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   check('the grounds crew seeds and plants, and the job pays', ls.finished && ls.paid === 500 && ls.planted === 3 && ls.garden >= 12 && ls.seeded > 50, JSON.stringify(ls));
   check('grass grows back on the seeded ground and the saplings grow', ls.grass > .7 && ls.treeG > .3, JSON.stringify(ls));
   await p.evaluate(() => { GW.setCrew(false); GW.select(0); });
+
+  // an unfinished bridge deck can't be driven onto (the player got stranded on one)
+  const br = await p.evaluate(() => {
+    GW.setBoss(false); const i = GW.machines.findIndex(m => m.type === 'loader'); GW.select(i); const m = GW.machines[i];
+    // a clear, dry, gentle 40 m run northwards, away from the other machines and trees
+    const clear = (x, z) => { for (let d = -2; d <= 34; d += 2) for (let o = -2; o <= 2; o += 2) { const k = Math.round(z + d) * 256 + Math.round(x + o); if (GW.W[k] > .01 || Math.abs(GW.H[k] - GW.H[Math.round(z) * 256 + Math.round(x)]) > 4) return false; }
+      return GW.machines.every(q => q === m || Math.abs(q.x - x) > 7 || q.z < z - 6 || q.z > z + 40) && GW.trees.every(t => t.st !== 0 || Math.abs(t.x - x) > 3 || t.z < z - 3 || t.z > z + 36); };
+    let x0 = 0, z0 = 0;
+    for (let z = 20; z < 210 && !x0; z += 3) for (let x = 20; x < 236 && !x0; x += 3) if (clear(x, z)) { x0 = x; z0 = z; }
+    m.x = x0; m.z = z0; m.yaw = 0; m.v = 0; GW.step(5);
+    const P = { kind: 'bridge', done: false, P: [x0, z0 + 12], u: [0, 1], p: [1, 0], sL: 0, sR: 20, w: 6 };
+    GW.crew.roads.push(P);
+    GW.step(30 * 6, { throttle: 1 });
+    const front = m.z + 2.7, blocked = m.blocked;
+    GW.crew.roads.splice(GW.crew.roads.indexOf(P), 1);
+    GW.step(30 * 2, { throttle: 1 });
+    return { at: [x0, z0], front: +front.toFixed(2), deckStart: z0 + 12, blocked, after: +(m.z + 2.7).toFixed(2) };
+  });
+  check('a machine stops at an unfinished bridge instead of driving onto it', br.at[0] > 0 && br.front < br.deckStart && br.blocked === 'site' && br.after > br.deckStart, JSON.stringify(br));
 
   // fast water washes a loose heap out of the river
   const ero = await p.evaluate(() => {

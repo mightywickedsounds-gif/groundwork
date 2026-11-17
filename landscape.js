@@ -74,7 +74,7 @@ export function makeLandscape(G) {
     if (!K().walk(p, p.lt.x, p.lt.z, dt, .5)) return;
     p.lt.t += dt; p.pose = 'rake'; p.ph += dt * 3;
     const fx = p.x + Math.sin(p.yaw) * 1.2, fz = p.z + Math.cos(p.yaw) * 1.2;
-    rakeAt(job, fx, fz, 1.7, Math.min(.2, dt * .5));
+    rakeAt(job, fx, fz, 2.2, Math.min(.22, dt * 1.4));
     if (Math.random() < dt * 4) G.spawn('dust', fx, G.hAt(fx, fz) + .2, fz, 1, [.45, .38, .28], { jitter: .8, size: .4, alpha: .35 });
   }
   function seeder(p, dt, i) {
@@ -106,7 +106,8 @@ export function makeLandscape(G) {
     }
     const it = p.task.it;
     K().hold(p, 'shovel');
-    if (!K().walk(p, it.x - .9, it.z - .3, dt, .5)) return;
+    p.task.w = (p.task.w || 0) + dt;   // can't get right up to it (a machine in the way): plant from where he is
+    if (!K().walk(p, it.x - .9, it.z - .3, dt, .5) && p.task.w < 25) return;
     K().face(p, it.x, it.z, dt);
     p.task.t += dt; p.pose = p.task.t < 2 ? 'rake' : 'kneel'; p.ph += dt * 3;
     if (p.task.t > 4) {
