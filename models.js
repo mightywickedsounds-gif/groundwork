@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { labelTexture } from './textures.js?v=13';
+import { labelTexture } from './textures.js?v=14';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const Y = V(0, 1, 0), Z = V(0, 0, 1);
@@ -13,17 +13,23 @@ function addGrime(mat, U) {
   mat.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, U);
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vGWP; varying vec3 vGLP;')
+      .replace('#include <common>', '#include <common>\nvarying vec3 vGWP; varying vec3 vGLP; varying vec3 vGLN;')
       .replace('#include <project_vertex>', `#include <project_vertex>
-        vGLP = position;
+        vGLP = position; vGLN = normal;
         #ifdef USE_INSTANCING
           vGWP = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;
         #else
           vGWP = (modelMatrix * vec4(transformed, 1.0)).xyz;
         #endif`);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float uGround, uGrime, uDmg; uniform sampler2D tGrime; varying vec3 vGWP; varying vec3 vGLP;')
+      .replace('#include <common>', '#include <common>\nuniform float uGround, uGrime, uDmg; uniform sampler2D tGrime, tWear; varying vec3 vGWP; varying vec3 vGLP; varying vec3 vGLN;')
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        // worn paint and steel from a photographed painted-metal sheet: fine scratches, chips and streaks in the colour,
+        // and the shine varying across each panel. Projected from three sides so every part gets the same scale.
+        { vec3 gwB = abs(normalize(vGLN)); gwB = gwB * gwB * gwB; gwB /= (gwB.x + gwB.y + gwB.z + 1e-4);
+          vec2 gwW = texture2D(tWear, vGLP.zy * .45).rg * gwB.x + texture2D(tWear, vGLP.xz * .45).rg * gwB.y + texture2D(tWear, vGLP.xy * .45).rg * gwB.z;
+          diffuseColor.rgb *= .82 + .4 * gwW.r;
+          roughnessFactor = clamp(roughnessFactor * (.7 + 1.3 * gwW.g), .05, 1.); }
         float gwHgt = vGWP.y - uGround;
         float gwN = texture2D(tGrime, vGLP.xz * .35 + vGLP.y * .21).r * .6 + texture2D(tGrime, vGLP.zy * .9).r * .4;
         float gwLow = clamp((1.8 - gwHgt) / 1.8, 0., 1.); gwLow *= gwLow;
@@ -49,7 +55,7 @@ function addGrime(mat, U) {
   return mat;
 }
 export function machineMats(T, color) {
-  const U = { uGround: { value: 0 }, uGrime: { value: .2 }, uDmg: { value: 0 }, tGrime: { value: T.macro } };
+  const U = { uGround: { value: 0 }, uGrime: { value: .2 }, uDmg: { value: 0 }, tGrime: { value: T.macro }, tWear: { value: T.wear } };
   const g = o => addGrime(new THREE.MeshStandardMaterial(o), U);
   return {
     U,

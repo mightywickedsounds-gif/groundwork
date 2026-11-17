@@ -3,12 +3,12 @@
 // browser so nothing ever resets.
 import * as THREE from 'three';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
-import { makeTextures } from './textures.js?v=13';
-import * as MOD from './models.js?v=13';
-import { Sound } from './audio.js?v=13';
-import { makeCrew } from './crew.js?v=13';
-import { makeWorks } from './construct.js?v=13';
-import { makePeople } from './people.js?v=13';
+import { makeTextures } from './textures.js?v=14';
+import * as MOD from './models.js?v=14';
+import { Sound } from './audio.js?v=14';
+import { makeCrew } from './crew.js?v=14';
+import { makeWorks } from './construct.js?v=14';
+import { makePeople } from './people.js?v=14';
 
 const N = 256, NN = N * N;           // 256 x 256 cells, 1 m each
 const SAVE_KEY = 'groundwork.save.v3';   // v1 (the first, smaller valley) is left untouched in the browser
