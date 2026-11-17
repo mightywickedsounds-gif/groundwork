@@ -287,7 +287,7 @@ export function makeTextures(quality) {
     water: normalTex(256, 8, 101, 9),
     wear: canvasTex(grey1(), false), barkN: canvasTex(flatN(), false),
     clouds: clouds(512), puff: puff(64), stripes: stripes(), tread: tread(), foliage: foliage(quality === 'low' ? 256 : 512),
-    tufts: tufts(), boulder: canvasTex(rock(64)[0]), boulderN: canvasTex(flatN(), false),
+    tufts: tufts(), plants: plantsStandIn(), boulder: canvasTex(rock(64)[0]), boulderN: canvasTex(flatN(), false),
   };
   // the boulder photos are laid out for the scanned meshes (glTF style: no vertical flip)
   T.boulder.flipY = T.boulderN.flipY = false;
@@ -305,6 +305,16 @@ function tufts() {
     const fx = x + w / 2 + (r() - .5) * w * .3, tx = fx + (r() - .5) * w * .8, ty = y + h * (.05 + r() * .5), k = .6 + r() * .5;
     g.strokeStyle = `rgb(${(70 * k) | 0},${(100 * k) | 0},${(40 * k) | 0})`; g.lineWidth = 2 + r() * 2;
     g.beginPath(); g.moveTo(fx, y + h); g.quadraticCurveTo(fx, y + h * .6, tx, ty); g.stroke();
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return t;
+}
+// A drawn stand-in for assets/plants.png (eight 256x256 cells): a green clump in each.
+function plantsStandIn() {
+  const [c, g] = canvas(1024, 512);
+  for (let k = 0; k < 8; k++) {
+    const x = (k % 4) * 256 + 128, y = (k >> 2) * 256 + 250;
+    g.fillStyle = 'rgb(52,78,34)'; g.beginPath(); g.ellipse(x, y - 60, 70, 60, 0, 0, 6.283); g.fill();
   }
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
   return t;
@@ -331,6 +341,8 @@ function photos(T, S) {
   swap(T.boulder, 'assets/boulder.jpg'); swap(T.boulderN, 'assets/boulder_n.jpg');
   // grass tufts and reeds cut from photographed grass (Poly Haven grass_medium_01/02, grass_bermuda_01), tools/tufts.py
   swap(T.tufts, 'assets/tufts.png');
+  // wild plants assembled from photographed fronds, leaves and flowers (Poly Haven, CC0), tools/plants.py
+  swap(T.plants, 'assets/plants.png');
   // tree branches, the whole-spruce cards and leaf clumps, built from photographed fir twigs and leaves (same layout)
   swap(T.foliage, 'assets/foliage.png');
   // the bumps: grass, soil and gravel height maps packed in red, green and blue

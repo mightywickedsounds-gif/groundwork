@@ -231,6 +231,41 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   bo.back = await p.evaluate(() => GW.boss);
   check('an order at a creek starts a crossing and the crew get going', bo.order === 'started' && !!bo.kind && bo.doing.some(d => !/WAITING|MOVING|OFF/.test(d)), JSON.stringify(bo));
   check('tapping a machine drives it; BOSS goes back', bo.afterTap.boss === false && bo.afterTap.drive === 'dozer' && bo.back === true && bo.cancelled, JSON.stringify(bo));
+
+  // landscaping: a rough patch of dumped dirt near the yard is raked smooth (no soil lost), seeded, planted, and the
+  // grass grows back
+  const ls = await p.evaluate(() => {
+    GW.crew.cancel();
+    const Y = GW.YARD, N = 256, H = GW.H;
+    const dryRound = (x, z, r) => { for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) { const k = (z + dz) * N + x + dx; if (GW.W[k] > .01 || GW.M[k] === 2) return false; } return true; };
+    let at = null;
+    for (let d = 16; d < 70 && !at; d += 3) for (let a = 0; a < 16 && !at; a++) {
+      const x = Math.round((Y.x0 + Y.x1) / 2 + Math.cos(a / 16 * 6.28) * d), z = Math.round((Y.z0 + Y.z1) / 2 + Math.sin(a / 16 * 6.28) * d);
+      if (x > 12 && z > 12 && x < N - 12 && z < N - 12 && dryRound(x, z, 9) && !(x > Y.x0 - 10 && x < Y.x1 + 10 && z > Y.z0 - 10 && z < Y.z1 + 10)) at = [x, z];
+    }
+    const [x, z] = at, inC = (r, fn) => { for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) if (dx * dx + dz * dz <= r * r) fn((z + dz) * N + x + dx); };
+    let sd = 7;
+    inC(6, k => { sd = (sd * 16807) % 2147483647; H[k] += (sd / 2147483647 - .3) * .5; GW.D[k] = 1; GW.M[k] = 1; GW.dirty(k); });
+    const bump = () => { let s = 0, n = 0; inC(7, k => { s += Math.abs((H[k - 1] + H[k + 1] + H[k - N] + H[k + N]) * .25 - H[k]); n++; }); return s / n; };
+    const vol = () => { let s = 0; inC(12, k => { s += H[k]; }); return s; };
+    GW.step(60);   // let the heap settle first
+    const r = { at, b0: +bump().toFixed(3), v0: vol(), money0: GW.stats.money, trees0: GW.trees.filter(t => t.planted).length };
+    r.order = GW.land.orderAt(x, z) || 'started';
+    r.log = [];
+    for (let i = 0; i < 24 && GW.land.job; i++) { GW.step(30 * 15); r.log.push(GW.land.doing()); if (GW.land.job && GW.land.job.phase === 'grade') r.b1 = +bump().toFixed(3), r.v1 = vol(); }
+    r.b1 = r.b1 ?? +bump().toFixed(3);
+    r.dv = +Math.abs((r.v1 ?? vol()) - r.v0).toFixed(3);
+    r.finished = !GW.land.job; r.paid = GW.stats.money - r.money0;
+    r.planted = GW.trees.filter(t => t.planted).length - r.trees0; r.garden = GW.garden.length;
+    let seeded = 0; inC(7, k => { if (GW.SEED[k] > 0) seeded++; }); r.seeded = seeded;
+    GW.step(30 * 130);   // the grass grows back
+    let grass = 0, all = 0; inC(7, k => { all++; if (GW.M[k] === 0 && !GW.D[k]) grass++; }); r.grass = +(grass / all).toFixed(2);
+    r.treeG = +Math.max(...GW.trees.filter(t => t.planted).map(t => t.g)).toFixed(2);
+    return r;
+  });
+  check('landscaping rakes a rough patch smooth without losing soil', ls.order === 'started' && ls.b1 < ls.b0 * .6 && ls.dv < 1, JSON.stringify(ls));
+  check('the grounds crew seeds and plants, and the job pays', ls.finished && ls.paid === 500 && ls.planted === 3 && ls.garden >= 12 && ls.seeded > 50, JSON.stringify(ls));
+  check('grass grows back on the seeded ground and the saplings grow', ls.grass > .7 && ls.treeG > .3, JSON.stringify(ls));
   await p.evaluate(() => { GW.setCrew(false); GW.select(0); });
 
   // fast water washes a loose heap out of the river
@@ -249,12 +284,12 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   check('no broken numbers reach the sound', bad.length === 0, JSON.stringify(bad));
 
   // persistence
-  const snap = await p.evaluate(() => { GW.save(); const m = GW.machines[0]; m.goalI = GW.goal.i; let s = 0; for (let k = 0; k < GW.H.length; k += 7) s += GW.H[k]; return { x: m.x, z: m.z, sum: s, money: GW.stats.money, gone: GW.trees.filter(t => t.st > 0).length }; });
+  const snap = await p.evaluate(() => { GW.save(); const m = GW.machines[0]; m.goalI = GW.goal.i; let s = 0; for (let k = 0; k < GW.H.length; k += 7) s += GW.H[k]; return { x: m.x, z: m.z, sum: s, money: GW.stats.money, gone: GW.trees.filter(t => t.st > 0).length, planted: GW.trees.filter(t => t.planted).length, garden: GW.garden.length }; });
   await p.reload();
   await p.waitForFunction(() => window.GW, null, { timeout: 240000 });
   await p.evaluate(() => GW.pause(true));
-  const back = await p.evaluate(() => { const m = GW.machines[0]; let s = 0; for (let k = 0; k < GW.H.length; k += 7) s += GW.H[k]; return { x: m.x, z: m.z, sum: s, money: GW.stats.money, gone: GW.trees.filter(t => t.st > 0).length, goal: GW.goal.i }; });
-  check('the valley is the same after reloading the page', Math.abs(back.sum - snap.sum) < 1 && Math.abs(back.x - snap.x) < .01 && back.money === snap.money && back.gone === snap.gone, JSON.stringify({ snap, back }));
+  const back = await p.evaluate(() => { const m = GW.machines[0]; let s = 0; for (let k = 0; k < GW.H.length; k += 7) s += GW.H[k]; return { x: m.x, z: m.z, sum: s, money: GW.stats.money, gone: GW.trees.filter(t => t.st > 0).length, goal: GW.goal.i, planted: GW.trees.filter(t => t.planted).length, garden: GW.garden.length }; });
+  check('the valley is the same after reloading the page', Math.abs(back.sum - snap.sum) < 1 && Math.abs(back.x - snap.x) < .01 && back.money === snap.money && back.gone === snap.gone && back.planted === snap.planted && back.garden === snap.garden, JSON.stringify({ snap, back }));
   await p.waitForTimeout(1500);
   await p.screenshot({ path: OUT + '/p2.png' });
 

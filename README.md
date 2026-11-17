@@ -334,3 +334,24 @@ The owner chose "boss mode": you run the crew and give orders, and jump into a m
 - The tools that cut out the grass photos and simplify the rocks are in `tools/` (`tufts.py`, `rocks.mjs`), like the tree one.
 
 **Tested:** all 28 automatic checks pass (earlier rounds said 29; the test file prints 28). Screenshots on High (from the driver's view, at the gravel pit) and Medium (boss view) checked for the boulders and the grass. Each grass tuft now has fewer triangles than before but covers more of the screen with see-through edges, which costs phones a little more; if Medium feels slower than before, please tell me which phone.
+
+### Round 17: real water, a natural valley floor, and landscaping (owner: do the water and landscaping; make the land more lifelike. Water looked fake and flat, edges wrong, moved wrong)
+
+**Water**
+- **Real reflections** (High, and Medium on computers): the river and ponds now mirror the actual banks, trees, sky and machines, rippled by the surface. Phones on Medium and Low keep a painted reflection, now with an uneven reflected tree line instead of a straight dark band.
+- **Colour:** forest water is tea-brown in the shallows, dark olive deeper and near-black in the deep, instead of the same flat grey-blue everywhere. The shallows are clear enough to see the bed, with sunlight patterns dancing on it.
+- **Edges:** the water used to stop in 1 m steps. Near the camera it's now worked out every half metre against the ground as it's drawn, so the shoreline curves exactly where the water meets the bank, with small waves lapping and foam along it. Grass gives way to wet mud and pebbles for a metre or two from the water.
+- **Movement:** dirt dropped into water throws up muddy spray and sends rings across it; machines driving through push a bow wave, throw spray to the sides and leave a wake; a machine sitting in water sends out small rings.
+
+**The land**
+- **Wild plants**, assembled from photographed fern fronds, leaves and flowers (Poly Haven, CC0): ferns on the forest floor, leafy bushes along the forest edges, patches of dandelions, yellow celandine and pink wood sorrel in the meadows, and the odd nettle or dock. They grow back in the same places every time and are gone where the ground has been dug or driven.
+- **Pebbles** (small copies of the scanned boulders) along the banks, in the shallows and on bare ground.
+- **Turf isn't flat any more:** low hummocks a few centimetres high (only how it looks; machines drive on the same ground as before).
+
+**Landscaping (new, boss view, crew on):** the LANDSCAPE order, then tap a spot. Three groundskeepers walk out from the yard and:
+1. **Finish grade:** rake a circle 16 m across smooth. Soil moves from the bumps into the dips, so none is lost or added.
+2. **Seed:** walk it scattering grass seed. The bare soil greens over and turns back into meadow in about a minute and a half of game time. Digging into it, burying it or flooding it stops the grass there.
+3. **Plant:** kneel and plant three saplings (real trees that grow to full size over five minutes and can be knocked down like any other), five bushes and seven clumps of flowers.
+The job pays $500. The crew list shows the grounds crew (RAKING, SEEDING, PLANTING 6/15); STOP JOB stops it. Everything planted and seeded saves.
+
+**Tested:** all 31 automatic checks pass (28 old, 3 new). The new check makes a rough patch of dumped dirt near the yard and orders it landscaped. It got about 60% smoother with exactly the same amount of soil, was seeded and planted with 3 saplings and 12 bushes and flowers, and paid $500 after about two and a half minutes of game time. Two minutes later the whole seeded patch was meadow again. The reload check now also covers planted trees and plants. Screenshots on High checked the river (reflections, shoreline, rings from dropped dirt), the meadow and forest edge (plants, pebbles) and a landscaping job. On a phone-sized screen the LANDSCAPE button fits in the order row. Not measured: the frame rate. The mirror reflection draws the scene a second time (smaller), so High costs more than before; if it stutters, Medium on a phone skips it.
