@@ -315,3 +315,13 @@ The owner chose "boss mode": you run the crew and give orders, and jump into a m
 - **Worn paint instead:** every machine's paint and steel now carries detail from a photographed painted-metal sheet (Poly Haven, CC0): fine scratches, small chips and streaks in the colour, and shine that varies across each panel. It's projected from three sides so the scratches are the same size on every part, and it works with the existing mud, grime and damage.
 
 **Tested:** all 29 automatic checks pass. Close-up phone screenshots of the excavator and loader checked.
+
+### Round 15: trunks, the far forest, and natural colours (owner: do the trunks and far forest next)
+
+- **Bug found:** the trunks never showed the photographed bark from round 12. They used a copy of the bark texture made before the photo arrived, and only the original got the photo. Road layers and concrete forms had the same problem. Copies now get the photo too.
+- **Bark:** a photographed conifer bark (Poly Haven, CC0) with its bump map, so the grooves and ridges catch the light.
+- **Trunks:** no longer perfectly straight cones. Each one flares out into roots at the foot (in lobes, like real roots), leans slightly and has a few bulges, all different from tree to tree.
+- **Far forest:** the trees beyond the work area were two flat pictures crossed in an X, which looked like thin crosses from the boss view above. Each now also has a six-sided cone of needle pictures round it, so the crown looks solid from any angle, and every tree is a slightly different green.
+- **Colours from above:** the grass photo is a pale late-summer lawn, several times brighter than the old drawn grass, so from the boss view the meadows looked washed-out yellow. The gravel pit looked like snow. Both photos are now colour-corrected to a natural meadow green and a brownish crushed-gravel grey.
+
+**Tested:** all 29 automatic checks pass. Screenshots from above checked for the meadow, the yard and the gravel pit.

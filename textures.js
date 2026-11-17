@@ -285,7 +285,7 @@ export function makeTextures(quality) {
     macro: grey(256, 4, 91, 5),
     rock: canvasTex(rock(256)[0]), bark: canvasTex(bark(128)[0]), needles: canvasTex(needles(256)[0]),
     water: normalTex(256, 8, 101, 9),
-    wear: canvasTex(grey1(), false),
+    wear: canvasTex(grey1(), false), barkN: canvasTex(flatN(), false),
     clouds: clouds(512), puff: puff(64), stripes: stripes(), tread: tread(), foliage: foliage(quality === 'low' ? 256 : 512),
   };
   photos(T, S);
@@ -294,12 +294,20 @@ export function makeTextures(quality) {
 // Photographed ground, bark and rock (free CC0 textures from Poly Haven, kept in assets/). The drawn textures above are
 // used until the photos arrive, and stay if a photo can't be loaded.
 // a flat mid-grey stand-in (the wear map's 'no change' colour) until the photo loads
+function flatN() { const [c, g] = canvas(4); g.fillStyle = 'rgb(128,128,255)'; g.fillRect(0, 0, 4, 4); return c; }
 function grey1() { const [c, g] = canvas(4); g.fillStyle = 'rgb(112,58,128)'; g.fillRect(0, 0, 4, 4); return c; }
 function photos(T, S) {
-  const swap = (tex, url) => { const img = new Image(); img.onload = () => { tex.image = img; tex.needsUpdate = true; }; img.src = url; };
+  // copies made with clone() (trunks with their own tiling, road layers...) get the photo too, whenever they were made
+  const swap = (tex, url) => {
+    const copies = [], cl = tex.clone.bind(tex);
+    tex.clone = () => { const c = cl(); if (tex.photo) { c.image = tex.photo; c.needsUpdate = true; } copies.push(c); return c; };
+    const img = new Image();
+    img.onload = () => { tex.photo = img; for (const t of [tex, ...copies]) { t.image = img; t.needsUpdate = true; } };
+    img.src = url;
+  };
   swap(T.grass, 'assets/grass.jpg'); swap(T.dirt, 'assets/dirt.jpg'); swap(T.gravel, 'assets/gravel.jpg');
   swap(T.wear, 'assets/wear.jpg');   // worn painted metal for the machines (Poly Haven green_metal_rust, CC0)
-  swap(T.bark, 'assets/bark.jpg'); swap(T.rock, 'assets/rock.jpg');
+  swap(T.bark, 'assets/bark.jpg'); swap(T.barkN, 'assets/bark_n.jpg');   // conifer bark and its bumps (Poly Haven chinese_cedar_bark) swap(T.rock, 'assets/rock.jpg');
   // tree branches, the whole-spruce cards and leaf clumps, built from photographed fir twigs and leaves (same layout)
   swap(T.foliage, 'assets/foliage.png');
   // the bumps: grass, soil and gravel height maps packed in red, green and blue
