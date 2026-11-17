@@ -135,6 +135,24 @@ function carve(g, d, bed, r, wide = 1) {
 }
 let noiseFn = null;
 const MARSH_LEVEL = { v: 0 };
+// The shape of the land before the rivers cut through it (used inside the map and beyond its edge). Version 1 is the
+// gentle valley of rounds 4-18, kept for valleys saved before round 18 (their dug ground is measured against it);
+// new valleys get version 2: open, gentle country in places and hills elsewhere, ridges with crests, small steep
+// stony knolls, hollows, and rises and dips everywhere. Only noise from the world's seed: no random draws.
+let GEN = 2;
+function landH(x, z, d) {
+  const nf = noiseFn, amp = clamp(d / 30, .3, 1);
+  let g = 13.5 + (N - x) * .012 + (N - z) * .004;
+  if (GEN < 2) return g + nf(x / 55, z / 55, 4) * 8 * amp + nf(x / 13 + 50, z / 13, 2) * 1.2;
+  const hilly = smooth(-.25, .3, nf(x / 120 + 31, z / 120 - 17, 2));
+  g += nf(x / 55, z / 55, 4) * (6 + 7 * hilly) * amp;
+  const rg = 1 - Math.abs(nf(x / 42 + 100, z / 42 - 40, 3)); g += rg * rg * rg * (2 + 5 * hilly) * amp;
+  const kn = knollAt(x, z); if (kn > 0) g += kn * 22 * amp * (.4 + hilly);
+  const ho = nf(x / 26 - 70, z / 26 + 30, 2); if (ho < -.35) g -= (-.35 - ho) * 9 * amp;
+  g += nf(x / 13 + 50, z / 13, 2) * (1 + hilly) + nf(x / 4.5 - 9, z / 4.5 + 3, 1) * .3;
+  return g;
+}
+const knollAt = (x, z) => { const v = noiseFn(x / 17 + 300, z / 17 - 80, 2) - .3; return v > 0 ? Math.pow(v, 1.5) : 0; };
 function generate(sd, settle) {
   const nz = makeNoise(sd), rnd = mulberry32(sd * 7 + 3);
   noiseFn = nz;
@@ -155,8 +173,8 @@ function generate(sd, settle) {
   for (let k = 0; k < NN; k++) if (RD[k] > 1e8) RD[k] = 60;
   for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
     const k = j * N + i, d = RD[k];
-    const amp = clamp(d / 30, .3, 1);
-    let g = 13.5 + (N - i) * .012 + (N - j) * .004 + nz(i / 55, j / 55, 4) * 8 * amp + nz(i / 13 + 50, j / 13, 2) * 1.2;
+    let g = landH(i, j, d);
+    if (GEN >= 2 && knollAt(i, j) > .06 && d > 20) M[k] = 2;   // the stony tops of the knolls
     if (rid[k] >= 0) g = carve(g, d, rbed[k], RIVERS[rid[k]]);
     let h = g;
     const base = h;
@@ -1239,7 +1257,7 @@ const ringLand = new THREE.Mesh(rGeo, terrainMat); ringLand.receiveShadow = true
 const ringWater = new THREE.Mesh(rwGeo, waterMat); ringWater.frustumCulled = false; ringWater.renderOrder = 2; scene.add(ringWater);
 function farH(x, z, R) {
   const rv = riverAt(x, z), d = rv.d, amp = clamp(d / 30, .3, 1);
-  let h = 13.5 + (N - x) * .012 + (N - z) * .004 + noiseFn(x / 55, z / 55, 4) * 8 * amp + noiseFn(x / 13 + 50, z / 13, 2) * 1.2;
+  let h = landH(x, z, d);
   h += smooth(80, 900, R) * (16 + noiseFn(x / 230 + 9, z / 230 - 4, 4) * 60);
   h += smooth(900, 3000, R) * (90 + noiseFn(x / 900 - 3, z / 900 + 5, 4) * 420);
   if (rv.r) h = carve(h, d, rv.bed, rv.r, 1 + R * .003);
@@ -1316,7 +1334,7 @@ const barkMat = new THREE.MeshStandardMaterial({ map: barkTex, normalMap: barkNT
 folMat.onBeforeCompile = sh => leafy(sh, false); folMat.customProgramCacheKey = () => 'gw-fol';
 barkMat.onBeforeCompile = sh => leafy(sh, true); barkMat.customProgramCacheKey = () => 'gw-bark';
 // branches per tree by graphics setting (whorls on a spruce, leaf clusters on a broadleaf)
-const TD = { high: [16, 90], medium: [12, 64], low: [9, 44] }[quality];
+const TD = { high: [15, 90], medium: [11, 60], low: [9, 40] }[quality];
 const TREE_GEOS = [MOD.spruceGeo(1, 12, TD[0]), MOD.spruceGeo(2, 14.5, TD[0]), MOD.spruceGeo(3, 16.5, TD[0]), MOD.leafyGeo(1, 10, TD[1]), MOD.leafyGeo(2, 12, TD[1])];
 const TREE_H = [12, 14.5, 16.5, 10, 12];
 // trees in the valley thin out (a dithered fade) when they stand between the camera and the machine you're watching
@@ -3519,7 +3537,7 @@ function saveData() {
   if (!machines.length) return null;
   {
     const data = {
-      v: 3, seed, t: Date.now(), active, stats, goal: { i: goal.i, marsh0: goal.marsh0 }, contract: contract.i, goalJob: goal.job ? jobs.indexOf(goal.job) : -1,
+      v: 3, gen: GEN, seed, t: Date.now(), active, stats, goal: { i: goal.i, marsh0: goal.marsh0 }, contract: contract.i, goalJob: goal.job ? jobs.indexOf(goal.job) : -1,
       H: b64(H), W: b64(W), M: b64(M), D: b64(D),
       gone: trees.map((t, i) => t.st === 3 ? i : -1).filter(i => i >= 0),
       logs: trees.map((t, i) => t.st === 1 || t.st === 2 ? [i, +t.x.toFixed(2), +t.z.toFixed(2), +t.dx.toFixed(3), +t.dz.toFixed(3)] : null).filter(Boolean),
@@ -3548,7 +3566,7 @@ function load() {
   try { data = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch (e) { data = null; }
   if (!data || data.v !== 3) return false;
   try {
-    seed = data.seed;
+    seed = data.seed; GEN = data.gen || 1;   // a valley keeps the land shape it was made with
     generate(seed, 'relax');
     H.set(unb64(data.H, Float32Array)); W.set(unb64(data.W, Float32Array));
     M.set(unb64(data.M, Uint8Array)); D.set(unb64(data.D, Uint8Array));

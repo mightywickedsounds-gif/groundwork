@@ -891,15 +891,21 @@ export function spruceGeo(seed, h = 13, detail = 14) {
       const P0 = [dx * .06, y0, dz * .06];
       const m = len * .55, P1 = [dx * m, y0 - m * Math.sin(sag), dz * m];
       const P2 = [dx * len, P1[1] - (len - m) * Math.sin(sag - lift), dz * len];
-      const w0 = len * .08, w1 = len * .3, w2 = len * .2;
+      const w0 = len * .09, w1 = len * .35, w2 = len * .24;
       const dense = R() < .5, v0 = dense ? 0 : .5, v1 = dense ? .5 : 1;
       const cb = .38 + t * .25, cm = Math.min(1, cb + .3), ce = Math.min(1, cb + .5);
-      // flat card (across the branch) and on-edge card (up and down), each in two lengths
-      for (const [ax, ay, az, k] of [[sx, 0, sz, 1], [0, 1, 0, .62]]) {
+      // flat card (across the branch) and on-edge card (up and down), each bent in two (High). Medium: straight
+      // cards; Low: the flat card only (phones)
+      for (const [ax, ay, az, k] of (detail >= 11 ? [[sx, 0, sz, 1], [0, 1, 0, .45]] : [[sx, 0, sz, 1]])) {
         const q = (P, w) => [[P[0] - ax * w * k, P[1] - ay * w * k, P[2] - az * w * k], [P[0] + ax * w * k, P[1] + ay * w * k, P[2] + az * w * k]];
         const [a0, b0] = q(P0, w0), [a1, b1] = q(P1, w1), [a2, b2] = q(P2, w2);
-        B.quad([a0, a1, b1, b0], [[0, v0], [.27, v0], [.27, v1], [0, v1]], [outN(a0[0], a0[1], a0[2], t), outN(a1[0], a1[1], a1[2], t), outN(b1[0], b1[1], b1[2], t), outN(b0[0], b0[1], b0[2], t)], [cb, cm, cm, cb]);
-        B.quad([a1, a2, b2, b1], [[.27, v0], [.5, v0], [.5, v1], [.27, v1]], [outN(a1[0], a1[1], a1[2], t), outN(a2[0], a2[1], a2[2], t), outN(b2[0], b2[1], b2[2], t), outN(b1[0], b1[1], b1[2], t)], [cm, ce, ce, cm]);
+        if (detail >= 14) {
+          B.quad([a0, a1, b1, b0], [[0, v0], [.27, v0], [.27, v1], [0, v1]], [outN(a0[0], a0[1], a0[2], t), outN(a1[0], a1[1], a1[2], t), outN(b1[0], b1[1], b1[2], t), outN(b0[0], b0[1], b0[2], t)], [cb, cm, cm, cb]);
+          B.quad([a1, a2, b2, b1], [[.27, v0], [.5, v0], [.5, v1], [.27, v1]], [outN(a1[0], a1[1], a1[2], t), outN(a2[0], a2[1], a2[2], t), outN(b2[0], b2[1], b2[2], t), outN(b1[0], b1[1], b1[2], t)], [cm, ce, ce, cm]);
+        } else {
+          const [c2, d2] = q(P2, w1 * .85);
+          B.quad([a0, c2, d2, b0], [[0, v0], [.5, v0], [.5, v1], [0, v1]], [outN(a0[0], a0[1], a0[2], t), outN(c2[0], c2[1], c2[2], t), outN(d2[0], d2[1], d2[2], t), outN(b0[0], b0[1], b0[2], t)], [cb, ce, ce, cb]);
+        }
       }
     }
   }
