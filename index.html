@@ -134,6 +134,12 @@
     body.boss #orders button { flex:1; min-width:0; padding:12px 6px; font-size:12px; letter-spacing:.06em; }
     body.boss #orders button.quiet { flex:.6; font-size:11px; }
     body.boss #hint { bottom:auto; top:45%; }
+    /* driving, upright: the buttons on top, money and contract under them, the map below that; messages lower down */
+    body:not(.boss) #topr { flex-wrap:wrap; justify-content:flex-end; width:200px; gap:2px 6px; }
+    body:not(.boss) #score { order:2; width:100%; }
+    body:not(.boss) #obj { white-space:normal; flex-wrap:wrap; justify-content:flex-end; }
+    body.touch:not(.boss) #minimap { top:calc(max(14px, env(safe-area-inset-top)) + 128px); width:104px; height:104px; }
+    #toast { top:34%; }
   }
 
   /* touch controls */
@@ -265,6 +271,6 @@
 
 <div id="loading">GROUNDWORK</div>
 
-<script type="module" src="game.js?v=10"></script>
+<script type="module" src="game.js?v=11"></script>
 </body>
 </html>
