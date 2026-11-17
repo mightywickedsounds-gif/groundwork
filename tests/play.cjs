@@ -28,7 +28,7 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
     const f = u.pathname === '/' ? 'index.html' : u.pathname.slice(1);
     const fp = path.join(ROOT, f);
     if (!fs.existsSync(fp)) return r.fulfill({ status: 404, body: '' });
-    r.fulfill({ status: 200, contentType: f.endsWith('.js') ? 'text/javascript' : 'text/html', body: fs.readFileSync(fp) });
+    r.fulfill({ status: 200, contentType: f.endsWith('.js') ? 'text/javascript' : f.endsWith('.jpg') ? 'image/jpeg' : f.endsWith('.png') ? 'image/png' : 'text/html', body: fs.readFileSync(fp) });
   });
   await p.goto('http://game.test/');
   await p.waitForFunction(() => window.GW, null, { timeout: 240000 });
@@ -270,7 +270,7 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
     const f = u.pathname === '/' ? 'index.html' : u.pathname.slice(1);
     const fp = path.join(ROOT, f);
     if (!fs.existsSync(fp)) return r.fulfill({ status: 404, body: '' });
-    r.fulfill({ status: 200, contentType: f.endsWith('.js') ? 'text/javascript' : 'text/html', body: fs.readFileSync(fp) });
+    r.fulfill({ status: 200, contentType: f.endsWith('.js') ? 'text/javascript' : f.endsWith('.jpg') ? 'image/jpeg' : f.endsWith('.png') ? 'image/png' : 'text/html', body: fs.readFileSync(fp) });
   });
   await q.goto('http://game.test/');
   await q.waitForFunction(() => window.GW, null, { timeout: 90000 });
