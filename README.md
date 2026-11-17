@@ -308,3 +308,10 @@ The owner chose "boss mode": you run the crew and give orders, and jump into a m
 - Real 3D tree models from the same library are millions of triangles each (made for films), far too heavy for a phone forest, which is why the photos go on the game's own light tree shapes.
 
 **Tested:** all 29 automatic checks pass. Forest screenshots checked from the driver's view and the boss view.
+
+### Round 14: worn paint on the machines; looking for real machine models (owner: find model packs and do it)
+
+- **Machine models:** I searched for ready-made construction machine models. Good free ones that only ask for a credit exist on Sketchfab (a matching realistic excavator, wheel loader and bulldozer), but downloading needs a Sketchfab account key. The key that was saved was rejected, and the second form was closed, so no outside models were downloaded. Paid packs exist too (for example a $55 pack on CGTrader), but I can't buy anything. The machines stay built in code. If you want the Sketchfab ones later, the only step for you is a valid key from Sketchfab Settings, Password & API.
+- **Worn paint instead:** every machine's paint and steel now carries detail from a photographed painted-metal sheet (Poly Haven, CC0): fine scratches, small chips and streaks in the colour, and shine that varies across each panel. It's projected from three sides so the scratches are the same size on every part, and it works with the existing mud, grime and damage.
+
+**Tested:** all 29 automatic checks pass. Close-up phone screenshots of the excavator and loader checked.
