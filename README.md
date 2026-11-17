@@ -325,3 +325,12 @@ The owner chose "boss mode": you run the crew and give orders, and jump into a m
 - **Colours from above:** the grass photo is a pale late-summer lawn, several times brighter than the old drawn grass, so from the boss view the meadows looked washed-out yellow. The gravel pit looked like snow. Both photos are now colour-corrected to a natural meadow green and a brownish crushed-gravel grey.
 
 **Tested:** all 29 automatic checks pass. Screenshots from above checked for the meadow, the yard and the gravel pit.
+
+### Round 16: real grass and rocks (owner: do the grass and rocks next)
+
+- **Bug found:** round 15 accidentally pushed the line that loads the rock photo into a code comment, so the boulders (and the rock armour on crossings) had gone back to the old drawn rock texture. Fixed.
+- **Boulders:** the round lumps made in code are replaced by seven real scanned boulders (Poly Haven's mossy forest rocks, CC0): cracks, flat faces, lichen and moss, with a bump map so the light picks out the detail. The scans were tens of thousands of triangles in all, so each was simplified to 1,000 triangles for phones; the photo and bump map keep the fine detail. Each boulder in the valley uses one of the seven shapes, in its own size and turn. They sit in the ground, get shoved and roll when machines hit them, and save exactly as before.
+- **Grass:** the tufts were 14 thin coloured triangles each. Each tuft is now three crossed cards showing a **photographed grass clump** (five whole clumps and three small grass plants, Poly Haven CC0), and along rivers and creeks tall grasses and reed clumps from the same photos. The photos were colour-matched to the meadow ground so they blend in instead of looking like separate patches. They still sway in the wind, thin out where the ground is dug or driven, and turn yellower in dry patches. Low graphics still has no grass tufts, as before.
+- The tools that cut out the grass photos and simplify the rocks are in `tools/` (`tufts.py`, `rocks.mjs`), like the tree one.
+
+**Tested:** all 28 automatic checks pass (earlier rounds said 29; the test file prints 28). Screenshots on High (from the driver's view, at the gravel pit) and Medium (boss view) checked for the boulders and the grass. Each grass tuft now has fewer triangles than before but covers more of the screen with see-through edges, which costs phones a little more; if Medium feels slower than before, please tell me which phone.

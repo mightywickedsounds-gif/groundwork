@@ -1,9 +1,9 @@
 // 3D models for Groundwork: the four machines (with moving track chains, tyres, hydraulic rams and cabs you can sit in),
-// trees, boulders and grass. Everything is built from code.
+// trees, boulders and grass. Built from code, apart from the scanned boulders (parseRocks).
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { labelTexture } from './textures.js?v=15';
+import { labelTexture } from './textures.js?v=16';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const Y = V(0, 1, 0), Z = V(0, 0, 1);
@@ -779,28 +779,48 @@ export function rockGeo(seed) {
   g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   return g;
 }
-export function tuftGeo() {
-  // a tuft of fine curved blades: dark at the root, the ground's own green higher up, a few dry straws
-  const pos = [], col = [], nor = [];
-  let s = 1;
-  const r = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
-  for (let b = 0; b < 14; b++) {
-    const a = r() * Math.PI * 2, ox = (r() - .5) * .42, oz = (r() - .5) * .42, h = .13 + r() * r() * .3, w = .009 + r() * .008;
-    const lean = .05 + r() * .16, lx = Math.cos(a) * lean, lz = Math.sin(a) * lean, px = -Math.sin(a) * w, pz = Math.cos(a) * w;
-    const mx = ox + lx * .35, mz = oz + lz * .35, my = h * .55, tx = ox + lx, tz = oz + lz;
-    pos.push(ox - px, 0, oz - pz, ox + px, 0, oz + pz, mx + px * .8, my, mz + pz * .8,
-      ox - px, 0, oz - pz, mx + px * .8, my, mz + pz * .8, mx - px * .8, my, mz - pz * .8,
-      mx - px * .8, my, mz - pz * .8, mx + px * .8, my, mz + pz * .8, tx, h, tz);
-    const k = .75 + r() * .5, dry = r() < .16;
-    const c0 = [.05 * k, .085 * k, .028 * k], c1 = dry ? [.24 * k, .23 * k, .1 * k] : [.13 * k, .21 * k, .06 * k], c2 = dry ? [.4 * k, .38 * k, .18 * k] : [.22 * k, .33 * k, .1 * k];
-    col.push(...c0, ...c0, ...c1, ...c0, ...c1, ...c1, ...c1, ...c1, ...c2);
-    const nl = Math.hypot(lx * 1.5, 1, lz * 1.5);
-    for (let i = 0; i < 9; i++) nor.push(lx * 1.5 / nl, 1 / nl, lz * 1.5 / nl);
+// Scanned boulders (assets/rocks.bin, made by tools/rocks.mjs): unit rocks standing on y = 0 with a horizontal
+// radius of 1. Returned slightly sunk and scaled to the same footprint as rockGeo, so placement and pushing match.
+export function parseRocks(buf) {
+  const u = new Uint32Array(buf, 0, 1), n = u[0], head = new Uint32Array(buf, 4, n * 2), out = [];
+  let o = 4 + n * 8;
+  for (let i = 0; i < n; i++) {
+    const nv = head[i * 2], ni = head[i * 2 + 1];
+    const P = new Float32Array(buf.slice(o, o + nv * 12)); o += nv * 12;
+    const Nn = new Float32Array(buf.slice(o, o + nv * 12)); o += nv * 12;
+    const U = new Float32Array(buf.slice(o, o + nv * 8)); o += nv * 8;
+    const I = new Uint16Array(buf.slice(o, o + ni * 2)); o += ni * 2; o = (o + 3) & ~3;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(P, 3)); g.setAttribute('normal', new THREE.BufferAttribute(Nn, 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(U, 2)); g.setIndex(new THREE.BufferAttribute(I, 1));
+    g.scale(1.1, 1.1, 1.1).translate(0, -.08, 0); g.computeBoundingSphere();
+    out.push(g);
   }
-  const g = new THREE.BufferGeometry();
+  return out;
+}
+// A grass tuft: three crossed cards (60 degrees apart), each showing one photographed clump from the tuft sheet;
+// game.js picks the clump per tuft. Each card bends a little as it rises. Normals lean up, so both faces light
+// like the meadow round them.
+export function tuftGeo() {
+  const pos = [], nor = [], uv = [], idx = [];
+  const W = .31, Hh = .31;
+  for (let c = 0; c < 3; c++) {
+    const a = c / 3 * Math.PI + (c - 1) * .12, dx = Math.cos(a), dz = Math.sin(a), nx = -dz, nz = dx, bend = c === 1 ? -1 : 1;
+    const b = pos.length / 3;
+    for (let r = 0; r < 3; r++) {
+      const t = r / 2, y = t * Hh, off = bend * (t * t) * .08;
+      for (const sx of [-1, 1]) {
+        pos.push(dx * W * sx + nx * off, y, dz * W * sx + nz * off);
+        const l = Math.hypot(nx * .35 * bend, 1, nz * .35 * bend); nor.push(nx * .35 * bend / l, 1 / l, nz * .35 * bend / l);
+        uv.push(sx < 0 ? 0 : 1, t);
+      }
+    }
+    for (let r = 0; r < 2; r++) { const q = b + r * 2; idx.push(q, q + 1, q + 3, q, q + 3, q + 2); }
+  }
+  const g = new THREE.BufferGeometry(); g.setIndex(idx);
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
-  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   return g;
 }
 export function farTreeGeo() {
