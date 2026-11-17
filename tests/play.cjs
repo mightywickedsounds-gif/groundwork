@@ -35,6 +35,11 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
   await p.click('#helpGo');
   await p.evaluate(() => GW.pause(true));
 
+  // the game starts in the boss view, looking down on the valley with the crew on (orders are checked further down)
+  const bv = await p.evaluate(() => ({ start: GW.boss, crew: GW.crew.on, list: document.getElementById('crewList').offsetHeight > 0 }));
+  check('the game starts in the boss view with the crew working', bv.start && bv.crew && bv.list, JSON.stringify(bv));
+  await p.evaluate(() => { GW.setCrew(false); GW.select(0); });
+
   // river
   const river = await p.evaluate(() => { let wet = 0, vol = 0; for (let k = 0; k < GW.W.length; k++) if (GW.W[k] > .05) { wet++; vol += GW.W[k]; } let east = 0; for (let j = 0; j < 256; j++) east = Math.max(east, GW.W[j * 256 + 250]); return { wet, vol: Math.round(vol), east: +east.toFixed(2) }; });
   check('river has water and reaches the east side', river.wet > 500 && river.east > .2, JSON.stringify(river));
@@ -205,6 +210,28 @@ const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + 
 
   const off = await p.evaluate(() => { GW.setCrew(false); GW.step(5); return { ai: GW.machines.filter(m => m.ai && !m.service).length, workers: GW.machines.filter((m, i) => i !== GW.active && !m.service && m.worker.visible).length }; });
   check('turning the crew off empties the cabs', off.ai === 0 && off.workers === 0, JSON.stringify(off));
+
+  // boss view: an order at a creek starts a crossing; tapping a machine gets you in, the BOSS button gets you out
+  const bo = await p.evaluate(() => {
+    GW.setCrew(true); GW.setBoss(true);
+    const r = {}, at = GW.riverSpot(2);
+    r.order = GW.crew.orderAt(at[0], at[1]) || 'started';
+    r.kind = GW.crew.site && GW.crew.site.kind;
+    GW.step(30 * 60);
+    r.doing = GW.machines.filter(m => GW.crew.isCrew(m)).map(m => GW.crew.doing(m));
+    GW.crew.cancel(); r.cancelled = !GW.crew.site;
+    const m = GW.machines[0]; GW.bossCam.x = m.x; GW.bossCam.z = m.z; GW.draw(40);
+    const v = m.group.position.clone().project(GW.camera);
+    r.tapAt = [(v.x + 1) / 2 * innerWidth, (1 - v.y) / 2 * innerHeight];
+    return r;
+  });
+  await p.mouse.click(bo.tapAt[0], bo.tapAt[1]);
+  bo.afterTap = await p.evaluate(() => ({ boss: GW.boss, drive: GW.machines[GW.active].type }));
+  await p.click('#bossBtn');
+  bo.back = await p.evaluate(() => GW.boss);
+  check('an order at a creek starts a crossing and the crew get going', bo.order === 'started' && !!bo.kind && bo.doing.some(d => !/WAITING|MOVING|OFF/.test(d)), JSON.stringify(bo));
+  check('tapping a machine drives it; BOSS goes back', bo.afterTap.boss === false && bo.afterTap.drive === 'dozer' && bo.back === true && bo.cancelled, JSON.stringify(bo));
+  await p.evaluate(() => { GW.setCrew(false); GW.select(0); });
 
   // fast water washes a loose heap out of the river
   const ero = await p.evaluate(() => {

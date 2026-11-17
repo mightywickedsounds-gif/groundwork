@@ -13,7 +13,7 @@
 // Every piece of every building is plain data (a list built from the building's size), so a site saves as a few numbers
 // and a string of which pieces are in.
 import * as THREE from 'three';
-import { buildPerson, toolMesh } from './models.js?v=9';
+import { buildPerson, toolMesh } from './models.js?v=10';
 
 export function makePeople(G) {
   const { clamp, angWrap } = G;
@@ -154,11 +154,12 @@ export function makePeople(G) {
 
   // pick a spot in the forest near the yard (or near the last building): fairly flat, dry, a few trees to clear,
   // clear of the yard, roads and other buildings. No random numbers: the same valley picks the same spots.
-  function chooseSite() {
-    const kind = ORDER[sites.length % ORDER.length], K = KINDS[kind];
-    const base = sites.length ? sites[sites.length - 1] : { x: (G.YARD.x0 + G.YARD.x1) / 2, z: (G.YARD.z0 + G.YARD.z1) / 2 };
+  // at: the boss's chosen spot (searched close round it, and open ground is fine)
+  function chooseSite(at, kindAt) {
+    const kind = kindAt || ORDER[sites.length % ORDER.length], K = KINDS[kind];
+    const base = at || (sites.length ? sites[sites.length - 1] : { x: (G.YARD.x0 + G.YARD.x1) / 2, z: (G.YARD.z0 + G.YARD.z1) / 2 });
     let best = null;
-    for (let r = 22; r <= 70; r += 6) for (let a = 0; a < 24; a++) {
+    for (let r = at ? 0 : 22; r <= (at ? 24 : 70); r += at ? 3 : 6) for (let a = 0; a < (r ? 24 : 1); a++) {
       const ang = a / 24 * Math.PI * 2 + r * .1, x = base.x + Math.cos(ang) * r, z = base.z + Math.sin(ang) * r;
       if (x < 22 || z < 22 || x > 234 || z > 234) continue;
       if (G.inYard(x, z, 14)) continue;
@@ -173,8 +174,8 @@ export function makePeople(G) {
       if (wet > .02 || hi - lo > 2.4) continue;
       const S = { x, z, yaw, kind }, R = clearR(S);
       let n = 0; for (const t of G.trees) if (t.st === 0 && Math.abs(t.x - x) < R && Math.abs(t.z - z) < R && Math.hypot(t.x - x, t.z - z) < R) n++;
-      if (n < 2) continue;
-      const score = (hi - lo) * 3 + Math.abs(n - 9) * .25 + r / 25;
+      if (n < 2 && !at) continue;
+      const score = at ? (hi - lo) * 2 + r / 3 + n * .1 : (hi - lo) * 3 + Math.abs(n - 9) * .25 + r / 25;
       if (!best || score < best.score) best = { x, z, yaw, kind, score };
     }
     if (!best) return null;
@@ -719,10 +720,11 @@ export function makePeople(G) {
   // ------------------------------------------------------------ the building crew's day
   const crew = [];
   let on = false, nextT = 0;
-  function begin() {
-    const S = chooseSite(); if (!S) return;
+  function begin(at, kind) {
+    const S = chooseSite(at, kind); if (!S) return false;
     sites.push(S); cur = S; siteMeshes(S);
-    G.toast('Crew: clearing a building site', 2600);
+    G.toast(S.kind === 'shed' ? 'Building a shed' : S.kind === 'workshop' ? 'Building a workshop' : 'Building a cabin', 2600);
+    return true;
   }
   function setPhase(S, ph) {
     S.phase = ph; S.t = 0;
@@ -755,7 +757,7 @@ export function makePeople(G) {
       S.ladders.visible = stageOpen(S, 7) && !stageOpen(S, 11);
       if (allIn(S)) { setPhase(S, 'land'); S.ladders.visible = false; S.stacks.visible = false; G.toast('Crew: landscaping', 2000); }
     } else if (S.phase === 'land') {
-      if (S.t > 45) { setPhase(S, 'done'); cur = null; nextT = 20; G.toast('Building finished', 3000); G.chime(); }
+      if (S.t > 45) { setPhase(S, 'done'); cur = null; nextT = 20; G.built ? G.built(S) : (G.toast('Building finished', 3000), G.chime()); }
     }
   }
   function update(dt) {
@@ -769,7 +771,7 @@ export function makePeople(G) {
     if (logTruck) { const c = logJob(dt, cur || sites[sites.length - 1]); if (logTruck) logTruck.ai = c; }
     if (flatbed) { const S = cur || sites[sites.length - 1]; const c = deliverJob(dt, S); if (flatbed) flatbed.ai = c; }
     if (!on) { for (const p of crew) { p.f.root.visible = false; G.saw(p.id, 0, 0, 0, false, false); } return; }
-    if (!cur) { nextT -= dt; if (nextT <= 0) { nextT = 30; if (sites.length < 12) begin(); } }
+    if (!cur && !G.boss()) { nextT -= dt; if (nextT <= 0) { nextT = 30; if (sites.length < 12) begin(); } }   // the boss picks where
     const S = cur;
     for (const p of crew) {
       p.f.root.visible = true;
@@ -809,6 +811,13 @@ export function makePeople(G) {
     get on() { return on; }, get sites() { return sites; }, get site() { return cur; }, get people() { return crew; }, get mech() { return mech; },
     get logTruck() { return logTruck; }, get flatbed() { return flatbed; },
     begin,
+    // the boss's order: a building near this spot. Returns '' or why not
+    orderAt(x, z, kind) { if (!on) return 'CREW IS OFF'; if (cur) return 'BUILDERS ARE BUSY'; return begin({ x, z }, kind) ? '' : 'NO ROOM HERE'; },
+    doing() {
+      const S = cur; if (!on) return 'OFF'; if (!S) return 'WAITING';
+      const n = S.state ? [...S.state].filter(v => v === 2).length : 0;
+      return { clear: 'FELLING TREES', haul: 'HAULING LOGS', grade: 'LEVELLING PAD', frame: 'FRAMING ' + (S.list ? Math.round(100 * n / S.list.length) : 0) + '%', land: 'LANDSCAPING' }[S.phase] || 'WAITING';
+    },
     // for tests: clear the current site at once and go straight to framing
     toFrame() { const S = cur; if (!S) return; for (const i of siteTrees(S)) G.treeGone(G.trees[i]); S.phase = 'grade'; S.t = 1e9; S.delivered = true; S.stacks.visible = true; phase(S, 0); },
     skip() { if (cur) { if (cur.phase === 'frame') for (const q of cur.list) if (cur.state[q.i] !== 2) placed(cur, q); cur.t = 1e9; } },

@@ -42,7 +42,7 @@ export function makeCrew(G) {
   }
   // a crossing near where the machine stands, heading roughly the way it faces: the narrowest line that keeps clear of
   // the player's machine
-  function siteAt(pm) {
+  function siteAt(pm, avoid = true) {
     // straight across: towards the middle of the water near the machine (on a river that points across the channel)
     let cx = 0, cz = 0, n = 0;
     for (let dz = -16; dz <= 16; dz += 2) for (let dx = -16; dx <= 16; dx += 2) {
@@ -60,7 +60,7 @@ export function makeCrew(G) {
         // the approach behind the line must be dry land
         let wet = false; for (let d = -30; d < sp[0] - 1; d += 2) if (G.wAt(x + ux * d, z + uz * d) > .2) wet = true;
         if (wet) continue;
-        const width = sp[1] - sp[0], near = Math.abs(off) < 9 ? 12 : 0;   // keep the line off the player's machine
+        const width = sp[1] - sp[0], near = avoid && Math.abs(off) < 9 ? 12 : 0;   // keep the line off the player's machine
         const score = width + near + Math.abs(off) * .2 + Math.abs(da) * 4;
         if (!best || score < best.score) best = { score, x, z, ux, uz, sp };
       }
@@ -463,6 +463,18 @@ export function makeCrew(G) {
     return c;
   }
 
+  // waiting for orders (boss view, nothing to build): stop, blade up, bed down. Anyone left out on a far-off
+  // site comes back towards the yard
+  function wait(m, st, dt) {
+    const c = ctl(), Y = G.YARD, i = crewMachines().indexOf(m), hx = Y.x0 + 6 + i * 7, hz = Y.z0 + 6;
+    if (Math.hypot(m.x - hx, m.z - hz) > 45 || st.home) {
+      st.home = !travel(m, st, c, hx, hz, 6, .7);
+      unstick(m, st, c, dt);
+    }
+    if (m.type === 'dozer') c.tool = clamp((.35 - m.blade) * 5, -1, 1);
+    if (m.type === 'hauler' && m.tipping) c.act = true;
+    return c;
+  }
   const BRAIN = { dozer, excavator, hauler };
   const state = new Map();
   const stOf = m => { let st = state.get(m); if (!st) { st = { state: 'start', stall: 0, rec: 0, lane: 0, dig: 0, t: 0, wp: 0, tries: 0, sg: 1, tt: 0 }; state.set(m, st); } return st; };
@@ -808,19 +820,21 @@ export function makeCrew(G) {
     if ((d.follow && m.type === d.follow) || (id === 'surface' && P.surface === 'concrete' && m.type === 'mixer')) return followRun(m, st, dt, P, d);
     return park(m, st, dt, P, crewMachines().indexOf(m) + 1);
   }
+  // the machine the player is driving (none in the boss view: the crew drive everything)
+  const playerM = () => G.boss() ? null : G.machines[G.active()];
   function pickLead(P, types) {
-    const player = G.machines[G.active()];
+    const player = playerM();
     for (const t of types) { const m = [...crewMachines(), ...equip].find(q => q.type === t && q !== player && !q.leaving); if (m) return m; }
     return null;
   }
 
   function update(dt) {
-    const player = G.machines[G.active()];
+    const player = playerM();
     for (const m of G.machines) if (!ROLES.includes(m.type) && !m.equip) m.ai = null;
     if (!on) { for (const m of G.machines) m.ai = null; return; }
     gridT -= dt; if (gridT <= 0) { gridT = 2; buildGrid(); }
     coolT -= dt;
-    if (!proj) {
+    if (!proj && player) {
       // the player has stopped at water too deep to drive through: plan a crossing there
       const fx = Math.sin(player.yaw), fz = Math.cos(player.yaw), ford = Math.min(.6, G.SPEC[player.type].ford);
       let deep = 0; for (let d = 3; d <= 10; d += 1.5) deep = Math.max(deep, G.wetAt(player.x + fx * d, player.z + fz * d));
@@ -831,7 +845,7 @@ export function makeCrew(G) {
         const S = siteAt(player);
         if (S) { const h = findHead(S); if (h !== null) begin(plan(S), h); }
       }
-    } else runProject(dt);
+    } else if (proj) runProject(dt);
     site = proj;
     syncEquip(proj);
     for (const m of crewMachines()) {
@@ -841,7 +855,7 @@ export function makeCrew(G) {
         if (proj) unlock(proj, m);
         continue;
       }
-      m.ai = proj ? brain(m, st, dt, proj) : (G.lend && G.lend(m, st, dt)) || convoy(m, st, dt, player);
+      m.ai = proj ? brain(m, st, dt, proj) : (G.lend && G.lend(m, st, dt)) || (player ? convoy(m, st, dt, player) : wait(m, st, dt));
     }
     for (const m of [...equip]) { const st = stOf(m); st.dt = dt; m.ai = m.leaving ? leave(m, st, dt) : proj ? brain(m, st, dt, proj) : leave(m, st, dt); }
   }
@@ -877,6 +891,44 @@ export function makeCrew(G) {
     refresh() { for (const m of G.machines) { const st = state.get(m); if (st && m === G.machines[G.active()]) st.state = 'start'; } },
     get site() { return proj; }, get roads() { return roads; }, get equip() { return equip; },
     stage: () => proj ? stage(proj) : null,
+    // the boss's order: build a crossing at the water nearest this spot. Returns '' or why not
+    orderAt(x, z) {
+      if (!on) return 'CREW IS OFF';
+      if (proj) return 'CREW IS BUSY';
+      // stand on the nearest dry bank, so the line runs across the water from there
+      let bx = x, bz = z;
+      if (G.wAt(x, z) > .05) {
+        let bd = 1e9;
+        for (let r = 2; r <= 30 && bd > 1e8; r += 2) for (let a = 0; a < 24; a++) {
+          const px = x + Math.cos(a / 24 * 6.283) * r, pz = z + Math.sin(a / 24 * 6.283) * r;
+          if (G.wAt(px, pz) < .02 && r < bd) { bd = r; bx = px; bz = pz; }
+        }
+        if (bd > 1e8) return 'TOO FAR FROM THE BANK';
+      }
+      buildGrid();
+      const S = siteAt({ x: bx, z: bz }, false);
+      if (!S) return 'TAP A RIVER OR CREEK';
+      const h = findHead(S); if (h === null) return 'ALREADY CROSSED HERE';
+      begin(plan(S), h); return '';
+    },
+    cancel() { if (!proj) return; proj.done = true; roads.splice(roads.indexOf(proj), 1); W.dispose(proj); proj = null; restart(); syncEquip(null); G.status(''); },
+    // what each crew machine is up to, in a word or two (the boss view's crew list)
+    doing(m) {
+      const st = state.get(m) || {}, s = st.state;
+      if (!on) return 'OFF';
+      if (m === playerM()) return 'YOU';
+      if (m.hp <= 0) return 'BROKEN DOWN';
+      if (!proj) return G.lend && G.people && G.people.site && G.people.site.phase === 'grade' && m.type === 'dozer' ? 'LEVELLING PAD' : st.home ? 'GOING TO YARD' : 'WAITING';
+      const id = stage(proj);
+      if (STG[id] && STG[id].earth) {
+        const W2 = { dozer: { push: 'PUSHING DIRT', back: 'BACKING UP', turn: 'TURNING', go: 'TO LANE' },
+          excavator: { work: m.load.v > .05 ? 'LOADING' : 'DIGGING', go: 'TO PIT' },
+          hauler: { load: 'BEING LOADED', deliver: 'HAULING', dump: 'DUMPING', return: 'RETURNING', toTurn: 'TURNING', turn: 'TURNING', dock: 'BACKING IN' } };
+        return (W2[m.type] || {})[s] || 'MOVING';
+      }
+      return s === 'work' ? TITLE[id](proj).toUpperCase() : s === 'toStart' || s === 'align' || s === 'go' ? 'MOVING IN' : 'STANDING BY';
+    },
+    get title() { return proj ? TITLE[stage(proj)](proj) : ''; },
     buildAt(pm) { buildGrid(); const S = siteAt(pm); if (S) { const h = findHead(S); if (h !== null) begin(plan(S), h); } return proj; },
     findPath: (m, x1, z1) => { buildGrid(); return findPath(m, m.x, m.z, x1, z1); },
     skipStage() { if (proj) nextStage(proj); },
