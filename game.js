@@ -3,12 +3,12 @@
 // browser so nothing ever resets.
 import * as THREE from 'three';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
-import { makeTextures } from './textures.js?v=15';
-import * as MOD from './models.js?v=15';
-import { Sound } from './audio.js?v=15';
-import { makeCrew } from './crew.js?v=15';
-import { makeWorks } from './construct.js?v=15';
-import { makePeople } from './people.js?v=15';
+import { makeTextures } from './textures.js?v=16';
+import * as MOD from './models.js?v=16';
+import { Sound } from './audio.js?v=16';
+import { makeCrew } from './crew.js?v=16';
+import { makeWorks } from './construct.js?v=16';
+import { makePeople } from './people.js?v=16';
 
 const N = 256, NN = N * N;           // 256 x 256 cells, 1 m each
 const SAVE_KEY = 'groundwork.save.v3';   // v1 (the first, smaller valley) is left untouched in the browser
@@ -1288,44 +1288,75 @@ function makeRocks(sd) {
   }
 }
 const rockMat = new THREE.MeshStandardMaterial({ map: T.rock, roughness: .88, metalness: 0 });
-let rockIM = null;
+// scanned mossy boulders (seven shapes, assets/rocks.bin) replace the drawn ones as soon as they load;
+// the drawn shape stays if the file can't be loaded. Rocks take turns between the shapes.
+const boulderMat = new THREE.MeshStandardMaterial({ map: T.boulder, normalMap: T.boulderN, roughness: .9, metalness: 0 });
+let rockIMs = [], rockShapes = null, rocksBuilt = false;
+fetch('assets/rocks.bin').then(r => r.ok ? r.arrayBuffer() : Promise.reject(new Error('rocks.bin')))
+  .then(b => { rockShapes = MOD.parseRocks(b); if (rocksBuilt) buildRocks(); }).catch(() => {});
 function buildRocks() {
-  if (rockIM) scene.remove(rockIM);
-  rockIM = new THREE.InstancedMesh(MOD.rockGeo(3), rockMat, Math.max(1, rocks.length));
-  rockIM.castShadow = true; rockIM.receiveShadow = true; rockIM.frustumCulled = false; scene.add(rockIM);
+  for (const im of rockIMs) scene.remove(im);
+  rocksBuilt = true;
+  const geos = rockShapes || [MOD.rockGeo(3)], mat = rockShapes ? boulderMat : rockMat;
+  rockIMs = geos.map(g => {
+    const im = new THREE.InstancedMesh(g, mat, Math.max(1, Math.ceil(rocks.length / geos.length)));
+    im.castShadow = true; im.receiveShadow = true; im.frustumCulled = false; im.count = 0; scene.add(im);
+    return im;
+  });
   const col = new THREE.Color();
-  rocks.forEach((rk, i) => { col.setRGB(rk.tint, rk.tint * .98, rk.tint * .94); rockIM.setColorAt(i, col); rk.dirty = true; });
+  rocks.forEach((rk, i) => {
+    rk.im = rockIMs[i % geos.length]; rk.slot = Math.floor(i / geos.length); rk.im.count = Math.max(rk.im.count, rk.slot + 1);
+    // the photo already has the stone's colour: only a light variation on top of it
+    const t = rockShapes ? .88 + (rk.tint - .75) * .5 : rk.tint;
+    col.setRGB(t, t * .98, t * .94); rk.im.setColorAt(rk.slot, col); rk.dirty = true;
+  });
   updateRocks(1, true);
 }
 let rockTimer = 0;
 function updateRocks(dt, changed) {
   rockTimer -= dt;
   const refresh = changed && rockTimer <= 0; if (refresh) rockTimer = .4;
-  let any = false;
-  rocks.forEach((rk, i) => {
+  for (const rk of rocks) {
     if (refresh) rk.dirty = true;
-    if (!rk.dirty) return;
-    rk.dirty = false; any = true;
+    if (!rk.dirty || !rk.im) continue;
+    rk.dirty = false;
     rk.y = hAt(rk.x, rk.z) - rk.s * .22;
     _q.setFromEuler(new THREE.Euler(rk.rx, rk.ry, 0, 'YXZ'));
     _m4.compose(_v.set(rk.x, rk.y, rk.z), _q, _s.set(rk.s, rk.s, rk.s));
-    rockIM.setMatrixAt(i, _m4);
-  });
-  if (any) rockIM.instanceMatrix.needsUpdate = true;
+    rk.im.setMatrixAt(rk.slot, _m4); rk.im.instanceMatrix.needsUpdate = true;
+  }
 }
 
-// grass tufts near the camera, swaying in the wind; gone wherever the ground has been dug or driven
-const grassMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: .85 });
+// grass tufts near the camera, swaying in the wind; gone wherever the ground has been dug or driven.
+// Each tuft is three crossed cards showing a photographed clump (assets/tufts.png): one of eight meadow clumps,
+// or (for the tall tufts along the water) one of eight tall grasses and reeds, picked from the tuft's position.
+const grassMat = new THREE.MeshStandardMaterial({ map: T.tufts, alphaTest: .45, alphaToCoverage: true, side: THREE.DoubleSide, roughness: .85 });
 const grassU = { uTime: { value: 0 } };
 grassMat.onBeforeCompile = sh => {
   sh.uniforms.uTime = grassU.uTime;
-  sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;')
+  sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;\nvarying float gV;')
+    .replace('#include <uv_vertex>', `#include <uv_vertex>
+      gV = uv.y;
+      #ifdef USE_INSTANCING
+      {
+        vec4 gO = instanceMatrix * vec4(0., 0., 0., 1.);
+        float gh = fract(sin(dot(gO.xz, vec2(12.9898, 78.233))) * 43758.5453), cell = floor(gh * 7.999);
+        // tall tufts (stretched upwards) use the tall cells along the bottom of the sheet
+        if (length(instanceMatrix[1].xyz) > 1.8 * length(instanceMatrix[0].xyz)) vMapUv = vec2(cell * .125, 0.) + uv * vec2(.125, .5);
+        else vMapUv = vec2(mod(cell, 4.) * .25, cell < 4. ? .75 : .5) + uv * .25;
+      }
+      #endif`)
     .replace('#include <begin_vertex>', `#include <begin_vertex>
       #ifdef USE_INSTANCING
         vec4 gIP = instanceMatrix * vec4(0., 0., 0., 1.);
         float sway = sin(uTime * 1.7 + gIP.x * .35 + gIP.z * .27) + .5 * sin(uTime * 2.9 + gIP.x * .9 - gIP.z * .4);
-        transformed.x += sway * .07 * position.y; transformed.z += sway * .045 * position.y;
+        transformed.x += sway * .12 * position.y * position.y / .31; transformed.z += sway * .08 * position.y * position.y / .31;
       #endif`);
+  sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float gV;')
+    // darker down among the stems, where little light gets in
+    .replace('#include <map_fragment>', '#include <map_fragment>\n diffuseColor.rgb *= mix(.72, 1., smoothstep(0., .4, gV));')
+    // both faces of a card light the same (no flipped normal on the back)
+    .replace('#include <normal_fragment_begin>', THREE.ShaderChunk.normal_fragment_begin.replace('normal *= faceDirection;', ''));
 };
 let grassIM = null, grassAt = null, grassTimer = 0;
 if (Q.grass > 0) {
@@ -1357,8 +1388,8 @@ function updateGrass(dt, me) {
       const patch = vnoise(i * .11 + 3.3, j * .11 - 1.7) + .5 * vnoise(i * .37, j * .37);   // about -.75 .. .75
       if (!bank && patch < -.18 && hz < .55) continue;
       const x = i + hx - .5, z = j + hz - .5, s = (.7 + hashf(i, j + q) * .7) * clamp(1 + patch * .9, .55, 1.7);
-      { const dryp = clamp(vnoise(i * .07 - 9.1, j * .07 + 4.2) * 2.2 + .25, 0, 1), sh = .72 + hashf(j * 1.3 + q, i * .7) * .56;
-        _gc.setRGB(sh * (1 + dryp * .55), sh * (1 + dryp * .22), sh * (1 - dryp * .3)); grassIM.setColorAt(n, _gc); }
+      { const dryp = clamp(vnoise(i * .07 - 9.1, j * .07 + 4.2) * 2.2 + .25, 0, 1), sh = .82 + hashf(j * 1.3 + q, i * .7) * .3;
+        _gc.setRGB(sh * (1 + dryp * .22), sh * (1 + dryp * .06), sh * (1 - dryp * .25)); grassIM.setColorAt(n, _gc); }
       _q.setFromAxisAngle(_ax.set(0, 1, 0), hx * 6.28);
       _m4.compose(_v.set(x, hAt(x, z) - .03, z), _q, _s.set(s * (bank ? .8 : 1), s * (.8 + hz * .5) * (bank ? 2.6 + hz * 1.4 : 1), s * (bank ? .8 : 1)));
       grassIM.setMatrixAt(n++, _m4);

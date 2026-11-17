@@ -287,9 +287,27 @@ export function makeTextures(quality) {
     water: normalTex(256, 8, 101, 9),
     wear: canvasTex(grey1(), false), barkN: canvasTex(flatN(), false),
     clouds: clouds(512), puff: puff(64), stripes: stripes(), tread: tread(), foliage: foliage(quality === 'low' ? 256 : 512),
+    tufts: tufts(), boulder: canvasTex(rock(64)[0]), boulderN: canvasTex(flatN(), false),
   };
+  // the boulder photos are laid out for the scanned meshes (glTF style: no vertical flip)
+  T.boulder.flipY = T.boulderN.flipY = false;
   photos(T, S);
   return T;
+}
+// A drawn stand-in for assets/tufts.png (same layout: eight short cells 256x128 on top, eight tall 128x256 below):
+// a fan of green blades standing on the bottom of each cell.
+function tufts() {
+  const [c, g] = canvas(1024, 512);
+  let s = 5; const r = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+  const cells = [];
+  for (let k = 0; k < 8; k++) cells.push([(k % 4) * 256, (k >> 2) * 128, 256, 128], [k * 128, 256, 128, 256]);
+  for (const [x, y, w, h] of cells) for (let i = 0; i < 26; i++) {
+    const fx = x + w / 2 + (r() - .5) * w * .3, tx = fx + (r() - .5) * w * .8, ty = y + h * (.05 + r() * .5), k = .6 + r() * .5;
+    g.strokeStyle = `rgb(${(70 * k) | 0},${(100 * k) | 0},${(40 * k) | 0})`; g.lineWidth = 2 + r() * 2;
+    g.beginPath(); g.moveTo(fx, y + h); g.quadraticCurveTo(fx, y + h * .6, tx, ty); g.stroke();
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return t;
 }
 // Photographed ground, bark and rock (free CC0 textures from Poly Haven, kept in assets/). The drawn textures above are
 // used until the photos arrive, and stay if a photo can't be loaded.
@@ -307,7 +325,12 @@ function photos(T, S) {
   };
   swap(T.grass, 'assets/grass.jpg'); swap(T.dirt, 'assets/dirt.jpg'); swap(T.gravel, 'assets/gravel.jpg');
   swap(T.wear, 'assets/wear.jpg');   // worn painted metal for the machines (Poly Haven green_metal_rust, CC0)
-  swap(T.bark, 'assets/bark.jpg'); swap(T.barkN, 'assets/bark_n.jpg');   // conifer bark and its bumps (Poly Haven chinese_cedar_bark) swap(T.rock, 'assets/rock.jpg');
+  swap(T.bark, 'assets/bark.jpg'); swap(T.barkN, 'assets/bark_n.jpg');   // conifer bark and its bumps (Poly Haven chinese_cedar_bark)
+  swap(T.rock, 'assets/rock.jpg');   // rock armour on crossings, and the boulders until the scanned ones arrive
+  // scanned mossy boulders' photo and bumps (Poly Haven rock_moss_set_02), on the shapes in assets/rocks.bin
+  swap(T.boulder, 'assets/boulder.jpg'); swap(T.boulderN, 'assets/boulder_n.jpg');
+  // grass tufts and reeds cut from photographed grass (Poly Haven grass_medium_01/02, grass_bermuda_01), tools/tufts.py
+  swap(T.tufts, 'assets/tufts.png');
   // tree branches, the whole-spruce cards and leaf clumps, built from photographed fir twigs and leaves (same layout)
   swap(T.foliage, 'assets/foliage.png');
   // the bumps: grass, soil and gravel height maps packed in red, green and blue

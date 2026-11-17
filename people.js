@@ -13,7 +13,7 @@
 // Every piece of every building is plain data (a list built from the building's size), so a site saves as a few numbers
 // and a string of which pieces are in.
 import * as THREE from 'three';
-import { buildPerson, toolMesh } from './models.js?v=15';
+import { buildPerson, toolMesh } from './models.js?v=16';
 
 export function makePeople(G) {
   const { clamp, angWrap } = G;
