@@ -296,6 +296,8 @@ function photos(T, S) {
   const swap = (tex, url) => { const img = new Image(); img.onload = () => { tex.image = img; tex.needsUpdate = true; }; img.src = url; };
   swap(T.grass, 'assets/grass.jpg'); swap(T.dirt, 'assets/dirt.jpg'); swap(T.gravel, 'assets/gravel.jpg');
   swap(T.bark, 'assets/bark.jpg'); swap(T.rock, 'assets/rock.jpg');
+  // tree branches, the whole-spruce cards and leaf clumps, built from photographed fir twigs and leaves (same layout)
+  swap(T.foliage, 'assets/foliage.png');
   // the bumps: grass, soil and gravel height maps packed in red, green and blue
   const h = new Image();
   h.onload = () => {

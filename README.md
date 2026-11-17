@@ -299,3 +299,12 @@ The owner chose "boss mode": you run the crew and give orders, and jump into a m
 - **Not possible yet:** free, no-strings 3D models of construction machines are very rare, so the machines are still built in code; they look better under the new light.
 
 **Tested:** all 29 automatic checks pass. Phone screenshots checked for the ground, the yard and the machines.
+
+### Round 13: real fir and leaf branches on the trees (owner: do the trees next)
+
+- The trees were "cards" painted by code with green strokes. Their branches, the cross-shaped core of each spruce, the distant trees and the leaf clumps on broadleaf trees now show **photographed fir twigs and leaves** (free CC0 photos from Poly Haven), cut out and arranged into full branches. Each branch is made of 12-17 real sprigs, so up close you see individual needles; the needles were thickened very slightly so they don't vanish into see-through gaps at a distance.
+- Felling, logs, wind sway, see-through trees in front of the camera and the tree count are all unchanged (the photos replace the picture on the same tree shapes).
+- **Crossing orders are more forgiving:** after round 11's "work area must be dry" rule, a tap on a winding creek could be refused. Shallow edge water is allowed again, and if the exact spot won't work the crew try other banks within about 35 m before saying NO ROOM TO BUILD HERE. All three rivers take an order.
+- Real 3D tree models from the same library are millions of triangles each (made for films), far too heavy for a phone forest, which is why the photos go on the game's own light tree shapes.
+
+**Tested:** all 29 automatic checks pass. Forest screenshots checked from the driver's view and the boss view.
