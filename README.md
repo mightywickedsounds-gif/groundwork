@@ -289,3 +289,13 @@ The owner chose "boss mode": you run the crew and give orders, and jump into a m
 - The crew's fill moves on with the dirt actually delivered; it no longer grows by itself (it only creeps if nothing has arrived for 45 seconds, so a job can't freeze).
 
 **Tested:** all 29 automatic checks pass. In the tests the crew built a full bridge in 26-27 minutes of game time; a replay of the south creek job in the boss view finished in 20 minutes with the crew's machines at 98-100% condition. Phone screenshots (upright) were checked for the boss view, driving, the hauler tipping and the dozer pushing. Not checked: the frame rate on a real phone, and the new river sound by ear.
+
+### Round 12: photographed ground and sky (owner: as much realism as possible; allowed the free texture sites)
+
+- **Real photos for the ground:** grass, dug soil and gravel are now photographs (free CC0 textures from Poly Haven), with their real height maps giving the ground its bumps, stones and clods in the light. Tree bark and boulders are photographs too. The old drawn textures are used for the moment it takes the photos to load, and stay if a photo can't be loaded.
+- **Real sky light:** the machines are lit by, and reflect, a photographed partly cloudy sky (also Poly Haven, CC0), over a dark valley floor. Paint, glass and steel pick up soft sky reflections instead of flat colour.
+- The files are saved in the game's own `assets/` folder (about 3 MB in all), so the phone never contacts the texture sites.
+- The grass photo is a late-summer lawn, so it's tinted a little greener for a valley meadow.
+- **Not possible yet:** free, no-strings 3D models of construction machines are very rare, so the machines are still built in code; they look better under the new light.
+
+**Tested:** all 29 automatic checks pass. Phone screenshots checked for the ground, the yard and the machines.

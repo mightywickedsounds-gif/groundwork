@@ -2,12 +2,13 @@
 // water flows over it (a "virtual pipes" shallow-water model), and the whole valley is saved in the
 // browser so nothing ever resets.
 import * as THREE from 'three';
-import { makeTextures } from './textures.js?v=11';
-import * as MOD from './models.js?v=11';
-import { Sound } from './audio.js?v=11';
-import { makeCrew } from './crew.js?v=11';
-import { makeWorks } from './construct.js?v=11';
-import { makePeople } from './people.js?v=11';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { makeTextures } from './textures.js?v=12';
+import * as MOD from './models.js?v=12';
+import { Sound } from './audio.js?v=12';
+import { makeCrew } from './crew.js?v=12';
+import { makeWorks } from './construct.js?v=12';
+import { makePeople } from './people.js?v=12';
 
 const N = 256, NN = N * N;           // 256 x 256 cells, 1 m each
 const SAVE_KEY = 'groundwork.save.v3';   // v1 (the first, smaller valley) is left untouched in the browser
@@ -547,6 +548,16 @@ const sky = makeSky(10000); sky.position.set(N / 2, 0, N / 2); scene.add(sky);
   const gp = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x2f3a22 }));
   gp.position.y = -2; es.add(gp);
   scene.environment = pm.fromScene(es, .03).texture; pm.dispose();
+  // then the real thing: a photographed sky (Poly Haven, CC0) lights and reflects in the paint, glass and steel, over
+  // the same dark valley floor
+  new RGBELoader().load('assets/sky.hdr', tex => {
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    const pm2 = new THREE.PMREMGenerator(renderer), es2 = new THREE.Scene();
+    es2.background = tex; es2.backgroundIntensity = .55;
+    es2.add(gp);
+    const old = scene.environment;
+    scene.environment = pm2.fromScene(es2, .02).texture; pm2.dispose(); tex.dispose(); old.dispose();
+  }, undefined, () => {});
 }
 T.clouds.repeat.set(3, 3);
 const clouds = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000).rotateX(Math.PI / 2),
@@ -709,6 +720,7 @@ function terrainMaterial() {
         vec3 gh = texture2D(tHgt, gp1).rgb;
         vec3 gw = max(vMat.xyz, 0.) + 1e-4; gw = gw * (.35 + gh * 1.3); gw = gw * gw * gw; gw /= (gw.x + gw.y + gw.z);
         vec3 cG = mix(texture2D(tGrass, gp1).rgb, texture2D(tGrass, gp2).rgb, .4);
+        cG *= vec3(.92, 1.06, .78);   // the photo is a late-summer lawn: a touch greener for a valley meadow
         // meadow patches: sun-dried yellow in places, deeper green in others
         { float gdry = texture2D(tMacro, vTWP.zx * .027 + .31).r, glush = texture2D(tMacro, vTWP.xz * .019 + .73).r;
           cG = mix(cG, cG * vec3(1.42, 1.2, .72), smoothstep(.5, .78, gdry) * .75);

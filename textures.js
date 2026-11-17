@@ -287,5 +287,22 @@ export function makeTextures(quality) {
     water: normalTex(256, 8, 101, 9),
     clouds: clouds(512), puff: puff(64), stripes: stripes(), tread: tread(), foliage: foliage(quality === 'low' ? 256 : 512),
   };
+  photos(T, S);
   return T;
+}
+// Photographed ground, bark and rock (free CC0 textures from Poly Haven, kept in assets/). The drawn textures above are
+// used until the photos arrive, and stay if a photo can't be loaded.
+function photos(T, S) {
+  const swap = (tex, url) => { const img = new Image(); img.onload = () => { tex.image = img; tex.needsUpdate = true; }; img.src = url; };
+  swap(T.grass, 'assets/grass.jpg'); swap(T.dirt, 'assets/dirt.jpg'); swap(T.gravel, 'assets/gravel.jpg');
+  swap(T.bark, 'assets/bark.jpg'); swap(T.rock, 'assets/rock.jpg');
+  // the bumps: grass, soil and gravel height maps packed in red, green and blue
+  const h = new Image();
+  h.onload = () => {
+    const [c, g] = canvas(S); g.drawImage(h, 0, 0, S, S);
+    const d = g.getImageData(0, 0, S, S).data, a = T.heights.image.data;
+    for (let i = 0; i < S * S; i++) { a[i * 4] = d[i * 4]; a[i * 4 + 1] = d[i * 4 + 1]; a[i * 4 + 2] = d[i * 4 + 2]; }
+    T.heights.needsUpdate = true;
+  };
+  h.src = 'assets/ground_h.png';
 }
