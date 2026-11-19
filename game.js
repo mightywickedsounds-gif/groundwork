@@ -52,6 +52,17 @@ const BED = new Float32Array(NN);    // can't dig below this
 const M = new Uint8Array(NN);        // top material: 0 grass, 1 dirt, 2 gravel
 const D = new Uint8Array(NN);        // 1 = disturbed (no grass)
 const TINT = new Float32Array(NN);   // colour variation
+// The fine ground (round 19): a 25 cm grid over the 1 m one, for what you see up close. The 1 m heights are what the
+// machines, water and sliding work with; the fine grid holds the shape inside each metre: crisp cut edges and blade
+// floors, the heap in front of a blade, ruts and the berms beside them, the worn lines of tyres and tracks in the turf.
+const FS = 4, FNW = N * FS + 1;        // fine points per metre; points per row
+const FN = new Float32Array(FNW * FNW);  // how far the drawn ground is above (or below) the smooth surface through the 1 m heights
+const FW = new Uint8Array(FNW * FNW);    // turf worn away (0 none, 255 bare soil)
+const FC = new Uint8Array(FNW * FNW);    // how far tracks and tyres have already pressed this point down (cm)
+const FLIM = .75;
+const MUD = new Float32Array(NN);    // muddy water: how much stirred-up soil the water holds (0 clear .. 1 thick)
+const MUD2 = new Float32Array(NN);
+const HOLD = new Uint8Array(NN);     // soil held against a dozer blade (it doesn't slide back under the blade)
 const RD = new Float32Array(NN);     // distance to the nearest original river or creek line
 const FL = new Float32Array(NN), FR = new Float32Array(NN), FU = new Float32Array(NN), FD = new Float32Array(NN);
 const SPRINGS = [];                  // {cells, q, cap}
@@ -112,12 +123,28 @@ const CH = 32, NCH = Math.ceil((N - 1) / CH), TILE = 16, NT = N / TILE;
 const chunkDirty = new Uint8Array(NCH * NCH).fill(1);
 const tileLoose = new Uint8Array(NT * NT).fill(1);
 let anyDirty = true, edgeDirty = true, dirtBox = null;
+// each chunk also remembers which cells changed since it was last drawn, so only that part is redrawn
+const cBox = new Int16Array(NCH * NCH * 4);
+const boxClear = q => { cBox[q * 4] = cBox[q * 4 + 2] = 32767; cBox[q * 4 + 1] = cBox[q * 4 + 3] = -32768; };
+for (let q = 0; q < NCH * NCH; q++) boxClear(q);
+function boxChunks(i0, i1, j0, j1) {
+  const ci0 = clamp(Math.floor(i0 / CH), 0, NCH - 1), ci1 = clamp(Math.floor(i1 / CH), 0, NCH - 1);
+  const cj0 = clamp(Math.floor(j0 / CH), 0, NCH - 1), cj1 = clamp(Math.floor(j1 / CH), 0, NCH - 1);
+  for (let cj = cj0; cj <= cj1; cj++) for (let ci = ci0; ci <= ci1; ci++) {
+    const q = cj * NCH + ci; if (chunkDirty[q] !== 1) chunkDirty[q] = 2;   // 1 = redraw all of it, 2 = only the box
+    if (i0 < cBox[q * 4]) cBox[q * 4] = i0; if (i1 > cBox[q * 4 + 1]) cBox[q * 4 + 1] = i1;
+    if (j0 < cBox[q * 4 + 2]) cBox[q * 4 + 2] = j0; if (j1 > cBox[q * 4 + 3]) cBox[q * 4 + 3] = j1;
+  }
+}
+// only the drawn shape changed (the fine grid): redraw, but nothing needs to slide
+function dirtyDraw(i0, i1, j0, j1) {
+  i0 = Math.max(0, Math.floor(i0)); j0 = Math.max(0, Math.floor(j0)); i1 = Math.min(N - 1, Math.ceil(i1)); j1 = Math.min(N - 1, Math.ceil(j1));
+  boxChunks(i0 - 2, i1 + 2, j0 - 2, j1 + 2);
+  if (!dirtBox) dirtBox = [i0, i1, j0, j1]; else { dirtBox[0] = Math.min(dirtBox[0], i0); dirtBox[1] = Math.max(dirtBox[1], i1); dirtBox[2] = Math.min(dirtBox[2], j0); dirtBox[3] = Math.max(dirtBox[3], j1); }
+}
 function dirty(k) {
   const i = k % N, j = (k / N) | 0;
-  for (const [di, dj] of [[-2, -2], [2, -2], [-2, 2], [2, 2]]) {
-    const ci = clamp(Math.floor((i + di) / CH), 0, NCH - 1), cj = clamp(Math.floor((j + dj) / CH), 0, NCH - 1);
-    chunkDirty[cj * NCH + ci] = 1;
-  }
+  boxChunks(i - 2, i + 2, j - 2, j + 2);
   tileLoose[((j / TILE) | 0) * NT + ((i / TILE) | 0)] = 1;
   anyDirty = true;
   if (i < 2 || j < 2 || i > N - 3 || j > N - 3) edgeDirty = true;
@@ -157,6 +184,7 @@ function generate(sd, settle) {
   const nz = makeNoise(sd), rnd = mulberry32(sd * 7 + 3);
   noiseFn = nz;
   M.fill(0); D.fill(0); W.fill(0); FL.fill(0); FR.fill(0); FU.fill(0); FD.fill(0);
+  FN.fill(0); FW.fill(0); FC.fill(0); MUD.fill(0); HOLD.fill(0);
   // where the rivers are: stamp each river point into the cells around it
   const rbed = new Float32Array(NN), rid = new Int8Array(NN).fill(-1);
   RD.fill(1e9);
@@ -251,6 +279,7 @@ function slide(a, b, mv, gen) {
   if (mv < .003) return false;
   H[a] -= mv; H[b] += mv;
   if (!gen) {
+    if (mv > .01) { const f = Math.max(0, 1 - mv * 4); fineFade(a, f); fineFade(b, f); }
     if (mv > .015) {
       if (M[a] === 0) M[a] = 1;
       D[a] = 1;
@@ -270,8 +299,12 @@ function slide(a, b, mv, gen) {
   return true;
 }
 function pair(a, b, gen, dist) {
+  if (HOLD[a] || HOLD[b]) return false;
   const d = H[a] - H[b];
-  const t = ((W[a] > .05 || W[b] > .05) ? .62 : .9) * dist;
+  const wet = W[a] > .05 || W[b] > .05;
+  // gravel that has been moved runs out flatter than dirt (the untouched land, and how it was generated, don't change)
+  const hi = d > 0 ? a : b;
+  const t = (!gen && M[hi] === 2 && D[hi] ? (wet ? .5 : .72) : wet ? .62 : .9) * dist;
   if (d > t) return slide(a, b, (d - t) * (dist > 1 ? .12 : .2), gen);
   if (-d > t) return slide(b, a, (-d - t) * (dist > 1 ? .12 : .2), gen);
   return false;
@@ -343,8 +376,16 @@ function waterStep(dt) {
       if (i < N - 1) inf += FL[k + 1];
       if (j > 0) inf += FD[k - N];
       if (j < N - 1) inf += FU[k + N];
-      let w = W[k] + dt * (inf - FL[k] - FR[k] - FU[k] - FD[k]);
+      const wOld = W[k], out = FL[k] + FR[k] + FU[k] + FD[k];
+      let w = wOld + dt * (inf - out);
       if (w < .0005) w = 0;
+      // stirred-up soil drifts with the water and settles out (faster where the water is still)
+      let mm = MUD[k] * Math.max(0, wOld - dt * out);
+      if (i > 0) mm += dt * FR[k - 1] * MUD[k - 1];
+      if (i < N - 1) mm += dt * FL[k + 1] * MUD[k + 1];
+      if (j > 0) mm += dt * FD[k - N] * MUD[k - N];
+      if (j < N - 1) mm += dt * FU[k + N] * MUD[k + N];
+      MUD2[k] = w > .002 ? Math.min(1, mm / w) * (1 - dt * (out > .05 ? .025 : .06)) : 0;
       if (i >= N - 2) w *= Math.max(0, 1 - 4 * dt);   // the river leaves the valley here
       W[k] = w;
       // fast water washes away loose dirt that people have moved (never the untouched ground or gravel) and drops it
@@ -358,11 +399,16 @@ function waterStep(dt) {
           const a = Math.min(ERODE_K * (sp - ERODE_V) * dt * (COMP[k] ? .15 : 1), .02, H[k] - BED[k]);
           if (a > 0 && H[n] < H[k] + .25) {
             H[k] -= a; H[n] += a; D[n] = 1; if (M[n] !== 2) M[n] = M[k] || 1;
-            dirty(k); dirty(n); eroded += a;
+            dirty(k); dirty(n); eroded += a; MUD2[k] = Math.min(1, MUD2[k] + a * 8);
           }
         }
       }
     }
+  }
+  for (let t = 0; t < NT * NT; t++) {
+    if (!waterActive[t]) continue;
+    const i0 = (t % NT) * TILE, j0 = ((t / NT) | 0) * TILE;
+    for (let j = j0; j < j0 + TILE; j++) MUD.set(MUD2.subarray(j * N + i0, j * N + i0 + TILE), j * N + i0);
   }
   for (const s of SPRINGS) { const add = s.q * dt / s.cells.length; for (const k of s.cells) if (W[k] < s.cap) W[k] += add; }
   // culvert pipes: water runs from the higher end to the lower, as fast as the head across the pipe drives it
@@ -457,6 +503,8 @@ function giveTo(L, k, amount, defer = 0, wait = 0) {
   if (L.v < 1e-4) { L.v = 0; L.g = 0; }
   if (defer > 0) pourQ.push({ k, rem: amount, rate: amount / defer, wait });
   else { H[k] += amount; displace(k, amount); }
+  fineFade(k, Math.max(0, 1 - amount / .35));
+  if (W[k] > .03) MUD[k] = Math.min(1, MUD[k] + amount * 1.5);
   if (amount > .05) COMP[k] = 0;
   if (amount > .02 || M[k] === 0) M[k] = mat;
   D[k] = 1;
@@ -481,7 +529,8 @@ function cellsInCircle(x, z, r, fn) {
     if (d <= r) fn(j * N + i, d / r);
   }
 }
-// scoop a bowl out of the ground, at most maxV m³
+// scoop a bowl out of the ground, at most maxV m³ (cutSc: how much of the full bowl it took)
+let cutSc = 0;
 function cutCircle(L, x, z, r, floorY, maxV) {
   const list = []; let total = 0;
   cellsInCircle(x, z, r, (k, f) => {
@@ -489,8 +538,8 @@ function cutCircle(L, x, z, r, floorY, maxV) {
     const a = H[k] - fl;
     if (a > 0) { list.push([k, a]); total += a + Math.max(0, Math.min(H[k], H0[k]) - fl) * (SWELL - 1); }
   });
-  if (total <= 0) return 0;
-  const sc = Math.min(1, maxV / total);
+  if (total <= 0) { cutSc = 0; return 0; }
+  const sc = cutSc = Math.min(1, maxV / total);
   let got = 0;
   for (const [k, a] of list) got += takeFrom(L, k, a * sc);
   return got;
@@ -521,9 +570,9 @@ const isTouch = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in wind
 let quality = localStorage.getItem('groundwork.quality');
 if (!['high', 'medium', 'low'].includes(quality)) quality = isTouch ? 'medium' : 'high';
 const QS = {
-  high: { shadow: 4096, shadowR: 75, grass: 22000, grassR: 46, dpr: 2, soft: true, near: 900, far: 3200, detail: 2, detailR: 95, post: true, msaa: 4, aoN: 12 },
-  medium: { shadow: 2048, shadowR: 60, grass: 9000, grassR: 32, dpr: 1.5, soft: true, near: 450, far: 1800, detail: 2, detailR: 60, post: true, msaa: 2, aoN: 8 },
-  low: { shadow: 1024, shadowR: 45, grass: 0, grassR: 0, dpr: 1, soft: false, near: 160, far: 800, detail: 1, detailR: 0, post: false, msaa: 0, aoN: 0 },
+  high: { shadow: 4096, shadowR: 75, grass: 22000, grassR: 46, dpr: 2, soft: true, near: 900, far: 3200, detail: 2, detailR: 95, post: true, msaa: 4, aoN: 12, fineR: 18 },
+  medium: { shadow: 2048, shadowR: 60, grass: 9000, grassR: 32, dpr: 1.5, soft: true, near: 450, far: 1800, detail: 2, detailR: 60, post: true, msaa: 2, aoN: 8, fineR: 5 },
+  low: { shadow: 1024, shadowR: 45, grass: 0, grassR: 0, dpr: 1, soft: false, near: 160, far: 800, detail: 1, detailR: 0, post: false, msaa: 0, aoN: 0, fineR: 0 },
 };
 const Q = QS[quality];
 const T = makeTextures(quality);
@@ -835,6 +884,7 @@ function terrainMaterial() {
           lay = mix(lay, vec3(1.5, 1.3, 1.0), smoothstep(.3, .0, abs(dB - 1.6)) * .45);
           lay = mix(lay, vec3(1.25, .95, .7), smoothstep(2.6, 3.2, dB));
           float spoil = clamp(vDig.y / .5, 0., 1.);
+          { float cl = texture2D(tHgt, vTWP.xz * .55 + .13).g; cD *= mix(1., .55 + cl * .75, clamp(vDig.y / .25, 0., 1.) * .8 + .2); }
           lay = mix(lay, vec3(1.1, 1.0, .9) * (.9 + gh.g * .25), spoil * smoothstep(-.1, -.3, dB));
           cD *= lay; }
         vec3 cR = mix(texture2D(tGravel, gp1 * 1.5).rgb, texture2D(tGravel, gp2 * 1.5).rgb, .3);
@@ -854,7 +904,13 @@ function terrainMaterial() {
       .replace('#include <normal_fragment_maps>', `
         { vec2 gdx = dFdx(gp1), gdy = dFdy(gp1);
           float h0 = dot(texture2D(tHgt, gp1).rgb, gw), hx = dot(texture2D(tHgt, gp1 + gdx).rgb, gw), hy = dot(texture2D(tHgt, gp1 + gdy).rgb, gw);
-          normal = gwPerturb(-vViewPosition, normal, vec2(hx - h0, hy - h0) * 1.6 * (1. - gwet * .7), faceDirection); }`);
+          vec2 bump = vec2(hx - h0, hy - h0) * 1.6;
+          // loose soil that has been moved: clods a hand or two across, deeply shadowed between
+          float sp = clamp(vDig.y / .25, 0., 1.) * gw.y + gw.y * .35;
+          vec2 cp = vTWP.xz * .55 + .13, cdx = dFdx(cp), cdy = dFdy(cp);
+          float c0 = texture2D(tHgt, cp).g, cx = texture2D(tHgt, cp + cdx).g, cy = texture2D(tHgt, cp + cdy).g;
+          bump += vec2(cx - c0, cy - c0) * 3.2 * sp;
+          normal = gwPerturb(-vViewPosition, normal, bump * (1. - gwet * .7), faceDirection); }`);
   };
   m.customProgramCacheKey = () => 'gw-terrain';
   return m;
@@ -881,10 +937,10 @@ function waterMaterial() {
     vertexShader: `
       #include <common>
       #include <fog_pars_vertex>
-      attribute float aW; attribute vec2 aFlow;
-      varying float vW; varying vec2 vFlow; varying vec3 vWP;
+      attribute float aW; attribute vec2 aFlow; attribute float aMud;
+      varying float vW; varying vec2 vFlow; varying vec3 vWP; varying float vMud;
       void main() {
-        vW = aW; vFlow = aFlow;
+        vW = aW; vFlow = aFlow; vMud = aMud;
         vec4 wp = modelMatrix * vec4(position, 1.0); vWP = wp.xyz;
         vec4 mvPosition = viewMatrix * wp;
         gl_Position = projectionMatrix * mvPosition;
@@ -895,7 +951,7 @@ function waterMaterial() {
       #include <fog_pars_fragment>
       uniform float uTime; uniform sampler2D tN; uniform vec3 uSun, uSunCol, uSky, uHor, uDeep, uShallow;
       uniform sampler2D tRefl; uniform mat4 uReflM; uniform float uRefl, uLevel; uniform vec4 uRip[${RIPN}];
-      varying float vW; varying vec2 vFlow; varying vec3 vWP;
+      varying float vW; varying vec2 vFlow; varying vec3 vWP; varying float vMud;
       void main() {
         // vW is the depth of water over the drawn ground, so the edge is where the surface meets the bank
         if (vW <= 0.) discard;
@@ -909,6 +965,7 @@ function waterMaterial() {
         vec3 n1 = mix(a1.xyz, a2.xyz, w1) * 2. - 1., n2 = b1.xyz * 2. - 1., n3 = b2.xyz * 2. - 1.;
         // still water is nearly a mirror; the faster it runs the more it is broken up (and less so far away, where
         // fine ripples would only sparkle)
+        #define fn0(p) texture2D(tN, (p) * .7 - fl * uTime * .05).a
         float chop = (.12 + min(speed, 2.5) * .5) * mix(.3, 1., calm);
         vec2 slope = (n1.xy * .9 + n2.xy * .5 + n3.xy * .35 * calm) * chop;
         // rings spreading from where something hit the water
@@ -949,6 +1006,9 @@ function waterMaterial() {
         float depthF = 1. - exp(-vW * 1.6);
         vec3 body = mix(uShallow, uDeep, depthF) * (.7 + .3 * max(dot(N, uSun), 0.));
         body = mix(body, uDeep * .45, smoothstep(.9, 2.4, vW));
+        // stirred-up soil: a cloudy brown plume that hides the bed, streaked by the current
+        float mud = clamp(vMud * (1.6 + (fn0(uv) - .5) * 1.2), 0., 1.);
+        body = mix(body, vec3(.2, .13, .07) * (.75 + .35 * max(dot(N, uSun), 0.)), mud * .9);
         vec3 col = mix(body, skyc, fres) + uSunCol * spec;
         // foam: lapping along the edge, streaks where the current is fast, white water where it is fast and shallow
         float fn = mix(a1.a, a2.a, w1) * .6 + texture2D(tN, uv * 3.7 - fl * uTime * .3).a * .4;
@@ -958,7 +1018,7 @@ function waterMaterial() {
         foam = clamp(foam + rfoam * .5 + edge * smoothstep(.45, .7, fn) * .4, 0., 1.);
         col = mix(col, vec3(.86, .89, .87) * (.75 + .25 * max(dot(N, uSun), 0.)), foam * .8);
         // clear at the very edge, so the wet bed shows; thicker with depth and at a glancing angle
-        float alpha = clamp(.12 + depthF * .82 + fres * .5 + foam * .5, 0., .98) * smoothstep(.0, .035, vW);
+        float alpha = clamp(.12 + depthF * .82 + fres * .5 + foam * .5 + mud * .8, 0., .98) * smoothstep(.0, .035, vW);
         gl_FragColor = vec4(col, alpha);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -1073,7 +1133,115 @@ function lump(x, z, md, mr, spoil) {
 const hum = (x, z) => (vnoise(x * .9 + 11.3, z * .9 - 5.7) * .6 + vnoise(x * 2.6 - 3.1, z * 2.6 + 8.2) * .4) * .09;
 function hDraw(x, z, F) {
   const m = matAt(x, z), spoil = F === 1 ? 0 : clamp((bil(H, x, z) - bil(H0, x, z)) / .5, 0, 1);
-  return (F === 1 ? hc(Math.round(x), Math.round(z)) : hSmooth(x, z) + hum(x, z) * m[0] * (1 - m[3])) + lump(x, z, m[1], m[2] * (1 - m[3] * .5), spoil);
+  if (F === 1) return hc(Math.round(x), Math.round(z)) + lump(x, z, m[1], m[2] * (1 - m[3] * .5), 0);
+  const wr = wearAt(x, z), g = m[0] * (1 - wr);
+  return hSmooth(x, z) + fineAt(x, z) + hum(x, z) * g * (1 - m[3]) + lump(x, z, m[1] + m[0] * wr * .6, m[2] * (1 - m[3] * .5), spoil);
+}
+
+// ---------------------------------------------------------------- the fine ground (25 cm)
+function fineAt(x, z) {
+  const fx = x * FS, fz = z * FS, a = Math.floor(fx), b = Math.floor(fz);
+  if (a < 0 || b < 0 || a >= FNW - 1 || b >= FNW - 1) return 0;
+  const u = fx - a, v = fz - b, k = b * FNW + a, p = FN[k], q = FN[k + 1], r = FN[k + FNW];
+  return p + (q - p) * u + (r - p) * v + (p - q - r + FN[k + FNW + 1]) * u * v;
+}
+function wearAt(x, z) {
+  const fx = x * FS, fz = z * FS, a = Math.floor(fx), b = Math.floor(fz);
+  if (a < 0 || b < 0 || a >= FNW - 1 || b >= FNW - 1) return 0;
+  const u = fx - a, v = fz - b, k = b * FNW + a, p = FW[k], q = FW[k + 1], r = FW[k + FNW];
+  return (p + (q - p) * u + (r - p) * v + (p - q - r + FW[k + FNW + 1]) * u * v) / 255;
+}
+// the ground as drawn, without the small hummocks and clods (what tools shape and what loose pieces settle on)
+const shapeAt = (x, z) => hSmooth(x, z) + fineAt(x, z);
+// A tool that reshapes the ground: fineSnap remembers the drawn shape around it, the tool changes the 1 m heights,
+// then fineSet sets the fine grid so the ground is drawn exactly as the tool left it. fn(x, z, before, smooth) gives
+// the new height at a fine point, or NaN where the tool didn't touch it (that ground keeps its shape, so a cut
+// leaves a crisp edge instead of a soft dip spread over the neighbouring metres).
+const SNAPMAX = 72 * 72;
+const _snapOld = [new Float32Array(SNAPMAX), new Float32Array(SNAPMAX)];
+let _snapI = 0;
+function fineSnap(x0, z0, x1, z1) {
+  const a0 = Math.max(0, Math.ceil(x0 * FS)), a1 = Math.min(FNW - 1, Math.floor(x1 * FS));
+  const b0 = Math.max(0, Math.ceil(z0 * FS)), b1 = Math.min(FNW - 1, Math.floor(z1 * FS));
+  const w = a1 - a0 + 1, h = b1 - b0 + 1;
+  if (w <= 0 || h <= 0 || w * h > SNAPMAX) return null;
+  const old = _snapOld[_snapI = (_snapI + 1) & 1];
+  for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) old[(b - b0) * w + a - a0] = hSmooth(a / FS, b / FS) + FN[b * FNW + a];
+  return { a0, a1, b0, b1, w, old };
+}
+function fineSet(sn, fn, wear = 0) {
+  if (!sn) return;
+  const { a0, a1, b0, b1, w, old } = sn;
+  let ia0 = 1e9, ia1 = -1, ib0 = 1e9, ib1 = -1;
+  for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) {
+    const x = a / FS, z = b / FS, o = old[(b - b0) * w + a - a0], hs = hSmooth(x, z), k = b * FNW + a;
+    let t = fn(x, z, o, hs);
+    if (t !== t) t = o; else { FC[k] = 0; if (wear) FW[k] = Math.max(FW[k], wear); if (a < ia0) ia0 = a; if (a > ia1) ia1 = a; if (b < ib0) ib0 = b; if (b > ib1) ib1 = b; }
+    FN[k] = clamp(t - hs, -FLIM, FLIM);
+  }
+  dirtyDraw(a0 / FS, a1 / FS, b0 / FS, b1 / FS);
+}
+// fresh soil tipped or slid onto a cell buries its fine shape (part of it for a thin layer)
+function fineFade(k, f) {
+  if (f >= 1) return;
+  const i = k % N, j = (k / N) | 0, a0 = Math.max(0, i * FS - 2), a1 = Math.min(FNW - 1, i * FS + 1), b0 = Math.max(0, j * FS - 2), b1 = Math.min(FNW - 1, j * FS + 1);
+  for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) { const q = b * FNW + a; FN[q] *= f; if (f < .6) FC[q] = 0; }
+}
+// tracks and tyres press ruts into soft ground and squeeze up a low berm along each side; turf under them wears away
+const _rutMax = k => {
+  if (DECK[k] > 0) return 0;
+  const wet = W[k] > .02 || cMat[k * 4 + 3] > .3, loose = H[k] - H0[k] > .15 && !COMP[k];
+  if (M[k] === 2) return wet ? .05 : .025;
+  if (M[k] === 0 && !D[k]) return wet ? .07 : .012;
+  return (COMP[k] ? .02 : loose ? .1 : .05) * (wet ? 2.2 : 1);
+};
+function pressRut(x, z, yaw, wid, len, wearAmt) {
+  const fx = Math.sin(yaw), fz = Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+  const hw = wid / 2 + .3, hl = len / 2, r = Math.hypot(hw, hl);
+  const a0 = Math.max(1, Math.ceil((x - r) * FS)), a1 = Math.min(FNW - 2, Math.floor((x + r) * FS));
+  const b0 = Math.max(1, Math.ceil((z - r) * FS)), b1 = Math.min(FNW - 2, Math.floor((z + r) * FS));
+  const deep = _rutMax(cellOf(x, z));
+  let any = false;
+  for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) {
+    const px = a / FS - x, pz = b / FS - z, along = px * fx + pz * fz, side = Math.abs(px * rx + pz * rz);
+    if (Math.abs(along) > hl) continue;
+    const q = b * FNW + a;
+    if (side <= wid / 2) {
+      const want = Math.round(deep * 100 * (side > wid / 2 - .13 ? .7 : 1));
+      if (FC[q] < want) { const d = Math.min(want - FC[q], deep > .06 ? 4 : 2); FC[q] += d; FN[q] = Math.max(-FLIM, FN[q] - d * .01); any = true; }
+      if (FW[q] < 250) { FW[q] = Math.min(255, FW[q] + wearAmt); any = true; }
+    } else if (deep > .03 && side <= wid / 2 + .3 && FC[q] < 40) {   // the soil squeezed out to the side
+      FN[q] = Math.min(FLIM, FN[q] + deep * .012); FC[q] += 1; any = true;
+    }
+  }
+  if (any) dirtyDraw(x - r, x + r, z - r, z + r);
+}
+// Saving the fine grid: only the 8 m blocks where something has happened are kept (as centimetres and wear)
+const FB = 32, FBN = Math.ceil(FNW / FB);
+function fineSave() {
+  const out = [];
+  for (let bj = 0; bj < FBN; bj++) for (let bi = 0; bi < FBN; bi++) {
+    let any = false;
+    for (let b = bj * FB; b < Math.min(FNW, bj * FB + FB) && !any; b++) for (let a = bi * FB; a < Math.min(FNW, bi * FB + FB); a++) { const q = b * FNW + a; if (Math.abs(FN[q]) > .005 || FW[q] > 8) { any = true; break; } }
+    if (!any) continue;
+    const n = new Int8Array(FB * FB), w = new Uint8Array(FB * FB);
+    for (let b = 0; b < FB; b++) for (let a = 0; a < FB; a++) {
+      const A = bi * FB + a, B = bj * FB + b; if (A >= FNW || B >= FNW) continue;
+      const q = B * FNW + A; n[b * FB + a] = clamp(Math.round(FN[q] * 100), -127, 127); w[b * FB + a] = FW[q];
+    }
+    out.push([bj * FBN + bi, b64(n), b64(w)]);
+  }
+  return out;
+}
+function fineLoad(list) {
+  FN.fill(0); FW.fill(0); FC.fill(0);
+  for (const [id, ns, ws] of list || []) {
+    const bi = id % FBN, bj = (id / FBN) | 0, n = unb64(ns, Int8Array), w = unb64(ws, Uint8Array);
+    for (let b = 0; b < FB; b++) for (let a = 0; a < FB; a++) {
+      const A = bi * FB + a, B = bj * FB + b; if (A >= FNW || B >= FNW) continue;
+      FN[B * FNW + A] = n[b * FB + a] / 100; FW[B * FNW + A] = w[b * FB + a];
+    }
+  }
 }
 
 // ---------------------------------------------------------------- terrain chunks: near the camera they are drawn at half a metre
@@ -1106,19 +1274,29 @@ function chunkGeo(c, F) {
   g.userData = { nx, nz, ng, border, F };
   return g;
 }
-function fillChunk(c) {
+// bx: only the cells in this box changed (redraw that part); otherwise the whole chunk
+function fillChunk(c, bx) {
   const g = c.mesh.geometry, { nx, nz, ng, border, F } = g.userData;
   const P = g.attributes.position.array, Nr = g.attributes.normal.array, C = g.attributes.color.array, A = g.attributes.aMat.array, DG = g.attributes.aDig.array;
-  const ex = nx + 2, hh = new Float32Array(ex * (nz + 2)), st = 1 / F;
-  for (let b = -1; b <= nz; b++) for (let a = -1; a <= nx; a++) hh[(b + 1) * ex + a + 1] = hDraw(c.i0 + a * st, c.j0 + b * st, F);
+  const ex = nx + 2, st = 1 / F;
+  let hh = c.hh, a0 = -1, a1 = nx, b0 = -1, b1 = nz;
+  if (bx && hh && c.hhF === F && hh.length === ex * (nz + 2)) {
+    a0 = clamp((bx[0] - c.i0) * F, -1, nx); a1 = clamp((bx[1] - c.i0) * F, -1, nx);
+    b0 = clamp((bx[2] - c.j0) * F, -1, nz); b1 = clamp((bx[3] - c.j0) * F, -1, nz);
+  } else { bx = null; hh = new Float32Array(ex * (nz + 2)); }
+  for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) hh[(b + 1) * ex + a + 1] = hDraw(c.i0 + a * st, c.j0 + b * st, F);
   c.hh = hh; c.hhF = F;   // kept for the water, which meets this drawn ground at the shore
-  for (let b = 0; b < nz; b++) for (let a = 0; a < nx; a++) {
+  const va0 = Math.max(0, a0 - 1), va1 = Math.min(nx - 1, a1 + 1), vb0 = Math.max(0, b0 - 1), vb1 = Math.min(nz - 1, b1 + 1);
+  for (let b = vb0; b <= vb1; b++) for (let a = va0; a <= va1; a++) {
     const v = b * nx + a, x = c.i0 + a * st, z = c.j0 + b * st, h = hh[(b + 1) * ex + a + 1];
     P[v * 3] = x; P[v * 3 + 1] = h; P[v * 3 + 2] = z;
     const dx = (hh[(b + 1) * ex + a] - hh[(b + 1) * ex + a + 2]) / (2 * st), dz = (hh[b * ex + a + 1] - hh[(b + 2) * ex + a + 1]) / (2 * st);
     const l = Math.hypot(dx, 1, dz); Nr[v * 3] = dx / l; Nr[v * 3 + 1] = 1 / l; Nr[v * 3 + 2] = dz / l;
     const ao = aoAt(x, z); C[v * 3] = C[v * 3 + 1] = C[v * 3 + 2] = ao;
-    const m = matAt(x, z); A[v * 4] = m[0]; A[v * 4 + 1] = m[1]; A[v * 4 + 2] = m[2]; A[v * 4 + 3] = m[3];
+    const m = matAt(x, z);
+    let gr = m[0], di = m[1];
+    if (F > 1) { const wr = wearAt(x, z) * .92; di += gr * wr; gr -= gr * wr; }   // tyre and track lines through the turf
+    A[v * 4] = gr; A[v * 4 + 1] = di; A[v * 4 + 2] = m[2]; A[v * 4 + 3] = m[3];
     const h0 = bil(H0, x, z); DG[v * 2] = h0; DG[v * 2 + 1] = Math.max(0, bil(H, x, z) - h0);
   }
   border.forEach((v, e) => {
@@ -1129,8 +1307,14 @@ function fillChunk(c) {
     for (let q = 0; q < 4; q++) A[s * 4 + q] = A[v * 4 + q];
     DG[s * 2] = DG[v * 2]; DG[s * 2 + 1] = DG[v * 2 + 1];
   });
-  for (const a of ['position', 'normal', 'color', 'aMat', 'aDig']) g.attributes[a].needsUpdate = true;
-  g.computeBoundingSphere();
+  for (const a of ['position', 'normal', 'color', 'aMat', 'aDig']) {
+    const at = g.attributes[a], n = at.itemSize;
+    at.clearUpdateRanges();
+    if (bx) { at.addUpdateRange(vb0 * nx * n, (vb1 - vb0 + 1) * nx * n); at.addUpdateRange(ng * n, border.length * n); }
+    at.needsUpdate = true;
+  }
+  if (!bx) g.computeBoundingSphere();
+  else { const bs = g.boundingSphere; if (bs) bs.radius = Math.max(bs.radius, Math.hypot(CH * .75, CH * .75, 40)); }
 }
 // The water of a chunk, on the same grid as its ground (half a metre near the camera). Each point gets the water level
 // (a dry cell beside water takes its neighbours' level) and the depth over the ground as drawn, so the shoreline is
@@ -1142,16 +1326,17 @@ function chunkWaterGeo(c, F = 1) {
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nx * nz * 3), 3).setUsage(THREE.DynamicDrawUsage));
   g.setAttribute('aW', new THREE.BufferAttribute(new Float32Array(nx * nz), 1).setUsage(THREE.DynamicDrawUsage));
   g.setAttribute('aFlow', new THREE.BufferAttribute(new Float32Array(nx * nz * 2), 2).setUsage(THREE.DynamicDrawUsage));
+  g.setAttribute('aMud', new THREE.BufferAttribute(new Float32Array(nx * nz), 1).setUsage(THREE.DynamicDrawUsage));
   g.userData = { nx, nz, F };
   return g;
 }
-const _wl = new Float32Array((CH + 3) * (CH + 3)), _wvx = new Float32Array(_wl.length), _wvz = new Float32Array(_wl.length);
+const _wl = new Float32Array((CH + 3) * (CH + 3)), _wvx = new Float32Array(_wl.length), _wvz = new Float32Array(_wl.length), _wm = new Float32Array(_wl.length);
 function fillWater(c) {
   const F = c.hhF || 1, st = 1 / F;
   let g = c.wmesh.geometry;
   if (g.userData.F !== F) { g.dispose(); g = c.wmesh.geometry = chunkWaterGeo(c, F); }
   const { nx, nz } = g.userData;
-  const P = g.attributes.position.array, Dp = g.attributes.aW.array, Fl = g.attributes.aFlow.array;
+  const P = g.attributes.position.array, Dp = g.attributes.aW.array, Fl = g.attributes.aFlow.array, Md = g.attributes.aMud.array;
   // level and current of each cell, one cell beyond the chunk all round
   const ci0 = c.i0 - 1, cj0 = c.j0 - 1, cw = c.i1 - c.i0 + 3, chn = c.j1 - c.j0 + 3;
   let wet = false;
@@ -1164,14 +1349,14 @@ function fillWater(c) {
       let vz = (FD[k] - FU[k] + (j > 0 ? FD[k - N] : 0) - (j < N - 1 ? FU[k + N] : 0)) * .5;
       const dd = Math.max(w, .08); vx /= dd; vz /= dd;
       const sp = Math.hypot(vx, vz); if (sp > 2.5) { vx *= 2.5 / sp; vz *= 2.5 / sp; }
-      _wvx[q] = vx; _wvz[q] = vz;
+      _wvx[q] = vx; _wvz[q] = vz; _wm[q] = MUD[k];
     } else {
       let lvl = NaN;
       if (i > 0 && W[k - 1] > .012) lvl = H[k - 1] + W[k - 1];
       if (i < N - 1 && W[k + 1] > .012) lvl = Math.max(lvl || -1e9, H[k + 1] + W[k + 1]);
       if (j > 0 && W[k - N] > .012) lvl = Math.max(lvl || -1e9, H[k - N] + W[k - N]);
       if (j < N - 1 && W[k + N] > .012) lvl = Math.max(lvl || -1e9, H[k + N] + W[k + N]);
-      _wl[q] = lvl; _wvx[q] = _wvz[q] = 0;
+      _wl[q] = lvl; _wvx[q] = _wvz[q] = 0; _wm[q] = 0;
     }
   }
   c.wet = wet; c.wmesh.visible = wet;
@@ -1181,49 +1366,58 @@ function fillWater(c) {
     const v = b * nx + a, x = c.i0 + a * st, z = c.j0 + b * st;
     const i = Math.min(Math.floor(x), c.i1 - (x >= c.i1 ? 1 : 0)), j = Math.min(Math.floor(z), c.j1 - (z >= c.j1 ? 1 : 0)), fx = x - i, fz = z - j;
     const q = (j - cj0) * cw + (i - ci0);
-    let sl = 0, sw = 0, svx = 0, svz = 0;
+    let sl = 0, sw = 0, svx = 0, svz = 0, sm = 0;
     for (let e = 0; e < 4; e++) {
       const qq = q + (e & 1) + (e >> 1) * cw, L = _wl[qq];
       if (L !== L) continue;   // no water near this corner
       const wgt = ((e & 1) ? fx : 1 - fx) * ((e >> 1) ? fz : 1 - fz) + 1e-4;
-      sl += L * wgt; svx += _wvx[qq] * wgt; svz += _wvz[qq] * wgt; sw += wgt;
+      sl += L * wgt; svx += _wvx[qq] * wgt; svz += _wvz[qq] * wgt; sm += _wm[qq] * wgt; sw += wgt;
     }
     P[v * 3] = x; P[v * 3 + 2] = z;
     const ground = hh && hh.length === ex * (nz + 2) ? hh[(b + 1) * ex + a + 1] : bil(H, x, z);
-    if (sw > 0) { const lvl = sl / sw; P[v * 3 + 1] = lvl; Dp[v] = lvl - ground; Fl[v * 2] = svx / sw; Fl[v * 2 + 1] = svz / sw; }
-    else { P[v * 3 + 1] = ground - .3; Dp[v] = -1; Fl[v * 2] = Fl[v * 2 + 1] = 0; }
+    if (sw > 0) { const lvl = sl / sw; P[v * 3 + 1] = lvl; Dp[v] = lvl - ground; Fl[v * 2] = svx / sw; Fl[v * 2 + 1] = svz / sw; Md[v] = sm / sw; }
+    else { P[v * 3 + 1] = ground - .3; Dp[v] = -1; Fl[v * 2] = Fl[v * 2 + 1] = 0; Md[v] = 0; }
   }
-  g.attributes.position.needsUpdate = true; g.attributes.aW.needsUpdate = true; g.attributes.aFlow.needsUpdate = true;
+  g.attributes.position.needsUpdate = true; g.attributes.aW.needsUpdate = true; g.attributes.aFlow.needsUpdate = true; g.attributes.aMud.needsUpdate = true;
 }
 const chunkTiles = c => { const t = []; for (let tj = Math.floor(c.j0 / TILE); tj <= Math.min(NT - 1, Math.floor(c.j1 / TILE)); tj++) for (let ti = Math.floor(c.i0 / TILE); ti <= Math.min(NT - 1, Math.floor(c.i1 / TILE)); ti++) t.push(tj * NT + ti); return t; };
 for (const c of tchunks) c.tiles = chunkTiles(c);
-let wetRecolor = 0;
+let wetRecolor = 0, wetTurn = 0;
 const _cv = new THREE.Vector3();
 // rebuild what changed (nearest first, a few chunks a frame) and refresh the water
-function updateTerrainChunks(dt, focus, all = false) {
+function updateTerrainChunks(dt, focus, all = false, near = focus) {
   wetRecolor -= dt;
-  if (wetRecolor <= 0) { wetRecolor = 3; for (const c of tchunks) if (c.wet) chunkDirty[c.cj * NCH + c.ci] = 1; }
+  if (wetRecolor <= 0) { wetRecolor = 3; wetTurn = (wetTurn + 1) % 3; for (const c of tchunks) if (c.wet && (c.lod !== 4 || !wetTurn)) chunkDirty[c.cj * NCH + c.ci] = 1; }   // the big quarter-metre chunks less often
   const todo = [];
   for (const c of tchunks) {
     const cx = (c.i0 + c.i1) / 2, cz = (c.j0 + c.j1) / 2, d = Math.hypot(cx - focus.x, cz - focus.z);
-    const lod = Q.detail > 1 && d < Q.detailR ? 2 : 1;
+    // a quarter-metre mesh right round the camera (the fine grid), half a metre further out, then a metre
+    const dn = Math.hypot(Math.max(0, c.i0 - near.x, near.x - c.i1), Math.max(0, c.j0 - near.z, near.z - c.j1));   // from the machine to the chunk's edge
+    const lod = Q.detail > 1 && dn < Q.fineR ? 4 : Q.detail > 1 && d < Q.detailR ? 2 : 1;
     if (lod !== c.lod || chunkDirty[c.cj * NCH + c.ci]) todo.push([d, c, lod]);
   }
   todo.sort((a, b) => a[0] - b[0]);
   let budget = all ? 1e9 : 3.5;
   for (const [, c, lod] of todo) {
     if (budget <= 0) break;
-    budget -= lod === 2 ? 1 : .35;
-    cellLook(c.i0 - 2, c.i1 + 2, c.j0 - 2, c.j1 + 2);
-    if (lod !== c.lod || !c.mesh) {
+    const q = c.cj * NCH + c.ci, rebuild = lod !== c.lod || !c.mesh;
+    let bx = null;
+    if (!rebuild && chunkDirty[q] === 2 && cBox[q * 4] <= cBox[q * 4 + 1]) {
+      bx = [Math.max(c.i0 - 1, cBox[q * 4]), Math.min(c.i1 + 1, cBox[q * 4 + 1]), Math.max(c.j0 - 1, cBox[q * 4 + 2]), Math.min(c.j1 + 1, cBox[q * 4 + 3])];
+      if (bx[0] > bx[1] || bx[2] > bx[3] || (bx[1] - bx[0] + 1) * (bx[3] - bx[2] + 1) > CH * CH * .6) bx = null;
+    }
+    const cost = lod === 4 ? 2.6 : lod === 2 ? 1 : .35;
+    budget -= bx ? cost * ((bx[1] - bx[0] + 1) * (bx[3] - bx[2] + 1) / (CH * CH) + .05) : cost;
+    if (bx) cellLook(bx[0] - 2, bx[1] + 2, bx[2] - 2, bx[3] + 2); else cellLook(c.i0 - 2, c.i1 + 2, c.j0 - 2, c.j1 + 2);
+    if (rebuild) {
       if (c.mesh) { scene.remove(c.mesh); c.mesh.geometry.dispose(); }
       c.mesh = new THREE.Mesh(chunkGeo(c, lod), terrainMat);
       c.mesh.castShadow = true; c.mesh.receiveShadow = true;
       scene.add(c.mesh); c.lod = lod;
     }
-    fillChunk(c);
+    fillChunk(c, bx);
     if (c.wmesh) fillWater(c);   // the shore follows the ground as now drawn
-    chunkDirty[c.cj * NCH + c.ci] = 0;
+    chunkDirty[q] = 0; boxClear(q);
   }
   for (const c of tchunks) {
     if (!c.wmesh) { c.wmesh = new THREE.Mesh(chunkWaterGeo(c), waterMat); c.wmesh.renderOrder = 2; c.wmesh.frustumCulled = false; scene.add(c.wmesh); fillWater(c); continue; }
@@ -1252,7 +1446,7 @@ const rGeo = new THREE.BufferGeometry(), rwGeo = new THREE.BufferGeometry();
 rGeo.setIndex(rIdx); rwGeo.setIndex(rIdx);
 const rDig = new Float32Array(RP * RN * 2);
 rGeo.setAttribute('position', new THREE.BufferAttribute(rPos, 3)); rGeo.setAttribute('color', new THREE.BufferAttribute(rAO, 3)); rGeo.setAttribute('aMat', new THREE.BufferAttribute(rMat, 4)); rGeo.setAttribute('aDig', new THREE.BufferAttribute(rDig, 2));
-rwGeo.setAttribute('position', new THREE.BufferAttribute(rwPos, 3)); rwGeo.setAttribute('aW', new THREE.BufferAttribute(rwDep, 1)); rwGeo.setAttribute('aFlow', new THREE.BufferAttribute(rwFlow, 2));
+rwGeo.setAttribute('position', new THREE.BufferAttribute(rwPos, 3)); rwGeo.setAttribute('aW', new THREE.BufferAttribute(rwDep, 1)); rwGeo.setAttribute('aFlow', new THREE.BufferAttribute(rwFlow, 2)); rwGeo.setAttribute('aMud', new THREE.BufferAttribute(new Float32Array(RP * RN), 1));
 const ringLand = new THREE.Mesh(rGeo, terrainMat); ringLand.receiveShadow = true; ringLand.frustumCulled = false; scene.add(ringLand);
 const ringWater = new THREE.Mesh(rwGeo, waterMat); ringWater.frustumCulled = false; ringWater.renderOrder = 2; scene.add(ringWater);
 function farH(x, z, R) {
@@ -1588,7 +1782,8 @@ function updateGrass(dt, me) {
     const k = j * N + i;
     if (W[k] > .005) continue;
     // reeds and tall grass line the water's edge
-    const bank = W[k - 1] > .05 || W[k + 1] > .05 || W[k - N] > .05 || W[k + N] > .05 || W[k - 2] > .05 || W[k + 2] > .05 || W[k - 2 * N] > .05 || W[k + 2 * N] > .05;
+    // (not on ground that has been dug, dumped on or driven: only the natural bank)
+    const bank = !(D[k] && (M[k] !== 0 || Math.abs(H[k] - H0[k]) > .1)) && (W[k - 1] > .05 || W[k + 1] > .05 || W[k - N] > .05 || W[k + N] > .05 || W[k - 2] > .05 || W[k + 2] > .05 || W[k - 2 * N] > .05 || W[k + 2 * N] > .05);
     const grow = SEED[k];   // seeded soil: the new grass comes up thin and short, then fills in
     const worn = D[k] && M[k] === 0 && Math.abs(H[k] - H0[k]) < .1;   // only driven over: flattened, thinner grass
     if (!bank && ((grow < .35 && !worn && (M[k] !== 0 || D[k])) || W[k + 1] > .005 || W[k + N] > .005)) continue;
@@ -1600,6 +1795,7 @@ function updateGrass(dt, me) {
       if (!bank && patch < -.18 && hz < .55) continue;
       if (grow > 0 && hz > grow) continue;
       if (worn && !(grow > 0) && hz > .4) continue;
+      if (Q.detail > 1 && wearAt(i + hx - .5, j + hz - .5) > .45) continue;   // tyre and track lines
       const x = i + hx - .5, z = j + hz - .5, s = (.7 + hashf(i, j + q) * .7) * clamp(1 + patch * .9, .55, 1.7) * (grow > 0 ? .4 + grow * .6 : 1);
       { const dryp = clamp(vnoise(i * .07 - 9.1, j * .07 + 4.2) * 2.2 + .25, 0, 1), sh = .82 + hashf(j * 1.3 + q, i * .7) * .3;
         _gc.setRGB(sh * (1 + dryp * .22), sh * (1 + dryp * .06), sh * (1 - dryp * .25)); grassIM.setColorAt(n, _gc); }
@@ -1919,7 +2115,12 @@ function leavePrints(m, dist, dyaw) {
   if (m.printAcc < .5) return;
   m.printAcc = 0;
   const c = Math.cos(m.yaw), sn = Math.sin(m.yaw), tyre = !SPEC[m.type].tracks;
-  for (const [px, pz, w] of pts) addPrint(m.x + c * px + sn * pz, m.z - sn * px + c * pz, m.yaw, w, .52, tyre);
+  const wear = (tyre ? 70 : 90) + (m.load && m.load.v > 1 ? 30 : 0) + Math.min(80, Math.abs(dyaw) * 300);   // a skid or a heavy load tears the turf faster
+  for (const [px, pz, w] of pts) {
+    const x = m.x + c * px + sn * pz, z = m.z - sn * px + c * pz;
+    pressRut(x, z, m.yaw, w, tyre ? .7 : 1.1, wear);
+    addPrint(x, z, m.yaw, w, .52, tyre);
+  }
 }
 
 // ---------------------------------------------------------------- soil you can see: the pieces of dirt and stone that
@@ -1967,7 +2168,7 @@ function soil(x, y, z, n, gravel, o = {}) {
 const _cc = new THREE.Color(), _eu = new THREE.Euler();
 // the old call: n "clods" thrown from a point (a spill off a blade, a slump, a tyre) - now a handful of pieces each
 function chunks(x, y, z, n, gravel, vx = 0, vz = 0, spread = 1) { soil(x, y, z, Math.ceil(n * 7), gravel, { vx, vz, jitter: spread, big: 1.3 }); }
-const groundY = (x, z) => hAt(x, z);
+const groundY = Q.detail > 1 ? shapeAt : hAt;   // loose pieces settle on the ground as it's drawn
 // a few loose crumbs (shed from a full bucket, flicked up by a tyre or track): col says dirt or gravel
 function crumbs(x, y, z, n, col, o = {}) { soil(x, y, z, n * 3, col[0] > .45, { vx: o.vx, vz: o.vz, vy: (o.up || 0) * .25, jitter: o.jitter ?? .3, big: .7 }); }
 function updateChunks(dt) {
@@ -2346,6 +2547,7 @@ function machineFx(m, dt, isActive) {
   // driving through water throws spray
   const wd = wetAt(m.x, m.z);
   if (wd > .1) {
+    { const kk = cellOf(m.x, m.z); MUD[kk] = Math.min(1, MUD[kk] + dt * (.08 + Math.min(2, Math.abs(m.v)) * .3)); }
     // a wake: rings off the machine as it moves (and small ones from the engine shaking it when it sits)
     m.wakeT = (m.wakeT || 0) - dt;
     if (m.wakeT <= 0) {
@@ -2391,7 +2593,7 @@ function drive(m, dt, inp) {
   const L = s.len / 2;
   let hA = gAt(m.x + fx * L * dir, m.z + fz * L * dir); const hB = gAt(m.x - fx * L * dir, m.z - fz * L * dir);
   // a dozer with its blade down doesn't climb the heap in front: the blade shoves it (only the ground up to the edge counts)
-  if (m.type === 'dozer' && dir > 0 && m.blade < .4) hA = Math.min(hA, m.y + m.blade + .35);
+  if (m.type === 'dozer' && dir > 0 && (m.blade < .4 || m.heap)) hA = Math.min(hA, m.y + Math.max(0, m.blade) + .35);
   const grade = (hA - hB) / s.len;
   let lim = 1;
   if (grade > .35) lim = Math.max(0, 1 - (grade - .35) / .45);
@@ -2584,18 +2786,157 @@ function drive(m, dt, inp) {
   }
 }
 
+// A blade or bucket edge scraping the ground: under it (from its edge back by `back`) the ground is drawn at the
+// edge's height, crisp, with the ground beside it left as it was. (x0,y0,z0)-(x1,y1,z1) is the edge, f the way it faces.
+function fineScrape(x0, y0, z0, x1, y1, z1, fx, fz, back, fwd = .1) {
+  const ex = x1 - x0, ez = z1 - z0, L2 = ex * ex + ez * ez; if (L2 < 1e-6) return null;
+  const mx = Math.min(x0, x1), Mx = Math.max(x0, x1), mz = Math.min(z0, z1), Mz = Math.max(z0, z1), pad = back + 1.6;
+  const sn = fineSnap(mx - pad, mz - pad, Mx + pad, Mz + pad);
+  return sn && (() => fineSet(sn, (x, z, o, hs) => {
+    const px = x - x0, pz = z - z0, t = (px * ex + pz * ez) / L2;
+    if (t < -.02 || t > 1.02) return NaN;
+    const along = px * fx + pz * fz - (t * ex * fx + t * ez * fz);   // ahead of (+) or behind (-) the edge
+    if (along > fwd || along < -back) return NaN;
+    const yb = y0 + (y1 - y0) * clamp(t, 0, 1);
+    if (o >= yb) return yb;
+    return yb - hs > .1 ? NaN : Math.max(o, Math.min(yb, hs));   // grading a low spot it has just filled
+  }, 255));
+}
+const loseLoad = (L, a) => { a = Math.min(a, L.v); if (a <= 0) return 0; L.g -= L.g * a / L.v; L.v -= a; if (L.v < 1e-4) { L.v = 0; L.g = 0; } return a; };
+
+// ---------------------------------------------------------------- the heap in front of a dozer blade is real ground
+// Each step the heap laid down last step is lifted back into the blade (whatever is still there: soil that slid off it
+// stays where it went), the blade cuts, and the heap is laid down again against the blade in its new place. Soil that
+// would sit past the blade ends is left behind as a ridge along each side of the cut (a windrow); a heap pushed into
+// water or over an edge slumps away down the slope, so the fill grows out in front.
+const HEAP_F = .72, HEAP_E = .85, HEAP_W = 1.9, HEAP_IN = 1.15, HEAP_Z = 2.8;
+function pileLift(m) {
+  const P = m.heap; if (!P) return;
+  let lost = 0;
+  for (let i = 0; i < P.k.length; i++) {
+    const k = P.k[i], put = P.put[i], a = clamp(H[k] - P.base[i], 0, put);
+    if (a > 1e-5) { H[k] -= a; dirty(k); }
+    lost += put - a; HOLD[k] = 0;
+  }
+  for (let i = P.fi.length - 1; i >= 0; i--) FN[P.fi[i]] = P.fv[i];
+  if (P.box) dirtyDraw(P.box[0], P.box[1], P.box[2], P.box[3]);
+  if (lost > 1e-4) loseLoad(m.load, lost);
+  m.heap = null;
+}
+// the heap stays where it is (backing off, or the blade lifted over it): it's ground now
+function pileLeave(m) {
+  if (!m.heap) return;
+  let v = 0;
+  for (let i = 0; i < m.heap.k.length; i++) { const k = m.heap.k[i]; v += clamp(H[k] - m.heap.base[i], 0, m.heap.put[i]); HOLD[k] = 0; dirty(k); }
+  stats.moved += v;
+  loseLoad(m.load, m.load.v);
+  m.heap = null;
+}
+function pileLay(m) {
+  const V = m.load.v;
+  if (V < .03) return;
+  const mat = loadMat(m.load), fx = Math.sin(m.yaw), fz = Math.cos(m.yaw), rx = Math.cos(m.yaw), rz = -Math.sin(m.yaw);
+  _p.set(0, m.blade, HEAP_Z); m.group.localToWorld(_p);
+  const ox = _p.x, oz = _p.z, yb = _p.y;
+  const S = (lx, lz, h0) => yb + h0 - HEAP_F * Math.max(0, lz) - HEAP_E * Math.max(0, Math.abs(lx) - HEAP_IN);
+  // the cells in front of the blade, with their place across (lx) and ahead (lz)
+  const R = HEAP_W + 5.5, cells = [];
+  for (let j = Math.max(1, Math.floor(oz - R)); j <= Math.min(N - 2, Math.ceil(oz + R)); j++) for (let i = Math.max(1, Math.floor(ox - R)); i <= Math.min(N - 2, Math.ceil(ox + R)); i++) {
+    const px = i - ox, pz = j - oz, lx = px * rx + pz * rz, lz = px * fx + pz * fz;
+    if (lz < -.2 || lz > 5.5 || Math.abs(lx) > HEAP_W + 1.6) continue;
+    const k = j * N + i; if (DECK[k] > 0) continue;
+    cells.push(k, lx, lz);
+  }
+  const vol = h0 => { let v = 0; for (let q = 0; q < cells.length; q += 3) if (Math.abs(cells[q + 1]) <= HEAP_W) { const d = S(cells[q + 1], cells[q + 2], h0) - H[cells[q]]; if (d > 0) v += d; } return v; };
+  let lo = -3, hi = 2.7;
+  if (vol(hi) < V) lo = hi;
+  else for (let it = 0; it < 18; it++) { const mid = (lo + hi) / 2; if (vol(mid) < V) lo = mid; else hi = mid; }
+  const h0 = lo, sc = Math.min(1, V / Math.max(1e-6, vol(h0)));
+  // remember the drawn shape, put the soil down, then draw the heap: a mass of clods that rolls along with the blade
+  const top = yb + h0;
+  const P = m.heap = { k: [], put: [], base: [], fi: [], fv: [], box: null };
+  const reach = clamp((top - yb + 3) / HEAP_F, .5, 6) + .6, wd = HEAP_W + 1.8;
+  let bx0 = 1e9, bx1 = -1e9, bz0 = 1e9, bz1 = -1e9;
+  for (const [cx, cz] of [[-wd, -.4], [wd, -.4], [-wd, reach], [wd, reach]]) { const x = ox + rx * cx + fx * cz, z = oz + rz * cx + fz * cz; bx0 = Math.min(bx0, x); bx1 = Math.max(bx1, x); bz0 = Math.min(bz0, z); bz1 = Math.max(bz1, z); }
+  const sn = fineSnap(bx0, bz0, bx1, bz1);
+  // every fine point the heap may touch is noted, so lifting the heap puts the ground back exactly
+  if (sn) for (let b = sn.b0; b <= sn.b1; b++) for (let a = sn.a0; a <= sn.a1; a++) { const q = b * FNW + a; P.fi.push(q); P.fv.push(FN[q]); }
+  const prev = m.heapPrev || new Map(), now = new Map();
+  let spill = 0;
+  // the ridge left along each side, just past the blade ends, while the heap is big enough to spill round them
+  const ridge = Math.min(Math.max(0, h0), 1.4) * .4;
+  const RW = (lx, lz) => lz > 1.2 ? -1e9 : yb + ridge - .7 * Math.max(0, Math.abs(lx) - 2.15);
+  for (let q = 0; q < cells.length; q += 3) {
+    const k = cells[q], lx = cells[q + 1], lz = cells[q + 2];
+    let a;
+    if (Math.abs(lx) <= HEAP_W) { a = S(lx, lz, h0) - H[k]; if (a <= .002) continue; a *= sc; P.k.push(k); P.put.push(a); P.base.push(H[k]); HOLD[k] = 1; }
+    else {   // past the blade ends: left behind, a little at a time as the blade moves on (not poured over an edge)
+      a = Math.min((RW(lx, lz) - H[k]) * .35, ridge * Math.max(0, m.v) * curDt * 1.1 + .002, m.load.v - spill);
+      if (a <= .002) continue; spill += a; COMP[k] = 0;
+    }
+    H[k] += a;
+    const dp = a - (prev.get(k) || 0); if (dp > 0) displace(k, dp);
+    now.set(k, a);
+    if (M[k] === 0 || (a > .05 && M[k] !== mat)) M[k] = mat;
+    D[k] = 1; dirty(k);
+    if (W[k] > .03 && m.v > .2) MUD[k] = Math.min(1, MUD[k] + .03);
+    if (a > .15 && treeGrid[k] >= 0) treeFallAt(k, fx, fz);
+  }
+  m.heapPrev = now;
+  if (spill > 0) { loseLoad(m.load, spill); stats.moved += spill; }
+  if (sn) {
+    const roll = m.heapRoll || 0;
+    fineSet(sn, (x, z, o, hs) => {
+      const px = x - ox, pz = z - oz, lx = px * rx + pz * rz, lz = px * fx + pz * fz;
+      if (lz < -.15 || Math.abs(lx) > HEAP_W + 1.7) return NaN;
+      const ax = Math.abs(lx), inHeap = ax <= HEAP_W + .15;
+      let t = inHeap ? S(lx, lz, h0) : Math.min(RW(lx, lz), o + ridge * .8);   // a ridge sits on the ground beside, never a wall over a drop
+      if (t <= o + .01) return NaN;
+      const hgt = Math.min(1, (t - o) / .35);
+      // a mass of clods, big and small, rolling along with the blade
+      const c1 = vnoise(lx * 1.9 + 5.3, lz * 1.9 - roll), c2 = vnoise(lx * 3.7 - 1.1, lz * 3.7 - roll * 1.9);
+      t += (Math.max(0, c1 + .12) * .26 + Math.max(-.05, c2) * .14) * hgt;
+      return Math.max(o, t);
+    }, 255);
+    P.box = [bx0, bx1, bz0, bz1];
+  }
+}
+// for saving: the ground without the heaps in front of the blades (they're still in the blades), undone afterwards
+function pileOut() {
+  const hs = machines.filter(m => m.heap);
+  if (!hs.length) return { H, undo() { } };
+  const out = Float32Array.from(H), keep = [];
+  for (const m of hs) {
+    const P = m.heap;
+    for (let i = 0; i < P.k.length; i++) out[P.k[i]] -= clamp(H[P.k[i]] - P.base[i], 0, P.put[i]);
+    for (let i = P.fi.length - 1; i >= 0; i--) { keep.push(P.fi[i], FN[P.fi[i]]); FN[P.fi[i]] = P.fv[i]; }
+  }
+  return { H: out, undo() { for (let i = keep.length - 2; i >= 0; i -= 2) FN[keep[i]] = keep[i + 1]; } };
+}
 function toolDozer(m, dt, inp) {
   const s = SPEC.dozer;
   m.blade = clamp(m.blade + inp.tool * .8 * dt, -.6, 1.2);
   m.hyd = Math.max(m.hyd, Math.abs(inp.tool));
   m.blade3.position.y = m.blade;
   m.group.updateMatrixWorld();
-  if (simTime - (m.noCut ?? -9) < .5) return;   // lent out to grade a building pad: the grading is done for it
+  m.pile.visible = false;   // the heap is drawn as ground (pileLay)
+  if (simTime - (m.noCut ?? -9) < .5) { pileLeave(m); return; }   // lent out to grade a building pad: the grading is done for it
+  const moved = Math.abs(m.v) > .05 || Math.abs(inp.tool) > .01 || Math.abs(angWrap(m.yaw - (m.heapYaw ?? m.yaw))) > .004;
+  if (m.v < -.05) { if (m.heap) { pileLeave(m); m.pour += .5; m.pourG = loadMat(m.load) === 2; } }
+  else if (moved) pileLift(m);
   if (m.v > .1) {
     const rate = 1.4 * m.v * dt;
+    // the floor the blade leaves: flat and crisp-edged, at the height of its cutting edge (shape noted before it cuts)
+    let scrape = null;
+    {
+      _p.set(-HEAP_W, m.blade, 2.75); m.group.localToWorld(_p); _p2.set(HEAP_W, m.blade, 2.75); m.group.localToWorld(_p2);
+      scrape = fineScrape(_p.x, _p.y, _p.z, _p2.x, _p2.y, _p2.z, Math.sin(m.yaw), Math.cos(m.yaw), .45 + m.v * dt);
+    }
+    const bfx = Math.sin(m.yaw), bfz = Math.cos(m.yaw);
     for (let sx = -1.75; sx <= 1.76; sx += .5) {
       _p.set(sx, m.blade, 2.75); m.group.localToWorld(_p);
       const k = cellOf(_p.x, _p.z);
+      if (Math.abs((k % N - m.x) * bfz - (((k / N) | 0) - m.z) * bfx) > HEAP_W + .05) continue;   // a cell mostly past the blade end
       const over = H[k] - _p.y;
       if (over > .02 && m.load.v < s.cap * 1.4) {
         const a = Math.min(over, rate, H[k] - BED[k]);
@@ -2614,33 +2955,24 @@ function toolDozer(m, dt, inp) {
         giveTo(m.load, k, Math.min(-over, rate, m.load.v / 6));
       }
     }
-    if (m.load.v > s.cap) {   // spill off the blade ends
-      const spill = Math.min(m.load.v - s.cap, 2.5 * dt);
-      for (const sx of [-2.2, 2.2]) {
-        _p.set(sx, 0, 2.6); m.group.localToWorld(_p); dropCircle(m.load, _p.x, _p.z, 1.1, spill / 2);
-        if (Math.random() < dt * 10) chunks(_p.x, _p.y + .8, _p.z, 2, loadMat(m.load) === 2);
-      }
-    }
+    if (scrape) scrape();
+    m.heapRoll = (m.heapRoll || 0) + m.v * dt * 1.6;
     // soil rolls and tumbles off the face of the heap in front of the blade
     if (m.load.v > .4) {
       const n = Math.min(6, Math.floor(m.v * dt * 25 * Math.min(1, m.load.v / 3) + Math.random()));
-      const top = Math.cbrt(m.load.v / 1.25) * .8;
-      for (let q = 0; q < n; q++) { _p.set((Math.random() - .5) * 3.2, m.blade + top * (.5 + Math.random() * .5), 2.9 + top * .5); m.group.localToWorld(_p); crumbs(_p.x, _p.y, _p.z, 1, loadMat(m.load) === 2 ? [.55, .53, .5] : [.36, .26, .17], { jitter: .2, vx: Math.sin(m.yaw) * (m.v + .8), vz: Math.cos(m.yaw) * (m.v + .8), up: .3, size: .8 }); }
+      const top = Math.min(1.6, Math.sqrt(m.load.v / 3.4));
+      for (let q = 0; q < n; q++) { _p.set((Math.random() - .5) * 3.2, m.blade + top * (.6 + Math.random() * .4), 2.9 + top * .3); m.group.localToWorld(_p); crumbs(_p.x, _p.y, _p.z, 1, loadMat(m.load) === 2 ? [.55, .53, .5] : [.36, .26, .17], { jitter: .2, vx: Math.sin(m.yaw) * (m.v + .8), vz: Math.cos(m.yaw) * (m.v + .8), up: .3, size: .8 }); }
     }
     if (m.load.v > .3 && Math.random() < dt * 9) { _p.set(0, m.blade + .4, 3.3); m.group.localToWorld(_p); dust(_p.x, _p.y, _p.z, 2, loadMat(m.load) === 2 ? GRAVEL_C : DIRT_C); }
-    if (m.load.v > 1.5 && Math.random() < dt * 7) { _p.set((Math.random() - .5) * 3, m.blade + 1.4, 3.0); m.group.localToWorld(_p); chunks(_p.x, _p.y, _p.z, 1, loadMat(m.load) === 2, Math.sin(m.yaw) * m.v, Math.cos(m.yaw) * m.v, .3); }
-  } else if (m.v < -.05 && m.load.v > 0) {
-    _p.set(0, 0, 3.2); m.group.localToWorld(_p);
-    m.pour += dropCircle(m.load, _p.x, _p.z, 1.9, Math.min(m.load.v, 4 * dt));
-    m.pourG = loadMat(m.load) === 2;
   }
-  const v = m.load.v;
-  m.pile.visible = v > .05;
-  if (m.pile.visible) {
-    const sc = Math.cbrt(v / 1.25);
-    m.pile.scale.set(sc * 1.15, sc * .9, sc);
-    m.pile.position.set(0, m.blade, .5 + sc * .55);
-    m.pile.material = loadMat(m.load) === 2 ? LOADMAT.gravel : LOADMAT.dirt;
+  if (m.v >= -.05 && (moved || !m.heap)) {
+    // a raised blade passes over its heap and leaves it
+    _p.set(0, m.blade, HEAP_Z + .3); m.group.localToWorld(_p);
+    // measured on the ground without the heap; it has to stay lifted a moment (not just over the top of a bump)
+    m.liftT = _p.y - hAt(_p.x, _p.z) > .7 ? (m.liftT || 0) + dt : 0;
+    if (!m.heap) pileLay(m);
+    if (m.liftT > .4 && m.load.v > .03) pileLeave(m);
+    m.heapYaw = m.yaw;
   }
 }
 const _hb = new THREE.Vector3();
@@ -2663,6 +2995,11 @@ function toolLoader(m, dt, inp) {
   m.group.updateMatrixWorld();
   if (m.v > .1 && m.load.v < s.cap && m.arm < .2) {
     const rate = 1.6 * m.v * dt;
+    let scrape = null;
+    {
+      _p.set(-1.35, -.45, .97); m.bucket.localToWorld(_p); _p2.set(1.35, -.45, .97); m.bucket.localToWorld(_p2);
+      scrape = fineScrape(_p.x, _p.y, _p.z, _p2.x, _p2.y, _p2.z, Math.sin(m.yaw), Math.cos(m.yaw), .35 + m.v * dt);
+    }
     for (let sx = -1.3; sx <= 1.31; sx += .43) {
       _p.set(sx, -.45, .97); m.bucket.localToWorld(_p);
       const k = cellOf(_p.x, _p.z);
@@ -2673,7 +3010,22 @@ function toolLoader(m, dt, inp) {
         if (amt > 0) { if (M[k] === 2) m.digG += amt; takeFrom(m.load, k, amt); m.dig += amt; m.work = Math.max(m.work, .9); }
       }
     }
+    if (scrape && m.dig > 0) scrape();
     if (m.dig > 0 && Math.random() < dt * 8) { _p.set(0, 0, 1.2); m.bucket.localToWorld(_p); dust(_p.x, _p.y, _p.z, 2, m.digG > 0 ? GRAVEL_C : DIRT_C); }
+  } else if (m.v > .1 && m.arm < .2) {
+    // a full bucket held low bulldozes what's in front of it along the ground, like a small blade
+    for (let sx = -1.3; sx <= 1.31; sx += .43) {
+      _p.set(sx, -.45, .97); m.bucket.localToWorld(_p);
+      const k = cellOf(_p.x, _p.z), over = H[k] - _p.y;
+      if (over < .05) continue;
+      _p2.set(sx, -.3, 2.1); m.bucket.localToWorld(_p2);
+      const k2 = cellOf(_p2.x, _p2.z), mv = Math.min(over, 2.6 * m.v * dt + .01, H[k] - BED[k]);
+      if (k2 === k || mv <= 0) continue;
+      H[k] -= mv; H[k2] += mv; displace(k2, mv); fineFade(k2, Math.max(0, 1 - mv / .3));
+      if (M[k] === 0) M[k] = 1; if (M[k2] !== M[k]) M[k2] = M[k]; D[k] = D[k2] = 1; COMP[k2] = 0;
+      dirty(k); dirty(k2); m.work = Math.max(m.work, .8);
+      if (treeGrid[k2] >= 0) treeFallAt(k2);
+    }
   }
   // the stream of dirt falling out while the bucket tips
   if (m.pourT > 0) {
@@ -2736,8 +3088,20 @@ function toolExcavator(m, dt, inp) {
     if (!m.did && p >= .5) {
       m.did = true;
       if (m.mode === 'dig') {
-        const gBefore = m.load.g;
-        const got = cutCircle(m.load, tx, tz, 1.45, g - 1.2, cap);
+        const gBefore = m.load.g, fy = g - 1.2;
+        // the bite the bucket leaves: a crisp-rimmed scoop, as deep as it really took (drawn on the fine grid)
+        const sn = fineSnap(tx - 3.2, tz - 3.2, tx + 3.2, tz + 3.2);
+        const got = cutCircle(m.load, tx, tz, 1.45, fy, cap);
+        if (sn && got > .02) {
+          const ca = Math.cos(a), sa = Math.sin(a), sc = cutSc;
+          fineSet(sn, (x, z, o) => {
+            // a bucket is wider than it is long: an oval scoop, slightly deeper where the teeth went in
+            const px = x - tx, pz = z - tz, al = px * sa + pz * ca, ac = px * ca - pz * sa, f2 = (al / 1.6) ** 2 + (ac / 1.25) ** 2;
+            if (f2 > 1) return NaN;
+            const bowl = fy + f2 * 1.0 - (al > 0 ? .08 * (1 - f2) : 0) + vnoise(x * 4.1, z * 4.1) * .06;
+            return o > bowl ? o - (o - bowl) * sc : NaN;
+          }, 255);
+        }
         if (got < .05) say(m, 'Rock below. Too hard to dig');
         else { m.dig += got; m.digG += m.load.g - gBefore; snd.scoop(tx, g, tz, loadMat(m.load) === 2); }
         dust(tx, g + .3, tz, 12, loadMat(m.load) === 2 ? GRAVEL_C : DIRT_C);
@@ -3536,9 +3900,10 @@ let saveWarned = false;
 function saveData() {
   if (!machines.length) return null;
   {
+    const ph = pileOut();
     const data = {
       v: 3, gen: GEN, seed, t: Date.now(), active, stats, goal: { i: goal.i, marsh0: goal.marsh0 }, contract: contract.i, goalJob: goal.job ? jobs.indexOf(goal.job) : -1,
-      H: b64(H), W: b64(W), M: b64(M), D: b64(D),
+      H: b64(ph.H), W: b64(W), M: b64(M), D: b64(D), fine: fineSave(),
       gone: trees.map((t, i) => t.st === 3 ? i : -1).filter(i => i >= 0),
       logs: trees.map((t, i) => t.st === 1 || t.st === 2 ? [i, +t.x.toFixed(2), +t.z.toFixed(2), +t.dx.toFixed(3), +t.dz.toFixed(3)] : null).filter(Boolean),
       rocks: rocks.map(r => [+r.x.toFixed(2), +r.z.toFixed(2), +r.rx.toFixed(2), +r.ry.toFixed(2)]),
@@ -3550,6 +3915,7 @@ function saveData() {
       cut: trees.map((t, i) => t.cut ? [i, +t.sx.toFixed(2), +t.sz.toFixed(2), t.lim ? 1 : 0, t.stump === 0 ? 0 : 1] : null).filter(Boolean),
       jobs: jobs.map(j => ({ type: j.type, x0: j.x0, z0: j.z0, x1: j.x1, z1: j.z1, target: j.target, base: j.base, goal: j.goal })),
     };
+    ph.undo();
     return JSON.stringify(data);
   }
 }
@@ -3570,6 +3936,7 @@ function load() {
     generate(seed, 'relax');
     H.set(unb64(data.H, Float32Array)); W.set(unb64(data.W, Float32Array));
     M.set(unb64(data.M, Uint8Array)); D.set(unb64(data.D, Uint8Array));
+    fineLoad(data.fine);
     for (const [x, z, s, r, hue, g] of data.planted || []) { const k = cellOf(x, z); treeGrid[k] = trees.length; trees.push({ x, z, k, s, r, st: 0, a: 0, dx: 1, dz: 0, t: 0, g, y: 0, dirty: true, hue, planted: 1 }); }
     for (const [x, z, c, s, g] of data.garden || []) garden.push({ x, z, c, s, g });
     for (const [k, gr, h] of data.seeded || []) { SEED[k] = gr; seedH.set(k, h); }
@@ -3817,7 +4184,7 @@ function update(dt, draw = true) {
   const changed = anyDirty; anyDirty = false;
   if (dirtBox && grassAt && dirtBox[1] > grassAt[0] - Q.grassR && dirtBox[0] < grassAt[0] + Q.grassR && dirtBox[3] > grassAt[1] - Q.grassR && dirtBox[2] < grassAt[1] + Q.grassR) grassDirty = true;
   dirtBox = null;
-  updateTerrainChunks(dt, camera.position);
+  updateTerrainChunks(dt, camera.position, false, me || (boss ? bossCam : camera.position));
   if (edgeDirty) { ringDirty = true; edgeDirty = false; }
   ringTimer -= dt;
   if (ringDirty && ringTimer <= 0) { ringTimer = 2; updateRing(); }
@@ -3896,7 +4263,8 @@ function start() {
   if (!resumed && !localStorage.getItem('groundwork.seenHelp')) showHelp(true);
   if (!resumed) save();
   // test hook: run the game forward without drawing (used by the automated checks)
-  window.GW = { land, SEED, garden, seedH, prints: treadIM, post: POST, SPRINGS, drop: (x, z, v) => dropCircle({ v, g: 0 }, x, z, 6, v), people, works, CULVERTS, DECK, get eroded() { return eroded; }, flux: { FL, FR, FU, FD }, H0, crew, setCrew, dirty, snd, goal, GOALS, RIVERS, YARD, GRAVEL, CAMP, MARSH, SPEC, riverAt, tchunks, machines, H, W, M, D, BED, stats, hAt, select, save, trees, rocks, renderer, scene, camera, get jobs() { return jobs; }, get active() { return active; }, setBoss, get boss() { return boss; }, bossCam, bossTap, groundAt, doOrder, contract, CONTRACTS, checkContract, riverSpot,
+  window.GW = { FN, FW, FS, FNW, MUD, land, SEED, garden, seedH, prints: treadIM, post: POST, SPRINGS, drop: (x, z, v) => dropCircle({ v, g: 0 }, x, z, 6, v), people, works, CULVERTS, DECK, get eroded() { return eroded; }, flux: { FL, FR, FU, FD }, H0, crew, setCrew, dirty, snd, goal, GOALS, RIVERS, YARD, GRAVEL, CAMP, MARSH, SPEC, riverAt, tchunks, machines, H, W, M, D, BED, stats, hAt, select, save, trees, rocks, renderer, scene, camera, get jobs() { return jobs; }, get active() { return active; }, setBoss, get boss() { return boss; }, bossCam, bossTap, groundAt, doOrder, contract, CONTRACTS, checkContract, riverSpot,
+    _fill: (c, bx) => { const t = performance.now(); fillChunk(c, bx); return performance.now() - t; },
     draw(n = 1) { for (let i = 0; i < n; i++) { Object.assign(inp, ZERO); update(1 / 30, true); } drawFrame(); },   // tests: one drawn frame while paused
     step(n, input = {}) { for (let i = 0; i < n; i++) { Object.assign(inp, ZERO, input); if (i > 0) inp.act = false; update(1 / 30); } },
     pause(on) { paused = !!on; },
