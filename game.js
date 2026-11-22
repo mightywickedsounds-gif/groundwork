@@ -234,7 +234,7 @@ for (let i = 0; i < 24; i++) { const m = new THREE.Mesh(jamGeo, new THREE.MeshBa
 const TOOLS = ['road', 'curve', 'signal', 'ring', 'oneway', 'lanes', 'erase'];
 const laneName = (nl, tl) => `${nl} lane${nl > 1 ? 's' : ''}${tl ? ' + turn lanes' : ''}`;
 const HINT = touch
-  ? { road: 'Drag to draw a road. Tap to keep going from the pin', curve: 'Drag to draw, then drag to bend it', signal: 'Tap a junction for lights', ring: 'Tap a junction or road for a roundabout', oneway: 'Tap a road to switch its direction', lanes: 'Tap a road for more lanes', erase: 'Tap a road or roundabout to remove it' }
+  ? { road: 'Hold, then drag to draw a road. Tap to keep going from the pin', curve: 'Hold, then drag to draw. Then drag to bend it', signal: 'Tap a junction for lights', ring: 'Tap a junction or road for a roundabout', oneway: 'Tap a road to switch its direction', lanes: 'Tap a road for more lanes', erase: 'Tap a road or roundabout to remove it' }
   : { road: 'Click to start, click to place. It keeps going from the end', curve: 'Click the start, click the end, then move to bend and click', signal: 'Click a junction for lights', ring: 'Click a junction or road for a roundabout', oneway: 'Click a road to switch its direction', lanes: 'Click a road for more lanes', erase: 'Click a road or roundabout to remove it' };
 const T = { tool: '', pts: [], pend: null, bend: null, draw: null, hover: null, mouse: null, plan: null };
 function setTool(t) {
@@ -358,15 +358,27 @@ function click(x, z) {
 }
 
 // ---------------- input ----------------
-// phones: with Road or Curve picked, one finger draws and two fingers move the map
+// phones: a quick drag always moves the map; with Road or Curve picked, press and hold, then drag, to draw.
+// Two fingers turn, tilt and zoom. Bending a curve that's waiting: plain drag.
 const ptrs = new Map(); let drag = null, pinch = null;
+const HOLD = 260;   // ms to hold still before a drag draws
 const drawing = e => e.pointerType !== 'mouse' && (T.tool === 'road' || T.tool === 'curve');
+function startDraw(d) {   // the finger has been held still: from here on this drag draws
+  if (drag !== d || ptrs.size !== 1 || d.moved > 6 || !d.g0) return;
+  d.draw = true; const q = net.probe(d.g0[0], d.g0[1], snapR()); d.start = q.n ? [q.n.x, q.n.z] : q.p;
+  cursor.position.set(d.start[0], .35, d.start[1]); cursor.visible = true; burst(d.start[0], d.start[1], 18, [.5, .95, 1], 3);
+  if (navigator.vibrate) navigator.vibrate(12);
+  hint(T.tool === 'road' ? 'Drag to where the road ends' : 'Drag to where the curve ends'); $('hint').classList.remove('bad');
+}
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('pointerdown', e => {
   canvas.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
   sound.start();
-  if (ptrs.size === 1) { const g = groundAt(e.clientX, e.clientY); drag = { x0: e.clientX, y0: e.clientY, btn: e.button, moved: 0, g0: g, draw: drawing(e) && e.button === 0 }; if (drag.draw && g) { const q = net.probe(g[0], g[1], snapR()); drag.start = q.n ? [q.n.x, q.n.z] : q.p; } }
-  else { drag = null; if (T.draw) { T.draw = null; previewMesh.visible = false; hint(); } }
+  if (ptrs.size === 1) {
+    const g = groundAt(e.clientX, e.clientY); drag = { x0: e.clientX, y0: e.clientY, btn: e.button, moved: 0, g0: g, draw: false };
+    if (drawing(e) && e.button === 0) { if (T.tool === 'curve' && T.pend) drag.draw = true; else { const d = drag; d.timer = setTimeout(() => startDraw(d), HOLD); } }
+  }
+  else { if (drag) clearTimeout(drag.timer); drag = null; if (T.draw) { T.draw = null; previewMesh.visible = false; hint(); } }
   if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), ang: Math.atan2(b.y - a.y, b.x - a.x), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, g0: groundAt((a.x + b.x) / 2, (a.y + b.y) / 2) }; }
 });
 canvas.addEventListener('pointermove', e => {
@@ -383,6 +395,7 @@ canvas.addEventListener('pointermove', e => {
   }
   if (!drag) return;
   const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0; drag.moved = Math.max(drag.moved, Math.hypot(dx, dy));
+  if (drag.moved > 6 && !drag.draw) clearTimeout(drag.timer);   // moved before the hold: it's a pan
   if (drag.draw) {
     if (drag.moved < 10) return;
     const g = groundAt(e.clientX, e.clientY); if (!g) return;
@@ -397,6 +410,7 @@ function up(e) {
   const had = ptrs.has(e.pointerId); ptrs.delete(e.pointerId);
   if (ptrs.size < 2) pinch = null;
   if (!had || !drag) return;
+  clearTimeout(drag.timer);
   const g = groundAt(e.clientX, e.clientY);
   if (drag.draw && drag.moved >= 10 && g) {
     if (T.tool === 'curve' && T.pend) place(T.pend[0], T.pend[1], g);
@@ -408,6 +422,7 @@ function up(e) {
     hoverUpdate(); drag = null; return;
   }
   if (drag.btn === 2 && drag.moved < 6) { T.pts = []; T.pend = null; previewMesh.visible = false; hint(); hoverUpdate(); drag = null; return; }
+  if (drag.draw && drag.moved < 10) { hint(); drag = null; return; }   // held but didn't drag: nothing
   if (drag.btn === 0 && drag.moved < 10 && g) { click(g[0], g[1]); if (e.pointerType === 'mouse') { T.mouse = g; hoverUpdate(); } }
   drag = null;
 }
@@ -681,7 +696,7 @@ requestAnimationFrame(frame);
 // test hooks
 window.FT = {
   dbg() { return { shadowOn: renderer.shadowMap.enabled, sunCast: sun.castShadow, map: !!sun.shadow.map, ms: sun.shadow.mapSize.x, bg: scene.background && scene.background.isTexture, env: !!scene.environment, cam: sun.shadow.camera.right, sunPos: sun.position.toArray().map(Math.round), q: qName, prog: renderer.info.programs.length }; },
-  get net() { return net; }, along, hover(x, z) { T.mouse = [x, z]; hoverUpdate(); }, get T() { return T; }, get city() { return city; }, get S() { return S; }, cam, placeCamera, setTool, click, setSpeed, toggleView,
+  get net() { return net; }, along, toScreen(x, z) { const v = new THREE.Vector3(x, 0, z).project(camera), r = canvas.getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; }, hover(x, z) { T.mouse = [x, z]; hoverUpdate(); }, get T() { return T; }, get city() { return city; }, get S() { return S; }, cam, placeCamera, setTool, click, setSpeed, toggleView,
   step(sec) { for (let t = 0; t < sec; t += .1) simStep(.1); },
   render() { if (net.ver !== seenNet) rebuildRoads(); if (city.ver !== seenCity) rebuildCity(); lighting((S.time / DAY * 24) % 24); drawCars(); updatePeds(.05, U.uNight.value); drawSignals(); paintOverlay(); drawJams(1); renderer.render(scene, camera); },
   setHour(h) { S.time = Math.floor(S.time / DAY) * DAY + h / 24 * DAY; },

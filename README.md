@@ -19,8 +19,8 @@ The old digging game still works at https://mightywickedsounds-gif.github.io/gro
 
 | Tool | Key | What it does |
 |---|---|---|
-| Road | 1 | Phone: drag a finger to draw a road; tap to keep going from the yellow pin. Computer: click to start, click to place; it keeps going from the end. Crossing a road makes a junction; ending near a road joins it. |
-| Curve | 2 | Phone: drag to draw it, then drag to bend it. Computer: click the start, click the end, move to bend, click. |
+| Road | 1 | Phone: press and hold, then drag to draw a road (a quick drag just moves the map); tap to keep going from the yellow pin. Computer: click to start, click to place; it keeps going from the end. Crossing a road makes a junction; ending near a road (even on its sidewalk) joins it. |
+| Curve | 2 | Phone: hold, then drag to draw it, then drag to bend it. Computer: click the start, click the end, move to bend, click. |
 | Lights | 3 | Click a junction to add or remove traffic lights. |
 | Round | 4 | Tap a junction, a bend or any stretch of road to put a roundabout there. It sizes itself to fit and clears the buildings in the way. A road drawn through a roundabout joins it. |
 | One-way | 5 | Click a road: two-way, then one way, then the other way. |
@@ -34,7 +34,7 @@ Any road you build through buildings or trees clears them.
 
 | | Computer | Phone |
 |---|---|---|
-| Move | Drag, or W A S D | Drag (two fingers while drawing roads) |
+| Move | Drag, or W A S D | Drag (always; to draw a road, hold first) |
 | Turn and tilt | Right-drag, or Q E and R F | Two fingers (twist to turn, slide up/down to tilt) |
 | Zoom | Scroll, or Z X | Pinch |
 | Use a tool | Click | Tap |
@@ -100,4 +100,12 @@ The owner's report: roads often refused to build ("can't build there") or came o
 - **Two old building bugs fixed:** a road crossing another exactly on one of its measuring points was wrongly refused as "too close"; and when a new road cut through two roads lying very close together, the two old roads could end up crossing each other without a junction (the safety check now covers every piece a new road creates, so this is refused instead).
 - **Saves:** old saves load as before (every road 1 lane); the lane setup of each road is saved.
 - **Tests:** sim (plain streets: same numbers as before on the same random seeds), sim with lights everywhere and roundabouts everywhere, grow (left alone, the city still locks up on day 3, a little later than before and with fewer drivers giving up), build (0 crossings without a junction, now with random lane changes mixed in; also 0 in a 1000-road run), the new lanes test and the browser checks all pass. Screens checked on a computer and a phone-sized screen (the dock now has 8 tiles and fits).
+
+### Round 5: moving the map on a phone, roads that join
+
+The owner's report: once a road was placed, trying to drag the view placed more roads instead; and a road drawn up to a street stopped at the sidewalk, not connected (screenshot).
+
+- **A quick drag now always moves the map**, with every tool. To draw a road or curve on a phone, press and hold for a moment (the start point sparkles and the phone buzzes where it can), then drag. Taps work as before (tap to keep going from the pin). Bending a curve that's waiting is still a plain drag.
+- **Roads join a street they end next to.** Before, a road end had to land within about 7 to 9 metres of a street's centre line to join it; ending on the sidewalk (about 13 m out) left a dead end with the two sidewalks touching. Now an end that close always joins the street, making a proper junction. On computers too.
+- Tests: browser checks now include real touch gestures on a phone-sized screen (quick drag moves the map and builds nothing, hold-and-drag draws, a road ending on a street's sidewalk joins it, a drag with the pin waiting builds nothing). Build stress test: 0 crossings without a junction. Traffic tests unchanged.
 

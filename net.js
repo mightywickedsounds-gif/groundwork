@@ -178,8 +178,11 @@ export class Net {
     return this.realize(q);
   }
   // what a point would join: an existing node, a spot on a road, or open ground
+  // A spot this close to a road joins it: closer than that, the two roads' sidewalks would overlap with no way through
   probe(x, z, r = SNAP) {
-    const n = this.nearestNode(x, z, r), h = this.nearestEdge(x, z, r);
+    const n = this.nearestNode(x, z, r);
+    let h = this.nearestEdge(x, z, Math.max(r, 24));
+    if (h && h.d > Math.max(r, halfW(h.e) + 2 * WALK_W + ROAD_W / 2 + 1.5)) h = null;
     if (n && (!h || Math.hypot(n.x - x, n.z - z) <= h.d + 7)) return { n };
     if (h) {
       const A = this.nodes.get(h.e.a), B = this.nodes.get(h.e.b);
