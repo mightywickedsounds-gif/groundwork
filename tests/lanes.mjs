@@ -54,6 +54,11 @@ function run(wide) {
   city.sync();
   let changed = 0;
   let lights = 0;
+  if (!wide) {   // the city now starts with wide arterials and lights: make them plain two-lane streets for comparison
+    for (const e of net.edges.values()) if (e.kind === 'avenue') { e.nl = 1; e.tl = 0; }
+    for (const n of net.nodes.values()) n.sig = null;
+    net.ver++;
+  }
   if (wide) for (const e of [...net.edges.values()]) {   // the Lanes tool on every avenue, until 2 lanes + turn lanes
     if (e.kind !== 'avenue' || e.ring) continue;
     for (let k = 0; k < 5 && !(e.nl === 2 && e.tl === 1); k++) { const r = net.cycleLanes(e.id); lights += r.lights; changed++; }
@@ -82,7 +87,7 @@ function run(wide) {
   check('widening every road sets buildings back instead of clearing them all', city.cutBack > 20 && b1 > b0 * .3, `${b0} buildings, ${gone} cleared, ${city.cutBack} set back`);
   for (let i = 0; i < DAY / .1; i++) city.regrow(.1);
   const b2 = city.buildings.length;
-  check('empty street land grows back within a day', b2 > b1 + 20, `${b1} -> ${b2}`);
+  check('empty street land grows back within a day', b2 > b1 && b2 >= b0 * .8, `${b0} at the start, ${b1} after widening, ${b2} a day later`);
   // nothing regrown sits on a road or on another building
   const ov = (a, b) => { const ax = [Math.cos(a.rot || 0), Math.sin(a.rot || 0)], bx = [Math.cos(b.rot || 0), Math.sin(b.rot || 0)], axs = [ax, [-ax[1], ax[0]], bx, [-bx[1], bx[0]]], d = [b.x - a.x, b.z - a.z];
     for (const n of axs) { const ra = a.w / 2 * Math.abs(ax[0] * n[0] + ax[1] * n[1]) + a.d / 2 * Math.abs(-ax[1] * n[0] + ax[0] * n[1]), rb = b.w / 2 * Math.abs(bx[0] * n[0] + bx[1] * n[1]) + b.d / 2 * Math.abs(-bx[1] * n[0] + bx[0] * n[1]); if (Math.abs(d[0] * n[0] + d[1] * n[1]) > ra + rb - .05) return false; } return true; };
@@ -99,7 +104,7 @@ function run(wide) {
 
 const plain = run(false), wide = run(true);
 console.log('plain streets ', plain);
-console.log('wide avenues  ', wide);
+console.log('wide arterials', wide);
 check('wide roads get used', wide.carSecsInTurnLanes > 0 && wide.carSecsInInnerLanes > 0);
 check('no more drivers give up than with plain streets (+5)', wide.gaveUp <= plain.gaveUp + 5);
 check('more trips get done', wide.arrived > plain.arrived);

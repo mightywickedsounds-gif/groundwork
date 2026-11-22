@@ -342,7 +342,7 @@ export class Net {
   }
   // how big a roundabout fits at node n (0 if none)
   // how big a roundabout should be for these roads: room round the ring for every road's full width (wide roads: bigger)
-  ringWant(edges) { let w = 0; for (const e of edges) w += 2 * halfW(e) + 8; return Math.min(30, Math.max(RING_R, w / (2 * Math.PI) + 2)); }
+  ringWant(edges) { let w = 0; for (const e of edges) w += 2 * halfW(e) + 14; return Math.min(32, Math.max(RING_R, w / (2 * Math.PI) + 2)); }
   ringLanes(edges) { return edges.some(e => (e.nl || 1) > 1) ? 2 : 1; }   // two lanes round the ring when wide roads come in
   ringFit(n, Rwant = this.ringWant([...n.edges].map(id => this.edges.get(id)))) {
     let R = Rwant; for (const id of n.edges) R = Math.min(R, this.edges.get(id).len - 7);

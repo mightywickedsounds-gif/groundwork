@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ROAD_W, ONEWAY_W, WALK_W, LANE_W, RING_R, along, halfW, laneOff } from './net.js';
 
+
 const Y_ROAD = .03, Y_WALK = .16, Y_MARK = .045;
 export const hwOf = halfW;
 
@@ -133,7 +134,8 @@ export function buildRoads(net, M, opt = {}) {
           const H = LANE_W / 2;
           seg(MY, m, cm, H, 0, Lm - Pb); seg(MK, m, cm, H, Lm - Pb, Lm);
           seg(MY, m, cm, -H, Pa, Lm); seg(MK, m, cm, -H, 0, Pa);
-          hatch(MY, m, cm, -H, H, Pa + 1, Lm - Pb - 1);
+          // between the turn bays: a two-way left-turn lane (solid yellow outside, dashed yellow inside, both sides)
+          seg(MY, m, cm, H - .32, Pa + 1, Lm - Pb - 1, .12, true); seg(MY, m, cm, -(H - .32), Pa + 1, Lm - Pb - 1, .12, true);
         } else if (e.kind === 'avenue' || nl > 1) { line(MY, off(m, mn, -.16), .12, Y_MARK); line(MY, off(m, mn, .16), .12, Y_MARK); }
         else dashes(MK, m, .14, 3, 5, Y_MARK, 2);
         for (let i = 0; i + 1 < nl; i++) { const o = (laneOff(e, i) + laneOff(e, i + 1)) / 2; seg(MK, m, cm, o, 0, Lm, .13, true); seg(MK, m, cm, -o, 0, Lm, .13, true); }
@@ -301,12 +303,14 @@ function arrow(G, x, z, dx, dz) {
 }
 
 // ---------- buildings ----------
-const STYLE = { office: 0, apt: 1, house: 2, shop: 3 };
+const STYLE = { office: 0, apt: 1, house: 2, shop: 3, big: 4 };
+// Central Texas suburb: limestone, tan stucco and brick; cream and tan shopping centres
 const FACADE = {
-  office: [[.55, .6, .64], [.36, .42, .48], [.62, .6, .55], [.25, .3, .34], [.7, .72, .73]],
-  apt: [[.78, .74, .66], [.66, .52, .44], [.84, .82, .78], [.58, .55, .5], [.72, .62, .5], [.5, .44, .4]],
-  house: [[.88, .86, .8], [.8, .74, .64], [.72, .7, .68], [.9, .88, .84], [.68, .6, .52]],
-  shop: [[.75, .72, .68], [.6, .58, .55], [.82, .8, .76]],
+  office: [[.8, .76, .66], [.5, .56, .6], [.86, .84, .78], [.62, .6, .55], [.72, .66, .56]],
+  apt: [[.84, .78, .64], [.78, .7, .56], [.9, .86, .76], [.7, .6, .48], [.62, .52, .42]],
+  house: [[.86, .8, .66], [.82, .72, .56], [.56, .32, .24], [.5, .36, .28], [.74, .58, .44], [.9, .88, .82], [.7, .68, .62]],
+  shop: [[.86, .8, .68], [.78, .72, .6], [.9, .88, .82], [.72, .66, .58], [.66, .6, .52]],
+  big: [[.82, .78, .7], [.74, .72, .68], [.86, .84, .8]],
 };
 function buildingMaterial(U) {
   const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: .85, metalness: 0 });
@@ -319,24 +323,29 @@ function buildingMaterial(U) {
         { vec3 n = normalize(vWn); float st = vInfo.x; float H = vInfo.y;
           fRoof = step(.5, n.y);
           float u = dot(vWp.xz, vec2(-n.z, n.x)); float y = vWp.y;
-          float fh = st < .5 ? 3.9 : (st > 1.5 && st < 2.5 ? 3.0 : 3.25);
-          float ww = st < .5 ? 1.55 : (st > 1.5 ? 3.4 : 2.7);
+          float fh = st < .5 ? 3.6 : (st > 1.5 && st < 2.5 ? 2.9 : 3.3);
+          float ww = st < .5 ? 1.55 : (st > 1.5 ? 3.4 : 2.9);
           vec2 cell = vec2(u / ww, (y - .9) / fh); vec2 g = fract(cell); vec2 id = floor(cell);
-          float win;
-          if (st < .5 && vInfo.z < .45) win = step(.05, g.x) * step(g.x, .95) * step(.14, g.y) * step(g.y, .93);
-          else if (st < .5) win = step(.42, g.y) * step(g.y, .86) * step(.03, fract(u / 1.8));
-          else if (st < 1.5) win = step(.22, g.x) * step(g.x, .78) * step(.28, g.y) * step(g.y, .82);
-          else if (st < 2.5) win = step(.3, g.x) * step(g.x, .7) * step(.3, g.y) * step(g.y, .75) * step(h21(id + vInfo.z * 13.), .7);
-          else win = step(y, 3.6) * step(.04, g.x) * step(g.x, .96) * step(.6, y);
-          if (st < 1.5 && y < 4.2) win = step(.6, y) * step(.04, fract(u / 4.5)) * step(fract(u / 4.5), .96) * step(y, 3.5);   // shopfronts
-          win *= (1. - fRoof) * step(y, H - .9);
-          float slab = (1. - fRoof) * step(st, 1.5) * (1. - step(.06, abs(fract((y - .9) / fh + .02) - .02)));
+          float win, band = 0.;
+          if (st < .5 && vInfo.z < .35) win = step(.05, g.x) * step(g.x, .95) * step(.14, g.y) * step(g.y, .93);          // glass office
+          else if (st < .5) win = step(.38, g.y) * step(g.y, .84) * step(.03, fract(u / 1.8));                          // ribbon windows
+          else if (st < 1.5) win = step(.25, g.x) * step(g.x, .75) * step(.3, g.y) * step(g.y, .8);                     // apartments
+          else if (st < 2.5) win = step(.3, g.x) * step(g.x, .7) * step(.3, g.y) * step(g.y, .78) * step(h21(id + vInfo.z * 13.), .62);   // a house
+          else if (st < 3.5) { win = step(.5, y) * step(y, 3.3) * step(.05, fract(u / 6.)) * step(fract(u / 6.), .95);   // shopfronts
+                               band = step(3.7, y) * step(y, H - .5) * step(.08, fract(u / 12.)) * step(fract(u / 12.), .7); } // sign band
+          else win = step(.4, y) * step(y, 4.2) * step(.44, fract(u / 46.)) * step(fract(u / 46.), .56);                // a big store's entrance
+          if (vInfo.w > .5 && st < 1.5 && y < 4.2) win = step(.6, y) * step(.04, fract(u / 4.5)) * step(fract(u / 4.5), .96) * step(y, 3.5);   // town centre: shops downstairs
+          win *= (1. - fRoof) * step(y, H - .9); band *= 1. - fRoof;
+          float slab = (1. - fRoof) * step(st, .5) * (1. - step(.06, abs(fract((y - .9) / fh + .02) - .02)));
           fWin = win;
           fLit = win * step(.66 - vInfo.z * .2, h21(id + floor(vInfo.z * 97.)));
           vec3 glass = st < .5 ? mix(vec3(.1, .14, .17), vec3(.14, .17, .16), step(.25, vInfo.z)) : vec3(.09, .1, .11);
           diffuseColor.rgb = mix(diffuseColor.rgb, glass, win);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.42, .4, .37) * (.8 + .4 * h21(vec2(floor(u / 12.), vInfo.z))), band);
           diffuseColor.rgb *= 1. - slab * .25;
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.24, .24, .235) * (.85 + .3 * h21(floor(vWp.xz * .35))), fRoof * step(st, 1.5) + fRoof * step(2.5, st));
+          // flat roofs: light membrane on stores, grey gravel elsewhere (pitched roofs sit on top as their own mesh)
+          vec3 roofC = st > 2.5 ? vec3(.8, .8, .78) : vec3(.5, .5, .48);
+          diffuseColor.rgb = mix(diffuseColor.rgb, roofC * (.88 + .24 * h21(floor(vWp.xz * .35))), fRoof);
           diffuseColor.rgb *= .92 + .16 * h21(floor(vWp.xz * .3) + id.y);
           float ao = clamp(y / 2.5, .55, 1.); diffuseColor.rgb *= mix(1., ao, 1. - fRoof);
         }`)
@@ -346,11 +355,19 @@ function buildingMaterial(U) {
   };
   return m;
 }
-function roofGeo() {   // gable prism: base 1x1 at y=0, ridge along x at y=1
-  const g = new THREE.BufferGeometry();
-  const P = [-.5, 0, -.5, .5, 0, -.5, .5, 1, 0, -.5, 1, 0, /**/ .5, 0, .5, -.5, 0, .5, -.5, 1, 0, .5, 1, 0, /**/ -.5, 0, .5, -.5, 0, -.5, -.5, 1, 0, /**/ .5, 0, -.5, .5, 0, .5, .5, 1, 0];
-  g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
-  g.setIndex([0, 2, 1, 0, 3, 2, 4, 6, 5, 4, 7, 6, 8, 10, 9, 11, 13, 12]);
+function roofGeo() {   // hip roof: base 1x1 at y=0, short ridge along x at y=1, sloping on all four sides
+  const k = .22, P = [], add = (...v) => P.push(...v);
+  const b0 = [-.5, 0, -.5], b1 = [.5, 0, -.5], b2 = [.5, 0, .5], b3 = [-.5, 0, .5], r0 = [-k, 1, 0], r1 = [k, 1, 0];
+  add(...b0, ...r1, ...b1, ...b0, ...r0, ...r1);      // north slope
+  add(...b2, ...r0, ...b3, ...b2, ...r1, ...r0);      // south slope
+  add(...b3, ...r0, ...b0);                           // west hip
+  add(...b1, ...r1, ...b2);                           // east hip
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+  g.computeVertexNormals(); return g;
+}
+function cedarGeo(seed, detail = 1) {   // Ashe juniper: dense, dark, narrowing to the top
+  const g = new THREE.IcosahedronGeometry(1, detail), p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) { const x = p.getX(i), y = p.getY(i), z = p.getZ(i), t = 1 - .6 * (y + 1) / 2, n = 1 + .14 * Math.sin(x * 5 + seed) * Math.cos(z * 4.3 + y * 3); p.setXYZ(i, x * t * n, y, z * t * n); }
   g.computeVertexNormals(); return g;
 }
 function canopyGeo(seed, detail = 2) {
@@ -376,11 +393,11 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
     const ry = -(b.rot || 0), bc = Math.cos(b.rot || 0), bs = Math.sin(b.rot || 0);   // b.rot turns its own x axis to (cos, sin) on the ground
     dummy.position.set(b.x, 0, b.z); dummy.rotation.set(0, ry, 0); dummy.scale.set(b.w, b.h, b.d); dummy.updateMatrix(); bm.setMatrixAt(i, dummy.matrix);
     const pal = FACADE[b.kind]; const c = pal[Math.floor(b.tone * pal.length) % pal.length]; col.setRGB(c[0], c[1], c[2], THREE.SRGBColorSpace); bm.setColorAt(i, col);
-    info.set([STYLE[b.kind], b.h, b.tone, 0], i * 4);
+    info.set([STYLE[b.kind] ?? 3, b.h, b.tone, Math.hypot(b.x, b.z) < 175 && b.kind !== 'house' ? 1 : 0], i * 4);
     if (b.roof) {
-      const along = b.w >= b.d; dummy.position.set(b.x, b.h, b.z); dummy.rotation.set(0, ry + (along ? 0 : Math.PI / 2), 0); dummy.scale.set((along ? b.w : b.d) + .7, 2.2 + b.tone * 1.2, (along ? b.d : b.w) + .7); dummy.updateMatrix(); rm.setMatrixAt(ri, dummy.matrix);
-      const rc = [[.42, .2, .16], [.3, .3, .32], [.36, .26, .2], [.22, .22, .24], [.5, .28, .2]][Math.floor(b.tone * 97) % 5]; col.setRGB(rc[0], rc[1], rc[2], THREE.SRGBColorSpace); rm.setColorAt(ri++, col);
-    } else if (b.h > 9) {
+      const along = b.w >= b.d; dummy.position.set(b.x, b.h, b.z); dummy.rotation.set(0, ry + (along ? 0 : Math.PI / 2), 0); dummy.scale.set((along ? b.w : b.d) + .9, 1.8 + b.tone * 1.3, (along ? b.d : b.w) + .9); dummy.updateMatrix(); rm.setMatrixAt(ri, dummy.matrix);
+      const rc = [[.24, .23, .22], [.32, .27, .22], [.4, .38, .36], [.3, .25, .2], [.46, .43, .39], [.28, .28, .3]][Math.floor(b.tone * 97) % 6]; col.setRGB(rc[0], rc[1], rc[2], THREE.SRGBColorSpace); rm.setColorAt(ri++, col);   // composition shingles
+    } else if (b.h > 4.5) {   // flat roofs carry air-conditioning units
       const n = 1 + Math.floor(b.tone * 4); let s = b.tone * 1000;
       const r = () => (s = (s * 9301 + 49297) % 233280) / 233280;
       for (let k = 0; k < n; k++) { const w = 2 + r() * Math.min(7, b.w * .3), d = 2 + r() * Math.min(6, b.d * .3), ox = (r() - .5) * (b.w - w - 2), oz = (r() - .5) * (b.d - d - 2); bits.push([b.x + ox * bc - oz * bs, b.h, b.z + ox * bs + oz * bc, w, 1.2 + r() * 2.6, d, ry]); }
@@ -420,21 +437,56 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
     parked.forEach((p, i) => { dummy.position.set(p[0], 0, p[1]); dummy.rotation.set(0, p[2], 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix(); pm.setMatrixAt(i, dummy.matrix); pm.setColorAt(i, carColor(p[3], col)); });
     g.add(pm);
   }
+  // houses: a concrete driveway to the street and a wooden privacy fence round the back yard
+  const drive = new Geo(), fence = [];
+  for (const b of B) {
+    if (b.kind !== 'house') continue;
+    let fxv = b.fx - b.x, fzv = b.fz - b.z; const L = Math.hypot(fxv, fzv); if (L < 4) continue; fxv /= L; fzv /= L;
+    const px = -fzv, pz = fxv, c = Math.cos(b.rot || 0), sn = Math.sin(b.rot || 0);
+    const hf = Math.abs(fxv * c + fzv * sn) * b.w / 2 + Math.abs(-fxv * sn + fzv * c) * b.d / 2;   // half size toward the street
+    const hp = Math.abs(px * c + pz * sn) * b.w / 2 + Math.abs(-px * sn + pz * c) * b.d / 2;       // ... and across
+    const edge = (b.e ? hwOf(b.e) : 3.5) + WALK_W, len = L - hf - edge;
+    if (len > 1.5) {
+      const side = b.tone < .5 ? -1 : 1, o = side * Math.max(0, hp - 2.9), w = 2.6;
+      const q = (t, s2) => [b.x + fxv * t + px * (o + s2), b.z + fzv * t + pz * (o + s2)];
+      drive.flat(q(hf, -w), q(hf, w), q(hf + len, w), q(hf + len, -w), .045);
+    }
+    if (b.lw > 0) {   // fence: along the back lot line and down both sides to the house
+      const rear = Math.max(4, Math.min(16, (b.ld || 30) - 7 - hf * 2)), bk = hf + rear, half = b.lw / 2;
+      const seg = (t0, s0, t1, s1) => { const a = [b.x + fxv * -t0 + px * s0, b.z + fzv * -t0 + pz * s0], e2 = [b.x + fxv * -t1 + px * s1, b.z + fzv * -t1 + pz * s1]; fence.push([(a[0] + e2[0]) / 2, (a[1] + e2[1]) / 2, Math.hypot(e2[0] - a[0], e2[1] - a[1]), Math.atan2(-(e2[1] - a[1]), e2[0] - a[0])]); };
+      seg(bk, -half, bk, half); seg(0, -half, bk, -half); seg(0, half, bk, half);
+      seg(0, -half, 0, -hp); seg(0, hp, 0, half);   // short runs from the house to the side lot lines
+    }
+  }
+  if (drive.p.length) { const m = new THREE.Mesh(drive.build(), M.walk); m.receiveShadow = true; g.add(m); }
+  if (fence.length) {
+    const fm = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1.8, .12).translate(0, .9, 0), M.fence || (M.fence = new THREE.MeshStandardMaterial({ color: 0x7a634b, roughness: .95 })), fence.length);
+    fence.forEach((f, i) => { dummy.position.set(f[0], 0, f[1]); dummy.rotation.set(0, f[3], 0); dummy.scale.set(f[2], 1, 1); dummy.updateMatrix(); fm.setMatrixAt(i, dummy.matrix); });
+    fm.castShadow = Q.shadows > 1; fm.receiveShadow = true; g.add(fm);
+  }
   // trees (plus woods on land the city hasn't reached yet)
   const T = city.trees.slice();
   if (opt.wild) for (const w of opt.wild) T.push(w);
   if (T.length) {
     const trunkG = new THREE.CylinderGeometry(.14, .22, 1, 6).translate(0, .5, 0);
     const tm = new THREE.InstancedMesh(trunkG, M.trunk || (M.trunk = new THREE.MeshStandardMaterial({ color: 0x4a3a2c, roughness: .9 })), T.length);
-    const cg = [canopyGeo(1, Q.treeDetail), canopyGeo(4.2, Q.treeDetail)];
+    const cg = [canopyGeo(1, Q.treeDetail), cedarGeo(4.2, Math.max(1, Q.treeDetail - 1))];   // live oak, cedar
     const cms = cg.map(geo => new THREE.InstancedMesh(geo, M.leaf || (M.leaf = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: .85 })), T.length));
     const cnt = [0, 0];
     T.forEach((t, i) => {
-      const s = t[2], h = 2.6 * s + 1.4;
-      dummy.position.set(t[0], 0, t[1]); dummy.rotation.set(0, t[3] * 6.28, 0); dummy.scale.set(s, h, s); dummy.updateMatrix(); tm.setMatrixAt(i, dummy.matrix);
-      const v = t[3] < .5 ? 0 : 1, m = cms[v];
-      dummy.position.set(t[0], h + 1.2 * s, t[1]); dummy.scale.set(3.1 * s, 2.9 * s, 3.1 * s); dummy.updateMatrix(); m.setMatrixAt(cnt[v], dummy.matrix);
-      const k = (t[3] * 7.13) % 1; col.setRGB(.2 + k * .12, .32 + k * .1, .12 + k * .05, THREE.SRGBColorSpace); m.setColorAt(cnt[v]++, col);
+      const s = t[2], v = t[3] < .7 ? 0 : 1, m = cms[v], k = (t[3] * 7.13) % 1;
+      if (v === 0) {   // live oak: short trunk, wide low spreading crown
+        const h = 1.5 * s + 1.1;
+        dummy.position.set(t[0], 0, t[1]); dummy.rotation.set(0, t[3] * 6.28, 0); dummy.scale.set(s * 1.4, h, s * 1.4); dummy.updateMatrix(); tm.setMatrixAt(i, dummy.matrix);
+        dummy.position.set(t[0], h + 1.1 * s, t[1]); dummy.scale.set(4.4 * s, 2.1 * s, 4.1 * s); dummy.updateMatrix(); m.setMatrixAt(cnt[v], dummy.matrix);
+        col.setRGB(.19 + k * .08, .27 + k * .07, .12 + k * .04, THREE.SRGBColorSpace);
+      } else {         // cedar: low trunk, dense dark crown
+        const h = .6 * s + .4;
+        dummy.position.set(t[0], 0, t[1]); dummy.rotation.set(0, t[3] * 6.28, 0); dummy.scale.set(s * .8, h, s * .8); dummy.updateMatrix(); tm.setMatrixAt(i, dummy.matrix);
+        dummy.position.set(t[0], h + 1.9 * s, t[1]); dummy.scale.set(1.9 * s, 2.3 * s, 1.9 * s); dummy.updateMatrix(); m.setMatrixAt(cnt[v], dummy.matrix);
+        col.setRGB(.13 + k * .05, .2 + k * .05, .15 + k * .03, THREE.SRGBColorSpace);
+      }
+      m.setColorAt(cnt[v]++, col);
     });
     tm.castShadow = true; g.add(tm);
     cms.forEach((m, v) => { m.count = cnt[v]; m.castShadow = m.receiveShadow = true; if (cnt[v]) g.add(m); });

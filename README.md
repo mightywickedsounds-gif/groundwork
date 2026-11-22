@@ -1,6 +1,6 @@
 # Flowtown
 
-A traffic game you play in the browser. A city keeps growing on its own, full of cars, buses, trucks and people heading to work, home and the shops. You fly above it with magic tools and reshape the streets so traffic keeps moving. If the jams get bad enough for long enough, the city locks up.
+A traffic game you play in the browser. A suburban town in the style of the Central Texas Hill Country keeps growing on its own, full of cars, buses, trucks and people heading to work, home and the shops. You fly above it with magic tools and reshape the streets so traffic keeps moving. If the jams get bad enough for long enough, the city locks up.
 
 Play it here (from `main`, once merged): https://mightywickedsounds-gif.github.io/groundwork/
 
@@ -129,4 +129,20 @@ The owner's screenshots: after widening the whole grid (and building a rotated g
 - **Junction drawing fixes:** where roads meet at sharp angles, sidewalk could be painted over the whole junction (a big pale blob); the sidewalk now always follows the kerb. A road carrying straight on past a junction gets a straight kerb instead of a bulge. The painted median hatching looks less like a ladder.
 - **Saves:** buildings remember their angle; older saves load as before.
 - **Tests:** new checks in the lanes test (widening sets buildings back, the city regrows within a day, no regrown building overlaps another or a road, saves keep turned buildings), and the growth test now regrows like the game. Traffic (with lights, roundabouts everywhere: same range as before while keeping a third more buildings), growth (left alone, still locks up on day 3), building (0 crossings without a junction) and browser checks all pass.
+
+### Round 8: a Central Texas suburb
+
+The owner's direction: the city should look realistic, styled after a Central Texas Hill Country suburb.
+
+- **Nothing tall any more.** The glass-tower downtown is gone. New cities and new districts are laid out like a suburb:
+  - **Neighbourhoods:** houses on lots about 15 to 19 m wide, one or two storeys, in limestone, tan stucco or brick with hipped shingle roofs, a concrete driveway to the street, a front-yard oak and a wooden privacy fence round the back yard.
+  - **Along the arterials:** shopping strips with parking lots in front and a plain sign band over the shopfronts, the odd big store (mostly blank walls, a glass entrance, a big lot), 2 to 4 storey offices with parking beside them, and 3-storey garden apartments with pitched roofs. Stores have light-coloured flat roofs with air-conditioning units.
+  - **A small town centre** near the middle: 2 to 4 storey buildings up to the sidewalk, shops downstairs.
+- **Arterials** (the roads round every district) now start as 2 lanes each way with a centre two-way left-turn lane (solid yellow outside, dashed yellow inside), with traffic lights where they cross. Neighbourhood streets stay 2-lane.
+- **Trees:** live oaks (short trunk, wide low crown) and cedars (dense, dark, narrow). The woods outside town are mostly cedar. The grass is a drier olive.
+- **Regrowth** builds the same mix: houses on neighbourhood streets, shops, offices and apartments on arterials and wide roads.
+- **Traffic balance:** a suburb has fewer people than the old towers (about 1,200 in the first three districts instead of 5,600), but everyone drives, so each person makes more trips. Left alone, the city starts jamming on day 3 and locks up around day 3.5 to 4 (a little later than before, because it now starts with proper arterials and lights).
+- **Roundabouts on wide roads are a bit bigger,** leaving real ring road between the entrances. Roundabouts everywhere: 470 trips a day with 6 drivers giving up, up from 300 and 70 in this round's first try.
+- Saved cities keep the buildings they already have; their new districts come in the new style. Houses remember their lot size (for fences) in the save.
+- **Tests:** sim (636 trips a day, 6 gave up), lights everywhere (629 and 15; the test now only adds lights instead of flipping them), roundabouts everywhere (470 and 6), growth, build (0 crossings without a junction), lanes and browser checks pass. The phone hold-then-draw check failed once in five browser runs while the machine was busy with other tests. It couldn't be reproduced, and the test now reports the on-screen message if it fails again.
 

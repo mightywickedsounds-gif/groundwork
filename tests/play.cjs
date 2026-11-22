@@ -92,7 +92,7 @@ const TYPES = { js: 'text/javascript', mjs: 'text/javascript', jpg: 'image/jpeg'
     // hold, then drag: a road from a street out into a block
     const sp = await q.evaluate(() => { const e = [...FT.net.edges.values()].find(e => !e.ring && e.len > 60 && Math.hypot(e.cx - FT.cam.x, e.cz - FT.cam.z) < 60) || [...FT.net.edges.values()][0]; const p = FT.along(e.pts, e.cum, e.len / 2); const r = [-p[3], p[2]]; return [FT.toScreen(p[0] + r[0] * 12.5, p[1] + r[1] * 12.5), FT.toScreen(p[0] + r[0] * 45, p[1] + r[1] * 45)]; });
     await touch(line(sp[1][0], sp[1][1], sp[0][0], sp[0][1]), 450);
-    const ph2 = await q.evaluate(() => ({ e: FT.net.edges.size, pin: FT.T.pts.length }));
+    const ph2 = await q.evaluate(() => ({ e: FT.net.edges.size, pin: FT.T.pts.length, toast: document.getElementById('toast').textContent, hint: document.getElementById('hint').textContent }));
     check('phone: hold then drag draws a road', ph2.e > ph1.e, JSON.stringify(ph2));
     const joined = await q.evaluate(() => { const n = [...FT.net.nodes.values()].sort((a, b) => b.id - a.id); return n.slice(0, 3).some(m => m.edges.size >= 3); });
     check('phone: a road drawn up to a street (ending on its sidewalk) joins it', joined);

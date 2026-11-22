@@ -46,7 +46,7 @@ new RGBELoader().load('assets/sky.hdr', t => {
 // ground
 const grassTex = new THREE.TextureLoader().load('assets/grass.jpg', t => { t.colorSpace = THREE.SRGBColorSpace; });
 grassTex.wrapS = grassTex.wrapT = THREE.RepeatWrapping; grassTex.anisotropy = 8;
-const groundMat = new THREE.MeshStandardMaterial({ map: grassTex, roughness: 1, color: 0xb4bc96 });
+const groundMat = new THREE.MeshStandardMaterial({ map: grassTex, roughness: 1, color: 0xc4bf94 });   // drier Hill Country grass
 groundMat.onBeforeCompile = sh => {
   sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vGw;').replace('#include <uv_vertex>', '#include <uv_vertex>\n vGw = (modelMatrix * vec4(position, 1.)).xz;');
   sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vGw;\nfloat gn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f); float a = fract(sin(dot(i, vec2(12.9, 78.2)))*43758.5), b = fract(sin(dot(i+vec2(1,0), vec2(12.9, 78.2)))*43758.5), c = fract(sin(dot(i+vec2(0,1), vec2(12.9, 78.2)))*43758.5), d = fract(sin(dot(i+vec2(1,1), vec2(12.9, 78.2)))*43758.5); return mix(mix(a,b,f.x), mix(c,d,f.x), f.y); }')
