@@ -17,14 +17,14 @@ export const LANE_STEPS = [[1, 0], [1, 1], [2, 0], [2, 1], [3, 1]];
 
 // half the width of a road's carriageway (kerb to kerb / 2)
 export function halfW(e) {
-  const nl = e.ring ? 1 : (e.nl || 1), tl = e.ring ? 0 : (e.tl || 0);
+  const nl = e.ring ? Math.min(2, e.nl || 1) : (e.nl || 1), tl = e.ring ? 0 : (e.tl || 0);
   if (e.oneway || e.ring) return nl === 1 && !tl ? ONEWAY_W / 2 : (nl * LANE_W + (tl ? LANE_W : 0) + .6) / 2;
   return nl * LANE_W + (tl ? LANE_W / 2 : 0);
 }
 // how far right of the centreline lane i sits, facing the way it drives (0 = kerb lane, nl = turn lane)
 export function laneOff(e, i) {
-  if (e.ring) return 0;
-  const nl = e.nl || 1, tl = e.tl || 0;
+  const nl = e.ring ? Math.min(2, e.nl || 1) : (e.nl || 1), tl = e.ring ? 0 : (e.tl || 0);
+  if (e.ring && nl === 1) return 0;
   if (e.oneway) return nl === 1 && !tl ? 0 : halfW(e) - .3 - (i + .5) * LANE_W;
   if (i >= nl) return 0;              // the turn lane sits in the middle
   return (tl ? LANE_W / 2 : 0) + (nl - 1 - i + .5) * LANE_W;
@@ -325,6 +325,12 @@ export class Net {
     const e = this.edges.get(eid); if (!e || e.ring) return null;
     const [nl, tl] = this.nextLanes(e), chain = this.roadChain(e);
     for (const f of chain) { f.nl = nl; f.tl = tl; }
+    // a roundabout at either end gets a second lane when a wide road now comes in
+    for (const f of chain) for (const nid of [f.a, f.b]) {
+      const n = this.nodes.get(nid); if (!n || !n.ring) continue;
+      const spokes = []; for (const m of this.nodes.values()) if (m.ring === n.ring) for (const id of m.edges) { const g = this.edges.get(id); if (!g.ring) spokes.push(g); }
+      const L = this.ringLanes(spokes); for (const g of this.edges.values()) if (g.ring === n.ring) g.nl = L;
+    }
     // where wide roads cross (or one ends at another) at a plain junction, put up traffic lights (one at a time doesn't work there)
     let lights = 0;
     if (nl >= 2) for (const f of chain) for (const nid of [f.a, f.b]) {
@@ -335,7 +341,10 @@ export class Net {
     this.ver++; return { nl, tl, lights };
   }
   // how big a roundabout fits at node n (0 if none)
-  ringFit(n, Rwant = RING_R) {
+  // how big a roundabout should be for these roads: room round the ring for every road's full width (wide roads: bigger)
+  ringWant(edges) { let w = 0; for (const e of edges) w += 2 * halfW(e) + 8; return Math.min(30, Math.max(RING_R, w / (2 * Math.PI) + 2)); }
+  ringLanes(edges) { return edges.some(e => (e.nl || 1) > 1) ? 2 : 1; }   // two lanes round the ring when wide roads come in
+  ringFit(n, Rwant = this.ringWant([...n.edges].map(id => this.edges.get(id)))) {
     let R = Rwant; for (const id of n.edges) R = Math.min(R, this.edges.get(id).len - 7);
     for (const e of this.edges.values()) {   // other roads nearby must stay outside the ring
       if (e.a === n.id || e.b === n.id) continue;
@@ -344,10 +353,12 @@ export class Net {
     return R >= 8 ? R : 0;
   }
   // turn a junction, bend or road end into a roundabout. Returns ring id or a reason string.
-  makeRoundabout(nid, Rwant = RING_R) {
+  makeRoundabout(nid, Rwant) {
     const n = this.nodes.get(nid); if (!n) return 'Tap a road or junction';
     if (n.ring) return 'Already a roundabout';
     if (!n.edges.size) return 'Tap a road or junction';
+    const spokeEdges = [...n.edges].map(id => this.edges.get(id)), ringNl = this.ringLanes(spokeEdges);
+    if (Rwant == null) Rwant = this.ringWant(spokeEdges);
     const R = this.ringFit(n, Rwant); if (!R) return 'Not enough room here';
     const snap = this.serialize(), eid0 = this.eid;
     const spokes = [];
@@ -397,7 +408,7 @@ export class Net {
       const from = all[(i + 1) % all.length], to = all[i];
       let a0 = from.ang, a1 = to.ang; while (a0 <= a1) a0 += Math.PI * 2;
       const mid = (a0 + a1) / 2, k = R / Math.cos((a0 - a1) / 2);
-      this.addEdge(from.n.id, to.n.id, n.x + Math.cos(mid) * k, n.z + Math.sin(mid) * k, { oneway: 1, ring: rid });
+      this.addEdge(from.n.id, to.n.id, n.x + Math.cos(mid) * k, n.z + Math.sin(mid) * k, { oneway: 1, ring: rid, nl: ringNl });
     }
     if (this.crossesOthers([...this.edges.values()].filter(e => e.id >= eid0))) { this.restore(snap); return 'Not enough room here'; }
     this.ver++;
@@ -405,7 +416,7 @@ export class Net {
   }
   // a roundabout on a plain stretch of road: split it there first
   roundaboutOnRoad(e, s) {
-    const R = Math.min(RING_R, s - 7, e.len - s - 7);
+    const R = Math.min(this.ringWant([e, e]), s - 7, e.len - s - 7);
     if (R < 8) return 'Too close to a junction';
     const p = along(e.pts, e.cum, s);
     for (const f of this.edges.values()) if (f !== e && closestOnPoly(f.pts, f.cum, p[0], p[1]).d < 17) return 'Not enough room here';
@@ -521,7 +532,7 @@ export class Net {
     }
     for (const e of this.edges.values()) {
       e.lanes = [];
-      const nl = e.ring ? 1 : Math.max(1, Math.min(MAX_LANES, e.nl || 1));
+      const nl = e.ring ? Math.min(2, e.nl || 1) : Math.max(1, Math.min(MAX_LANES, e.nl || 1));
       for (const dir of [1, -1]) {
         if (e.oneway && e.oneway !== dir) continue;
         const from = this.nodes.get(dir > 0 ? e.a : e.b), to = this.nodes.get(dir > 0 ? e.b : e.a);
@@ -559,7 +570,7 @@ export class Net {
           const O0 = ex.main[0], h1 = along(O0.pts, O0.cum, 0);
           let ang = Math.atan2(h0[2] * h1[3] - h0[3] * h1[2], h0[2] * h1[2] + h0[3] * h1[3]);
           const u = uturn || Math.abs(ang) > 2.7; if (u) ang = -Math.PI;
-          const t = u ? 3 : Math.abs(ang) < .5 ? 0 : ang > 0 ? 1 : 2;     // straight, right, left, U-turn
+          const t = ap.edge.ring && ex.edge.ring ? 0 : u ? 3 : Math.abs(ang) < .5 ? 0 : ang > 0 ? 1 : 2;     // straight, right, left, U-turn (round the ring = straight on)
           mvs.push({ ex, ang, t, w: t === 0 ? 3 : 1 });
         }
         if (!mvs.length) continue;
@@ -569,7 +580,8 @@ export class Net {
         if (ap.pk) { pkM = mvs.filter(m => m.t >= 2); main = mvs.filter(m => m.t < 2); if (!main.length) main = mvs; }
         // share the movements out over the lanes: kerb lane turns right, middle lane goes straight, inner lane turns left
         const W = main.reduce((a, m) => a + m.w, 0); let c = 0;
-        for (const m of main) { m.S = []; for (let i = 0; i < k; i++) { const lo = Math.max(c, i * W / k), hi = Math.min(c + m.w, (i + 1) * W / k); if (hi - lo > 1e-6) m.S.push(ap.main[i]); } c += m.w; }
+        if (ap.edge.ring) { for (const m of mvs) m.S = ap.main.slice(); }   // on a two-lane ring both lanes may carry on or leave (inner lane to the exit's inner lane)
+        else for (const m of main) { m.S = []; for (let i = 0; i < k; i++) { const lo = Math.max(c, i * W / k), hi = Math.min(c + m.w, (i + 1) * W / k); if (hi - lo > 1e-6) m.S.push(ap.main[i]); } c += m.w; }
         if (ap.pk) for (const m of pkM) { if (main !== mvs) m.S = []; m.S.push(ap.pk); }
         for (const m of mvs) {
           const S = m.S, s = S.length, O = m.ex.main, o = O.length, bit = [1, 2, 4, 8][m.t];

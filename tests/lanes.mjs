@@ -71,6 +71,32 @@ function run(wide) {
   const s = net.stats;
   return { changed, lights, buildingsCleared: gone, arrived: s.arrived, gaveUp: s.gaveUp, avgTrip: +(s.tripSec / s.arrived).toFixed(1), stuckMax, carSecsInTurnLanes: Math.round(pk * dt), carSecsInInnerLanes: Math.round(multi * dt), stepMaxMs: +maxMs.toFixed(1) };
 }
+// ---- 3) widening every road to 3 lanes + turn lanes keeps the city: buildings set back, empty street land grows back ----
+{
+  const R = rng(5); const orig = Math.random; Math.random = R;
+  const net = new Net(), city = createCity(net, 7);
+  for (let i = 0; i < 3; i++) { const d = city.nextDistrict(); city.unlock(d[0], d[1]); }
+  city.sync(); const b0 = city.buildings.length;
+  for (const e of [...net.edges.values()]) { if (!net.edges.has(e.id) || e.ring) continue; for (let k = 0; k < 5 && !(e.nl === 3 && e.tl === 1); k++) net.cycleLanes(e.id); }
+  const gone = city.sync().filter(g => !g.lot).length, b1 = city.buildings.length;
+  check('widening every road sets buildings back instead of clearing them all', city.cutBack > 20 && b1 > b0 * .3, `${b0} buildings, ${gone} cleared, ${city.cutBack} set back`);
+  for (let i = 0; i < DAY / .1; i++) city.regrow(.1);
+  const b2 = city.buildings.length;
+  check('empty street land grows back within a day', b2 > b1 + 20, `${b1} -> ${b2}`);
+  // nothing regrown sits on a road or on another building
+  const ov = (a, b) => { const ax = [Math.cos(a.rot || 0), Math.sin(a.rot || 0)], bx = [Math.cos(b.rot || 0), Math.sin(b.rot || 0)], axs = [ax, [-ax[1], ax[0]], bx, [-bx[1], bx[0]]], d = [b.x - a.x, b.z - a.z];
+    for (const n of axs) { const ra = a.w / 2 * Math.abs(ax[0] * n[0] + ax[1] * n[1]) + a.d / 2 * Math.abs(-ax[1] * n[0] + ax[0] * n[1]), rb = b.w / 2 * Math.abs(bx[0] * n[0] + bx[1] * n[1]) + b.d / 2 * Math.abs(-bx[1] * n[0] + bx[0] * n[1]); if (Math.abs(d[0] * n[0] + d[1] * n[1]) > ra + rb - .05) return false; } return true; };
+  const B = city.buildings; let bad = 0;
+  for (let i = 0; i < B.length; i++) for (let j = i + 1; j < B.length; j++) if (Math.abs(B[i].x - B[j].x) < 80 && Math.abs(B[i].z - B[j].z) < 80 && ov(B[i], B[j])) bad++;
+  check('no two buildings overlap', bad === 0, `${bad} overlapping pairs`);
+  net.ver++; const gone2 = city.sync().filter(g => !g.lot).length;
+  check('no building stands on a road', gone2 === 0, `${gone2} would be knocked down`);
+  // a saved city keeps turned buildings
+  const C2 = createCity(new Net(), 7); C2.load(JSON.parse(JSON.stringify(city.serialize())));
+  check('saves keep turned buildings', C2.buildings.filter(b => b.rot).length === B.filter(b => b.rot).length && B.some(b => b.rot));
+  Math.random = orig;
+}
+
 const plain = run(false), wide = run(true);
 console.log('plain streets ', plain);
 console.log('wide avenues  ', wide);

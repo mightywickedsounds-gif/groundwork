@@ -107,8 +107,8 @@ export function buildRoads(net, M, opt = {}) {
   }
   // diagonal hatching across the strip between offsets o0..o1 (a painted median)
   function hatch(G, m, cm, o0, o1, s0, s1) {
-    for (let s = s0 + 1; s + 2.2 < s1; s += 4) {
-      const a = along(m, cm, s), b = along(m, cm, s + 2.2);
+    for (let s = s0 + 1; s + 3.4 < s1; s += 5) {
+      const a = along(m, cm, s), b = along(m, cm, s + 3.4);
       const p = [a[0] - a[3] * (o0 + .25), a[1] + a[2] * (o0 + .25)], q = [b[0] - b[3] * (o1 - .25), b[1] + b[2] * (o1 - .25)];
       line(G, [p, q], .3, Y_MARK);
     }
@@ -137,7 +137,9 @@ export function buildRoads(net, M, opt = {}) {
         } else if (e.kind === 'avenue' || nl > 1) { line(MY, off(m, mn, -.16), .12, Y_MARK); line(MY, off(m, mn, .16), .12, Y_MARK); }
         else dashes(MK, m, .14, 3, 5, Y_MARK, 2);
         for (let i = 0; i + 1 < nl; i++) { const o = (laneOff(e, i) + laneOff(e, i + 1)) / 2; seg(MK, m, cm, o, 0, Lm, .13, true); seg(MK, m, cm, -o, 0, Lm, .13, true); }
-      } else if (!e.ring) {
+      } else if (e.ring) {   // a two-lane roundabout: dashed line between its lanes
+        if (nl > 1) seg(MK, m, cm, (e.oneway || 1) * (laneOff(e, 0) + laneOff(e, 1)) / 2, 0, Lm, .13, true);
+      } else {
         const sg = e.oneway;   // lane offsets face the way of travel
         for (let i = 0; i + 1 < nl; i++) seg(MK, m, cm, sg * (laneOff(e, i) + laneOff(e, i + 1)) / 2, 0, Lm, .13, true);
         if (tl) {
@@ -204,14 +206,19 @@ export function buildRoads(net, M, opt = {}) {
       const L = legs[i], N = legs[(i + 1) % legs.length];
       ring.push([L.P[0] - L.r[0] * L.hw, L.P[1] - L.r[1] * L.hw], [L.P[0] + L.r[0] * L.hw, L.P[1] + L.r[1] * L.hw]);
       const a0 = [L.P[0] + L.r[0] * L.hw, L.P[1] + L.r[1] * L.hw], b0 = [N.P[0] - N.r[0] * N.hw, N.P[1] - N.r[1] * N.hw];
-      const cv = corner(a0, L.d, b0, N.d, [n.x, n.z]);
+      let gap = N.ang - L.ang; if (gap <= 0) gap += Math.PI * 2;
+      // a road carrying straight on past the junction: a straight kerb, not a bulge round the middle
+      const cv = gap > 2.7 && gap < 3.25 ? Array.from({ length: 9 }, (_, k) => [a0[0] + (b0[0] - a0[0]) * k / 8, a0[1] + (b0[1] - a0[1]) * k / 8]) : corner(a0, L.d, b0, N.d, [n.x, n.z]);
       for (let k = 1; k < cv.length - 1; k++) ring.push(cv[k]);
       // is this corner the island side of a roundabout?
       let island = false;
       if (C) { const mid = cv[cv.length >> 1]; const tc = [C[0] - n.x, C[1] - n.z], tm = [mid[0] - n.x, mid[1] - n.z]; island = tc[0] * tm[0] + tc[1] * tm[1] > 0 && L.e.ring && N.e.ring; }
       if (!island) {
         const a1 = [L.P[0] + L.r[0] * (L.hw + WALK_W), L.P[1] + L.r[1] * (L.hw + WALK_W)], b1 = [N.P[0] - N.r[0] * (N.hw + WALK_W), N.P[1] - N.r[1] * (N.hw + WALK_W)];
-        const co = corner(a1, L.d, b1, N.d, [n.x, n.z]);
+        // the sidewalk's outer edge follows the kerb a sidewalk-width out (worked out on its own, it could swing
+        // the other way round and paint sidewalk over the whole junction)
+        const cn = normals(cv), mid = cv.length >> 1, out = (cn[mid][0] * (cv[mid][0] - n.x) + cn[mid][1] * (cv[mid][1] - n.z)) >= 0 ? 1 : -1;
+        const co = off(cv, cn, out * WALK_W); co[0] = a1; co[co.length - 1] = b1;
         W.strip(cv, co, Y_WALK);
         for (let k = 0; k + 1 < cv.length; k++) K.wall(cv[k + 1], cv[k], Y_ROAD - .02, Y_WALK);
       }
@@ -251,7 +258,12 @@ export function buildRoads(net, M, opt = {}) {
   // roundabout islands
   for (const [rid, C] of ringCenters) {
     if (!C) continue;
-    const R = net.ringR(rid) - ONEWAY_W / 2 - .05, pts = [];
+    let rw = ONEWAY_W / 2, two = false; for (const e of net.edges.values()) if (e.ring === rid) { rw = hwOf(e); two = (e.nl || 1) > 1; break; }
+    const R = net.ringR(rid) - rw - .05, pts = [];
+    // ring markings drawn as whole circles (most of a ring is junction surface): edge line by the island, dashes between two lanes
+    const circ = r => { const o = []; for (let k = 0; k <= 72; k++) { const a = k / 72 * Math.PI * 2; o.push([C[0] + Math.cos(a) * r, C[1] + Math.sin(a) * r]); } return o; };
+    line(MK, circ(R + .45), .13, Y_MARK);
+    if (two) dashes(MK, circ(net.ringR(rid) - .1), .13, 2.5, 3.5, Y_MARK, 0);
     for (let k = 0; k < 40; k++) { const a = k / 40 * Math.PI * 2; pts.push([C[0] + Math.cos(a) * R, C[1] + Math.sin(a) * R]); }
     IS.fan(C, pts, Y_WALK + .02);
     const outer = pts.map(p => [p[0], p[1]]), inner = pts.map(p => [C[0] + (p[0] - C[0]) * .9, C[1] + (p[1] - C[1]) * .9]);
@@ -361,16 +373,17 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
   const bits = [];
   let ri = 0;
   B.forEach((b, i) => {
-    dummy.position.set(b.x, 0, b.z); dummy.rotation.set(0, 0, 0); dummy.scale.set(b.w, b.h, b.d); dummy.updateMatrix(); bm.setMatrixAt(i, dummy.matrix);
+    const ry = -(b.rot || 0), bc = Math.cos(b.rot || 0), bs = Math.sin(b.rot || 0);   // b.rot turns its own x axis to (cos, sin) on the ground
+    dummy.position.set(b.x, 0, b.z); dummy.rotation.set(0, ry, 0); dummy.scale.set(b.w, b.h, b.d); dummy.updateMatrix(); bm.setMatrixAt(i, dummy.matrix);
     const pal = FACADE[b.kind]; const c = pal[Math.floor(b.tone * pal.length) % pal.length]; col.setRGB(c[0], c[1], c[2], THREE.SRGBColorSpace); bm.setColorAt(i, col);
     info.set([STYLE[b.kind], b.h, b.tone, 0], i * 4);
     if (b.roof) {
-      const along = b.w >= b.d; dummy.position.set(b.x, b.h, b.z); dummy.rotation.set(0, along ? 0 : Math.PI / 2, 0); dummy.scale.set((along ? b.w : b.d) + .7, 2.2 + b.tone * 1.2, (along ? b.d : b.w) + .7); dummy.updateMatrix(); rm.setMatrixAt(ri, dummy.matrix);
+      const along = b.w >= b.d; dummy.position.set(b.x, b.h, b.z); dummy.rotation.set(0, ry + (along ? 0 : Math.PI / 2), 0); dummy.scale.set((along ? b.w : b.d) + .7, 2.2 + b.tone * 1.2, (along ? b.d : b.w) + .7); dummy.updateMatrix(); rm.setMatrixAt(ri, dummy.matrix);
       const rc = [[.42, .2, .16], [.3, .3, .32], [.36, .26, .2], [.22, .22, .24], [.5, .28, .2]][Math.floor(b.tone * 97) % 5]; col.setRGB(rc[0], rc[1], rc[2], THREE.SRGBColorSpace); rm.setColorAt(ri++, col);
     } else if (b.h > 9) {
       const n = 1 + Math.floor(b.tone * 4); let s = b.tone * 1000;
       const r = () => (s = (s * 9301 + 49297) % 233280) / 233280;
-      for (let k = 0; k < n; k++) { const w = 2 + r() * Math.min(7, b.w * .3), d = 2 + r() * Math.min(6, b.d * .3); bits.push([b.x + (r() - .5) * (b.w - w - 2), b.h, b.z + (r() - .5) * (b.d - d - 2), w, 1.2 + r() * 2.6, d]); }
+      for (let k = 0; k < n; k++) { const w = 2 + r() * Math.min(7, b.w * .3), d = 2 + r() * Math.min(6, b.d * .3), ox = (r() - .5) * (b.w - w - 2), oz = (r() - .5) * (b.d - d - 2); bits.push([b.x + ox * bc - oz * bs, b.h, b.z + ox * bs + oz * bc, w, 1.2 + r() * 2.6, d, ry]); }
     }
   });
   bm.count = B.length; rm.count = ri;
@@ -378,7 +391,7 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
   g.add(bm); if (ri) g.add(rm);
   if (bits.length) {
     const im = new THREE.InstancedMesh(box, M.bits || (M.bits = new THREE.MeshStandardMaterial({ color: 0x6f7173, roughness: .7, metalness: .2 })), bits.length);
-    bits.forEach((q, i) => { dummy.position.set(q[0], q[1], q[2]); dummy.rotation.set(0, 0, 0); dummy.scale.set(q[3], q[4], q[5]); dummy.updateMatrix(); im.setMatrixAt(i, dummy.matrix); });
+    bits.forEach((q, i) => { dummy.position.set(q[0], q[1], q[2]); dummy.rotation.set(0, q[6] || 0, 0); dummy.scale.set(q[3], q[4], q[5]); dummy.updateMatrix(); im.setMatrixAt(i, dummy.matrix); });
     im.castShadow = true; im.receiveShadow = true; g.add(im);
   }
   // lots: parking, parks, yards
