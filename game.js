@@ -363,9 +363,9 @@ function click(x, z) {
 const ptrs = new Map(); let drag = null, pinch = null;
 const HOLD = 260;   // ms to hold still before a drag draws
 const drawing = e => e.pointerType !== 'mouse' && (T.tool === 'road' || T.tool === 'curve');
-function startDraw(d) {   // the finger has been held still: from here on this drag draws
-  if (drag !== d || ptrs.size !== 1 || d.moved > 6 || !d.g0) return;
-  d.draw = true; const q = net.probe(d.g0[0], d.g0[1], snapR()); d.start = q.n ? [q.n.x, q.n.z] : q.p;
+function startDraw(d, sure = false) {   // the finger has been held still: from here on this drag draws
+  if (drag !== d || ptrs.size !== 1 || (d.moved > 6 && !sure) || !d.g0 || d.draw) return;
+  d.draw = true; d.held = true; const q = net.probe(d.g0[0], d.g0[1], snapR()); d.start = q.n ? [q.n.x, q.n.z] : q.p;
   cursor.position.set(d.start[0], .35, d.start[1]); cursor.visible = true; burst(d.start[0], d.start[1], 18, [.5, .95, 1], 3);
   if (navigator.vibrate) navigator.vibrate(12);
   hint(T.tool === 'road' ? 'Drag to where the road ends' : 'Drag to where the curve ends'); $('hint').classList.remove('bad');
@@ -375,8 +375,8 @@ canvas.addEventListener('pointerdown', e => {
   canvas.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
   sound.start();
   if (ptrs.size === 1) {
-    const g = groundAt(e.clientX, e.clientY); drag = { x0: e.clientX, y0: e.clientY, btn: e.button, moved: 0, g0: g, draw: false };
-    if (drawing(e) && e.button === 0) { if (T.tool === 'curve' && T.pend) drag.draw = true; else { const d = drag; d.timer = setTimeout(() => startDraw(d), HOLD); } }
+    const g = groundAt(e.clientX, e.clientY); drag = { x0: e.clientX, y0: e.clientY, t0: e.timeStamp, btn: e.button, moved: 0, g0: g, draw: false };
+    if (drawing(e) && e.button === 0) { if (T.tool === 'curve' && T.pend) drag.draw = true; else { const d = drag; d.mayDraw = true; d.timer = setTimeout(() => startDraw(d), HOLD); } }
   }
   else { if (drag) clearTimeout(drag.timer); drag = null; if (T.draw) { T.draw = null; previewMesh.visible = false; hint(); } }
   if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), ang: Math.atan2(b.y - a.y, b.x - a.x), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, g0: groundAt((a.x + b.x) / 2, (a.y + b.y) / 2) }; }
@@ -395,7 +395,12 @@ canvas.addEventListener('pointermove', e => {
   }
   if (!drag) return;
   const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0; drag.moved = Math.max(drag.moved, Math.hypot(dx, dy));
-  if (drag.moved > 6 && !drag.draw) clearTimeout(drag.timer);   // moved before the hold: it's a pan
+  // first real movement decides, by the touch's own timestamps (timers run late on a busy phone):
+  // held still long enough first = draw, else = move the map
+  if (drag.mayDraw && !drag.checked && drag.moved > 6) {
+    drag.checked = true; clearTimeout(drag.timer);
+    if (e.timeStamp - drag.t0 >= HOLD) startDraw(drag, true); else if (drag.draw) { drag.draw = drag.held = false; hint(); }
+  }
   if (drag.draw) {
     if (drag.moved < 10) return;
     const g = groundAt(e.clientX, e.clientY); if (!g) return;

@@ -113,9 +113,10 @@ export function buildRoads(net, M, opt = {}) {
       line(G, [p, q], .3, Y_MARK);
     }
   }
-  function piece(c, e, hw, inner, lights, pk = [0, 0]) {
+  function piece(c, e, hw, inner, lights, pk = [0, 0], ends = null) {
     if (c.length < 2) return;
     const nr = normals(c);
+    if (ends) for (const [i, t] of [[0, ends[0]], [c.length - 1, ends[1]]]) { const L = Math.hypot(t[0], t[1]); if (L > 1e-6) nr[i] = [-t[1] / L, t[0] / L]; }   // exact ends: no slivers where pieces meet
     A.strip(off(c, nr, -hw), off(c, nr, hw), Y_ROAD);
     for (const sg of [-1, 1]) {
       if (sg === inner) continue;
@@ -158,7 +159,8 @@ export function buildRoads(net, M, opt = {}) {
     const c = cutPts(e.pts, e.cum, tA, e.len - tB), nr = normals(c);
     let inner = 0;   // the island side of a roundabout has no sidewalk
     if (e.ring) { const C = ringCenters.get(e.ring); const m = c[c.length >> 1], q = nr[c.length >> 1]; inner = ((C[0] - m[0]) * q[0] + (C[1] - m[1]) * q[1]) > 0 ? 1 : -1; }
-    piece(c, e, hw, inner, !e.ring && opt.lights !== false, e.pk);
+    const h0 = along(e.pts, e.cum, tA), h1 = along(e.pts, e.cum, e.len - tB);
+    piece(c, e, hw, inner, !e.ring && opt.lights !== false, e.pk, [[h0[2], h0[3]], [h1[2], h1[3]]]);
   }
   // a bend where two roads join end to end: one smooth curved stretch, not a junction
   const elbow = new Set();
@@ -166,10 +168,16 @@ export function buildRoads(net, M, opt = {}) {
     if (n.ring || n.edges.size !== 2) continue;
     const [e1, e2] = [...n.edges].map(id => net.edges.get(id));
     if (hwOf(e1) !== hwOf(e2) || !!e1.oneway !== !!e2.oneway || (e1.nl || 1) !== (e2.nl || 1) || !!e1.tl !== !!e2.tl) continue;
-    const end = e => { const fromA = e.a === n.id, p = along(e.pts, e.cum, fromA ? n.trim : e.len - n.trim); return [p[0], p[1]]; };
-    const P1 = end(e1), P2 = end(e2);
+    // each road's end point and its heading toward the joint
+    const end = e => { const fromA = e.a === n.id, p = along(e.pts, e.cum, fromA ? n.trim : e.len - n.trim); return [[p[0], p[1]], fromA ? [-p[2], -p[3]] : [p[2], p[3]]]; };
+    const [P1, d1] = end(e1), [P2, d2] = end(e2);
+    // bend through where the two headings meet, so it leaves each road at the road's own angle
+    // (aiming at the joint itself tore the sidewalk where a curved road meets the bend)
+    let ctl = [n.x, n.z]; const x = lineX(P1, d1, P2, d2), lim = Math.max(3, n.trim * 3);
+    if (x && x[0] > 0 && x[1] > 0 && x[0] < lim && x[1] < lim) ctl = [P1[0] + d1[0] * x[0], P1[1] + d1[1] * x[0]];
+    else if (!x || d1[0] * d2[0] + d1[1] * d2[1] < -.98) ctl = [(P1[0] + P2[0]) / 2, (P1[1] + P2[1]) / 2];   // straight on
     const into = (e1.oneway === 1 && e1.b === n.id) || (e1.oneway === -1 && e1.a === n.id);
-    piece(quad(P1, [n.x, n.z], P2, Math.max(4, Math.ceil(n.trim * 1.2))), { oneway: e1.oneway ? (into ? 1 : -1) : 0, kind: e1.kind, nl: e1.nl, tl: e1.tl }, hwOf(e1), 0, false);
+    piece(quad(P1, ctl, P2, Math.max(6, Math.ceil(n.trim * 1.6))), { oneway: e1.oneway ? (into ? 1 : -1) : 0, kind: e1.kind, nl: e1.nl, tl: e1.tl }, hwOf(e1), 0, false, [0, 0], [d1, [-d2[0], -d2[1]]]);
     elbow.add(n.id);
   }
   // junction patches

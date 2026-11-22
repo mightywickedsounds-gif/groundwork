@@ -76,11 +76,13 @@ const TYPES = { js: 'text/javascript', mjs: 'text/javascript', jpg: 'image/jpeg'
     await q.goto('http://game.test/'); await q.waitForFunction(() => window.FT && FT.net, null, { timeout: 240000 });
     await q.click('#playBtn'); await q.evaluate(() => { FT.setSpeed(0); Object.assign(FT.cam, { x: 0, z: 0, dist: 160, yaw: 0, pitch: 1.3 }); FT.placeCamera(); FT.setTool('road'); });
     const cdp = await ph.newCDPSession(q);
+    // touches carry the time they happened (like a real phone), even when this slow test browser handles them late
     const touch = async (pts, holdMs = 0) => {
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: pts[0][0], y: pts[0][1] }] });
+      const t0 = Date.now() / 1000;
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: pts[0][0], y: pts[0][1] }], timestamp: t0 });
       if (holdMs) await q.waitForTimeout(holdMs);
-      for (let i = 1; i < pts.length; i++) { await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: pts[i][0], y: pts[i][1] }] }); await q.waitForTimeout(16); }
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); await q.waitForTimeout(100);
+      for (let i = 1; i < pts.length; i++) { await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: pts[i][0], y: pts[i][1] }], timestamp: t0 + holdMs / 1000 + i * .016 }); await q.waitForTimeout(16); }
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [], timestamp: t0 + holdMs / 1000 + pts.length * .016 + .02 }); await q.waitForTimeout(100);
     };
     const line = (x0, y0, x1, y1, n = 12) => Array.from({ length: n + 1 }, (_, i) => [x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n]);
     const ph0 = await q.evaluate(() => ({ e: FT.net.edges.size, x: FT.cam.x, z: FT.cam.z }));

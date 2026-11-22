@@ -172,7 +172,12 @@ export function createCity(net, seed = 7) {
       }
       for (let k = 0; k < 2; k++) if (r() < .5) { const z = z0 + r() * S; for (let x = x0; x < x0 + S; x += 7 + r() * 5) out.push([x, z + (r() - .5) * 3, .6 + r() * .4, r()]); }
     }
-    return out.length > 3800 ? out.filter((_, k) => k % Math.ceil(out.length / 3800) === 0) : out;
+    // no trees on roads built out there (a grid of road points, checked after placing so nothing else moves)
+    const cell = 16, grid = new Map(), key = (x, z) => (Math.floor(x / cell) + 2000) * 5000 + Math.floor(z / cell) + 2000;
+    for (const e of net.edges.values()) { const w = halfW(e) + 4.5; for (const p of e.pts) { const k = key(p[0], p[1]); if (!grid.has(k)) grid.set(k, []); grid.get(k).push([p[0], p[1], w]); } }
+    const clear = t => { const cx = Math.floor(t[0] / cell), cz = Math.floor(t[1] / cell); for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) { const L = grid.get((cx + i + 2000) * 5000 + cz + j + 2000); if (L) for (const q of L) if (Math.hypot(q[0] - t[0], q[1] - t[1]) < q[2]) return false; } return true; };
+    const kept = out.filter(clear);
+    return kept.length > 3800 ? kept.filter((_, k) => k % Math.ceil(kept.length / 3800) === 0) : kept;
   };
   C.bounds = function () {
     let a = 1e9, b = -1e9, c = 1e9, d = -1e9;
