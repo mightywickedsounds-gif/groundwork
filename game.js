@@ -25,7 +25,7 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = Q.shadows > 0; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const scene = new THREE.Scene();
-const FOG_DAY = new THREE.Color(0xb9c3c9), FOG_NIGHT = new THREE.Color(0x0d1422);
+const FOG_DAY = new THREE.Color(0xb9c3c9), FOG_NIGHT = new THREE.Color(0x34405c);
 scene.fog = new THREE.Fog(FOG_DAY.clone(), 900, 4200);
 scene.background = FOG_DAY.clone();
 const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 2, 9000);
@@ -213,6 +213,7 @@ function updateSparks(dt) {
 }
 const glowMat = (rgb, op = .55) => new THREE.MeshBasicMaterial({ color: new THREE.Color(...rgb), transparent: true, opacity: op, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, side: THREE.DoubleSide });
 const cursor = new THREE.Mesh(new THREE.RingGeometry(2.2, 3, 40).rotateX(-Math.PI / 2), glowMat([.4, .9, 1], .9)); cursor.renderOrder = 5; scene.add(cursor);
+const pin = new THREE.Mesh(new THREE.RingGeometry(1.6, 3.4, 40).rotateX(-Math.PI / 2), glowMat([1, .8, .2], .95)); pin.renderOrder = 5; pin.visible = false; scene.add(pin);
 const hoverMesh = new THREE.Mesh(new THREE.BufferGeometry(), glowMat([.4, .9, 1], .45)); hoverMesh.renderOrder = 4; scene.add(hoverMesh);
 const previewMesh = new THREE.Mesh(new THREE.BufferGeometry(), glowMat([.4, .9, 1], .42)); previewMesh.renderOrder = 4; scene.add(previewMesh);
 function ribbon(mesh, pts, w, y = .3) {
@@ -230,50 +231,68 @@ for (let i = 0; i < 24; i++) { const m = new THREE.Mesh(jamGeo, new THREE.MeshBa
 
 // ---------------- tools ----------------
 const TOOLS = ['road', 'curve', 'signal', 'ring', 'oneway', 'erase'];
-const HINT = { road: 'Click to start a road, click again to place it', curve: 'Click start, then the bend, then the end', signal: 'Click a junction to add or remove lights', ring: 'Click a junction to build a roundabout', oneway: 'Click a road to switch its direction', erase: 'Click a road or roundabout to remove it' };
-const T = { tool: '', pts: [], hover: null, mouse: null };
+const HINT = touch
+  ? { road: 'Drag to draw a road. Tap to keep going from the pin', curve: 'Drag to draw, then drag to bend it', signal: 'Tap a junction for lights', ring: 'Tap a junction or road for a roundabout', oneway: 'Tap a road to switch its direction', erase: 'Tap a road or roundabout to remove it' }
+  : { road: 'Click to start, click to place. It keeps going from the end', curve: 'Click the start, click the end, then move to bend and click', signal: 'Click a junction for lights', ring: 'Click a junction or road for a roundabout', oneway: 'Click a road to switch its direction', erase: 'Click a road or roundabout to remove it' };
+const T = { tool: '', pts: [], pend: null, bend: null, draw: null, hover: null, mouse: null, plan: null };
 function setTool(t) {
-  T.tool = T.tool === t ? '' : t; T.pts = []; previewMesh.visible = false; hoverMesh.visible = false;
+  T.tool = T.tool === t ? '' : t; T.pts = []; T.pend = null; T.bend = null; T.draw = null; previewMesh.visible = false; hoverMesh.visible = false; pin.visible = false;
   for (const b of document.querySelectorAll('#tools button[data-tool]')) b.classList.toggle('on', b.dataset.tool === T.tool);
-  $('hint').textContent = (HINT[T.tool] || '').replace(/^Click/, touch ? 'Tap' : 'Click');
+  hint();
 }
-function snapPoint(x, z) {
-  const n = net.nearestNode(x, z, 10); if (n) return { p: [n.x, n.z], kind: 'node' };
-  const h = net.nearestEdge(x, z, 8); if (h && !h.e.ring) { const p = along(h.e.pts, h.e.cum, h.s); return { p: [p[0], p[1]], kind: 'road' }; }
-  return { p: [x, z], kind: 'free' };
-}
-function junctionAt(x, z, r = 16) { let best = null, bd = r; for (const n of net.nodes.values()) { if (n.edges.size < 3) continue; const d = Math.hypot(n.x - x, n.z - z); if (d < bd) { bd = d; best = n; } } return best; }
-function ringAt(x, z) { const seen = new Set(); for (const n of net.nodes.values()) { if (!n.ring || seen.has(n.ring)) continue; seen.add(n.ring); const c = net.ringCenter(n.ring); if (c && Math.hypot(c[0] - x, c[1] - z) < RING_R - 1) return { rid: n.ring, c }; } return null; }
+function hint(msg) { $('hint').textContent = msg || HINT[T.tool] || ''; $('hint').classList.toggle('bad', !!msg); }
+// how far a tap may land from a road and still count: about 30 px on a phone, 16 with a mouse
+function snapR() { const wpp = 2 * cam.dist * Math.tan(camera.fov * Math.PI / 360) / innerHeight; return Math.max(7, Math.min(45, (touch ? 30 : 16) * wpp)); }
+function ringAt(x, z) { const seen = new Set(); for (const n of net.nodes.values()) { if (!n.ring || seen.has(n.ring)) continue; seen.add(n.ring); const c = net.ringCenter(n.ring), R = net.ringR(n.ring); if (c && Math.hypot(c[0] - x, c[1] - z) < R + 2) return { rid: n.ring, c, R }; } return null; }
 const qpts = (a, c, b, K = 24) => { const o = []; for (let i = 0; i <= K; i++) { const t = i / K, u = 1 - t; o.push([u * u * a[0] + 2 * u * t * c[0] + t * t * b[0], u * u * a[1] + 2 * u * t * c[1] + t * t * b[1]]); } return o; };
+const through = (a, b, m) => m ? [2 * m[0] - (a[0] + b[0]) / 2, 2 * m[1] - (a[1] + b[1]) / 2] : null;   // bend control so the road passes through m
+// show where a road from a to b would go, and whether it can be built
+let planT = 0;
+function previewRoad(a, b, bend, force) {
+  const now = performance.now(); if (!force && now - planT < 45) return; planT = now;
+  const plan = net.planRoad(a, b, through(a, b, bend), snapR()); T.plan = plan;
+  const A = plan.a || a, B = plan.b || b, c = plan.cc || [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2];
+  ribbon(previewMesh, qpts(A, c, B, 20), 3.6);
+  previewMesh.material.color.setRGB(...(plan.reason ? [1, .35, .25] : [.4, .9, 1]));
+  cursor.position.set(B[0], .35, B[1]); cursor.visible = true;
+  hint(plan.reason);
+}
 function hoverUpdate() {
-  const m = T.mouse; hoverMesh.visible = false; previewMesh.visible = false; cursor.visible = !!m && !!T.tool;
+  const m = T.mouse; hoverMesh.visible = false; cursor.visible = !!m && !!T.tool;
+  if (!T.draw) previewMesh.visible = false;
+  pin.visible = !!T.pts.length && (T.tool === 'road' || T.tool === 'curve'); if (pin.visible) { pin.position.set(T.pts[0][0], .4, T.pts[0][1]); const sc = Math.max(1, cam.dist / 260); pin.scale.set(sc, 1, sc); }
   if (!m) return;
-  cursor.position.set(m[0], .35, m[1]); const sc = Math.max(1, cam.dist / 260); cursor.scale.set(sc, 1, sc);
-  hoverMesh.material.color.setRGB(.4, .9, 1); previewMesh.material.color.setRGB(.4, .9, 1);
+  const sc = Math.max(1, cam.dist / 260); cursor.position.set(m[0], .35, m[1]); cursor.scale.set(sc, 1, sc);
+  hoverMesh.material.color.setRGB(.4, .9, 1);
+  const R = snapR();
+  T.hover = null;
   if (T.tool === 'road' || T.tool === 'curve') {
-    const sp = snapPoint(m[0], m[1]); cursor.position.set(sp.p[0], .35, sp.p[1]);
-    if (T.pts.length) {
-      const a = T.pts[0]; let pts;
-      if (T.tool === 'road') pts = [a, sp.p];
-      else if (T.pts.length === 1) pts = [a, sp.p];
-      else pts = qpts(a, T.pts[1], sp.p);
-      const len = pts.reduce((s, p, i) => i ? s + Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) : 0, 0);
-      if (T.tool === 'road' || T.pts.length === 2) ribbon(previewMesh, pts.length === 2 ? qpts(pts[0], [(pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2], pts[1], 8) : pts, 3.6);
-      else ribbon(hoverMesh, pts, .4);
-      if (len < 6) previewMesh.material.color.setRGB(1, .35, .25);
-    }
+    if (T.draw) return;
+    if (T.pend) { T.bend = m; previewRoad(T.pend[0], T.pend[1], m); return; }
+    if (T.pts.length) { previewRoad(T.pts[0], m, null); return; }
+    const q = net.probe(m[0], m[1], R); const p = q.n ? [q.n.x, q.n.z] : q.p; cursor.position.set(p[0], .35, p[1]); hint();
     return;
   }
   if (T.tool === 'erase') {
     hoverMesh.material.color.setRGB(1, .3, .2);
-    const r = ringAt(m[0], m[1]); if (r) { ringShape(hoverMesh, r.c[0], r.c[1], RING_R - 4, RING_R + 4); T.hover = { ring: r.rid }; return; }
-    const h = net.nearestEdge(m[0], m[1], 10); T.hover = h ? { e: h.e } : null; if (h) ribbon(hoverMesh, h.e.pts, hwOf(h.e) + .6);
+    const r = ringAt(m[0], m[1]); if (r) { ringShape(hoverMesh, r.c[0], r.c[1], r.R - 4, r.R + 4); T.hover = { ring: r.rid }; return; }
+    const h = net.nearestEdge(m[0], m[1], R); if (h) { T.hover = { e: h.e }; ribbon(hoverMesh, h.e.pts, hwOf(h.e) + .6); }
     return;
   }
-  if (T.tool === 'oneway') { const h = net.nearestEdge(m[0], m[1], 10); T.hover = h && !h.e.ring ? { e: h.e } : null; if (T.hover) ribbon(hoverMesh, h.e.pts, hwOf(h.e) + .6); return; }
-  if (T.tool === 'signal' || T.tool === 'ring') {
-    const n = junctionAt(m[0], m[1]); T.hover = n ? { n } : null;
-    if (n) { if (T.tool === 'ring' && !n.ring) ringShape(hoverMesh, n.x, n.z, RING_R - ONEWAY_W / 2, RING_R + ONEWAY_W / 2 + WALK_W); else ringShape(hoverMesh, n.x, n.z, n.trim + 1, n.trim + 3); if (n.sig) hoverMesh.material.color.setRGB(1, .75, .3); }
+  if (T.tool === 'oneway') { const h = net.nearestEdge(m[0], m[1], R); if (h && !h.e.ring) { T.hover = { e: h.e }; ribbon(hoverMesh, h.e.pts, hwOf(h.e) + .6); } return; }
+  if (T.tool === 'signal') {
+    let best = null, bd = Math.max(16, R); for (const n of net.nodes.values()) { if (n.edges.size < 3) continue; const d = Math.hypot(n.x - m[0], n.z - m[1]); if (d < bd) { bd = d; best = n; } }
+    if (best) { T.hover = { n: best }; ringShape(hoverMesh, best.x, best.z, best.trim + 1, best.trim + 3); if (best.sig) hoverMesh.material.color.setRGB(1, .75, .3); }
+    return;
+  }
+  if (T.tool === 'ring') {
+    const r = ringAt(m[0], m[1]); if (r) { T.hover = { bad: 'Already a roundabout' }; ringShape(hoverMesh, r.c[0], r.c[1], r.R - 3, r.R + 3); hoverMesh.material.color.setRGB(1, .35, .25); return; }
+    let n = net.nearestNode(m[0], m[1], Math.max(25, R)); if (n && (n.ring || n.edges.size < 2 && net.nearestEdge(m[0], m[1], R))) n = n.ring ? null : n;
+    let at, Rr;
+    if (n) { at = [n.x, n.z]; Rr = net.ringFit(n); T.hover = Rr ? { n } : { bad: 'Not enough room here' }; }
+    else { const h = net.nearestEdge(m[0], m[1], R); if (!h || h.e.ring) return; const p = along(h.e.pts, h.e.cum, h.s); at = [p[0], p[1]]; Rr = Math.min(RING_R, h.s - 7, h.e.len - h.s - 7); T.hover = Rr >= 8 ? { e: h.e, s: h.s } : { bad: 'Too close to a junction' }; if (Rr < 8) Rr = 8; }
+    ringShape(hoverMesh, at[0], at[1], (Rr || 8) - ONEWAY_W / 2, (Rr || 8) + ONEWAY_W / 2 + WALK_W);
+    if (T.hover.bad) hoverMesh.material.color.setRGB(1, .35, .25);
   }
 }
 function afterEdit(pts, rgb = [.4, .9, 1]) {
@@ -284,54 +303,63 @@ function afterEdit(pts, rgb = [.4, .9, 1]) {
   sound.magic();
   save();
 }
+// build a road; on success keep going from its end
+function place(a, b, bend) {
+  const c = through(a, b, bend), made = net.addRoad(a, b, c, {}, snapR());
+  if (made.reason) { toast(made.reason, true); return false; }
+  afterEdit(made.flatMap(e => e.pts));
+  T.pts = [made.end]; T.pend = null; T.bend = null; T.draw = null; previewMesh.visible = false; hint();
+  return true;
+}
 function click(x, z) {
   const t = T.tool; if (!t) return;
-  T.mouse = [x, z]; hoverUpdate();
-  if (t === 'road' || t === 'curve') {
-    const sp = snapPoint(x, z);
-    if (t === 'road' || T.pts.length === 2) {
-      if (!T.pts.length) { T.pts = [sp.p]; return; }
-      const a = T.pts[0], c = t === 'curve' ? T.pts[1] : null;
-      if (Math.hypot(sp.p[0] - a[0], sp.p[1] - a[1]) < 6) { T.pts = []; return; }
-      const made = net.addRoad(a, sp.p, c);
-      if (made.length) { afterEdit(c ? qpts(a, c, sp.p) : [a, sp.p]); T.pts = [sp.p]; } else toast('Can\'t build there', true);
-      return;
-    }
-    T.pts.push(t === 'curve' && T.pts.length === 1 ? [x, z] : sp.p); return;
+  T.mouse = [x, z]; if (!T.pend) hoverUpdate();
+  if (t === 'road') {
+    if (!T.pts.length) { const q = net.probe(x, z, snapR()); T.pts = [q.n ? [q.n.x, q.n.z] : q.p]; hoverUpdate(); return; }
+    const a = T.pts[0]; if (Math.hypot(x - a[0], z - a[1]) < snapR()) { T.pts = []; hoverUpdate(); return; }   // tap the pin again to let go
+    place(a, [x, z]); hoverUpdate(); return;
   }
+  if (t === 'curve') {
+    if (T.pend) { place(T.pend[0], T.pend[1], T.bend); hoverUpdate(); return; }
+    if (!T.pts.length) { const q = net.probe(x, z, snapR()); T.pts = [q.n ? [q.n.x, q.n.z] : q.p]; hoverUpdate(); return; }
+    const a = T.pts[0]; if (Math.hypot(x - a[0], z - a[1]) < snapR()) { T.pts = []; hoverUpdate(); return; }
+    T.pend = [a, [x, z]]; T.bend = null; previewRoad(a, [x, z], null, true); hint(touch ? 'Drag to bend it, tap to place' : 'Move to bend it, click to place'); return;
+  }
+  const h = T.hover;
   if (t === 'erase') {
-    const h = T.hover; if (!h) return;
+    if (!h) return;
     if (h.ring) { const c = net.ringCenter(h.ring); net.removeRoundabout(h.ring); afterEdit(null); burst(c[0], c[1], 120, [1, .45, .3], 14); toast('Roundabout removed'); }
     else if (h.e) { const pts = h.e.pts; net.removeEdge(h.e.id); afterEdit(pts, [1, .45, .3]); }
     T.hover = null; return;
   }
-  if (t === 'oneway') { const h = T.hover; if (!h) return; const r = net.cycleOneWay(h.e.id); if (r != null) { afterEdit(h.e.pts); toast(r === 0 ? 'Two-way' : 'One-way'); } return; }
+  if (t === 'oneway') { if (!h) return; const r = net.cycleOneWay(h.e.id); if (r != null) { afterEdit(h.e.pts); toast(r === 0 ? 'Two-way' : 'One-way'); } return; }
   if (t === 'signal') {
-    const h = T.hover; if (!h) return; if (h.n.ring) return toast('Roundabouts don\'t need lights', true);
+    if (!h) return; if (h.n.ring) return toast('Roundabouts don\'t need lights', true);
     const r = net.toggleSignal(h.n.id); afterEdit(null); burst(h.n.x, h.n.z, 70, r ? [.4, 1, .5] : [1, .45, .3], 8); toast(r ? 'Lights on' : 'Lights off'); return;
   }
   if (t === 'ring') {
-    const h = T.hover; if (!h) return;
-    const r = net.makeRoundabout(h.n.id);
+    if (!h) return; if (h.bad) return toast(h.bad, true);
+    const r = h.n ? net.makeRoundabout(h.n.id) : net.roundaboutOnRoad(h.e, h.s);
     if (typeof r !== 'number') return toast(r, true);
-    const c = net.ringCenter(r); afterEdit(null); burst(c[0], c[1], 160, [.5, .95, 1], 18); toast('Roundabout built');
+    const c = net.ringCenter(r); afterEdit(null); burst(c[0], c[1], 160, [.5, .95, 1], 18); toast('Roundabout built'); hoverUpdate();
   }
 }
 
 // ---------------- input ----------------
-const ptrs = new Map(); let drag = null;
+// phones: with Road or Curve picked, one finger draws and two fingers move the map
+const ptrs = new Map(); let drag = null, pinch = null;
+const drawing = e => e.pointerType !== 'mouse' && (T.tool === 'road' || T.tool === 'curve');
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('pointerdown', e => {
   canvas.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
   sound.start();
-  if (ptrs.size === 1) drag = { x0: e.clientX, y0: e.clientY, btn: e.button, moved: 0, g0: groundAt(e.clientX, e.clientY), t: performance.now() };
-  else drag = null;
+  if (ptrs.size === 1) { const g = groundAt(e.clientX, e.clientY); drag = { x0: e.clientX, y0: e.clientY, btn: e.button, moved: 0, g0: g, draw: drawing(e) && e.button === 0 }; if (drag.draw && g) { const q = net.probe(g[0], g[1], snapR()); drag.start = q.n ? [q.n.x, q.n.z] : q.p; } }
+  else { drag = null; if (T.draw) { T.draw = null; previewMesh.visible = false; hint(); } }
   if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), ang: Math.atan2(b.y - a.y, b.x - a.x), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, g0: groundAt((a.x + b.x) / 2, (a.y + b.y) / 2) }; }
 });
-let pinch = null;
 canvas.addEventListener('pointermove', e => {
   const p = ptrs.get(e.pointerId);
-  if (!touch || ptrs.size === 0) { T.mouse = groundAt(e.clientX, e.clientY); hoverUpdate(); }
+  if (e.pointerType === 'mouse' && (!drag || drag.moved < 8)) { T.mouse = groundAt(e.clientX, e.clientY); hoverUpdate(); }
   if (!p) return;
   p.x = e.clientX; p.y = e.clientY;
   if (ptrs.size === 2 && pinch) {
@@ -343,15 +371,32 @@ canvas.addEventListener('pointermove', e => {
   }
   if (!drag) return;
   const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0; drag.moved = Math.max(drag.moved, Math.hypot(dx, dy));
-  if (drag.btn === 2 || (drag.btn === 0 && e.shiftKey && !touch)) { cam.yaw -= (e.movementX || 0) * .006; cam.pitch += (e.movementY || 0) * .005; placeCamera(); return; }
+  if (drag.draw) {
+    if (drag.moved < 10) return;
+    const g = groundAt(e.clientX, e.clientY); if (!g) return;
+    if (T.tool === 'curve' && T.pend) { T.bend = g; previewRoad(T.pend[0], T.pend[1], g); }
+    else if (drag.start) { T.draw = { a: drag.start, b: g }; pin.visible = false; previewRoad(drag.start, g, null); }
+    return;
+  }
+  if (drag.btn === 2 || (drag.btn === 0 && e.shiftKey && e.pointerType === 'mouse')) { cam.yaw -= (e.movementX || 0) * .006; cam.pitch += (e.movementY || 0) * .005; placeCamera(); return; }
   if (drag.moved > 6 && drag.g0) { const g = groundAt(e.clientX, e.clientY); if (g) { cam.x += drag.g0[0] - g[0]; cam.z += drag.g0[1] - g[1]; placeCamera(); } }
 });
 function up(e) {
   const had = ptrs.has(e.pointerId); ptrs.delete(e.pointerId);
   if (ptrs.size < 2) pinch = null;
   if (!had || !drag) return;
-  if (drag.btn === 2 && drag.moved < 6) { T.pts = []; hoverUpdate(); drag = null; return; }
-  if (drag.btn === 0 && drag.moved < 8) { const g = groundAt(e.clientX, e.clientY); if (g) { T.mouse = g; hoverUpdate(); click(g[0], g[1]); hoverUpdate(); } }
+  const g = groundAt(e.clientX, e.clientY);
+  if (drag.draw && drag.moved >= 10 && g) {
+    if (T.tool === 'curve' && T.pend) place(T.pend[0], T.pend[1], g);
+    else if (T.draw) {
+      const a = T.draw.a; T.draw = null;
+      if (T.tool === 'road') place(a, g);
+      else { T.pts = [a]; T.pend = [a, g]; T.bend = null; previewRoad(a, g, null, true); hint('Drag to bend it, tap to place'); }
+    }
+    hoverUpdate(); drag = null; return;
+  }
+  if (drag.btn === 2 && drag.moved < 6) { T.pts = []; T.pend = null; previewMesh.visible = false; hint(); hoverUpdate(); drag = null; return; }
+  if (drag.btn === 0 && drag.moved < 10 && g) { click(g[0], g[1]); if (e.pointerType === 'mouse') { T.mouse = g; hoverUpdate(); } }
   drag = null;
 }
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
@@ -366,7 +411,7 @@ addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   keys.add(e.code);
   const n = '123456'.indexOf(e.key); if (n >= 0) setTool(TOOLS[n]);
-  if (e.code === 'Escape') { if (T.pts.length) T.pts = []; else setTool(''); hoverUpdate(); }
+  if (e.code === 'Escape') { if (T.pend) T.pend = null; else if (T.pts.length) T.pts = []; else setTool(''); previewMesh.visible = false; hint(); hoverUpdate(); }
   if (e.code === 'Space') { e.preventDefault(); setSpeed(S.speed ? 0 : (S.lastSpeed || 1)); }
   if (e.code === 'KeyT') toggleView();
 });
@@ -411,7 +456,7 @@ function hud() {
 // ---------------- simulation tick ----------------
 let jamT = 0, ovT = 0, lastGave = 0;
 function simStep(dt) {
-  S.time += dt;
+  S.time += dt * clockRate((S.time / DAY * 24) % 24);
   const hour = (S.time / DAY * 24) % 24;
   city.demand(dt, hour);
   city.release(dt, Q.maxCars);
@@ -509,31 +554,38 @@ function drawJams(t) {
     m.position.set(c[0], .4, c[1]); m.scale.set(r, 1, r); m.material.opacity = (.16 + .14 * Math.sin(t * 5)) * Math.min(1, q / 6);
   });
 }
+// day and night. Night is a soft moonlit blue (never black) so the city stays readable;
+// lit windows and street lights still come on. With night switched off the sun never sets.
+let nightOn = localStorage.getItem('flowtown.night') !== '0';
+const MOON = new THREE.Color(.72, .8, 1), HEMI_NIGHT = new THREE.Color(.55, .64, .92);
 function lighting(hour) {
+  if (!nightOn) hour = 6.6 + ((hour - 6.6 + 24) % 24) * (11 / 24);
   const e = Math.sin((hour - 6) / 12 * Math.PI), az = (hour - 6) / 12 * Math.PI;
-  const night = Math.min(1, Math.max(0, (.12 - e) / .3));
+  const night = Math.min(1, Math.max(0, (.12 - e) / .3)), dark = night * .6;
   U.uNight.value = night;
   const sunUp = Math.max(0, e);
-  sun.intensity = 3.6 * Math.pow(sunUp, .4) * (1 - night) + .3 * night;
+  sun.intensity = 3.6 * Math.pow(sunUp, .4) * (1 - night) + 1.0 * night;
   const warm = 1 - Math.min(1, sunUp * 2.2);
-  sun.color.setRGB(1, .92 - warm * .22, .82 - warm * .4).lerp(new THREE.Color(.55, .65, 1), night);
-  const el = Math.max(.18, Math.abs(e)) * (night > .5 ? .9 : 1);
+  sun.color.setRGB(1, .92 - warm * .22, .82 - warm * .4).lerp(MOON, night);
+  const el = night > .5 ? .75 : Math.max(.18, Math.abs(e));
   const dx = Math.cos(az) * .75, dz = -.45;
-  sun.position.set(cam.x + dx * 600, 600 * el + 80, cam.z + dz * 600 + Math.sin(az) * 150);
+  sun.position.set(cam.x + (night > .5 ? -.3 : dx) * 600, 600 * el + 80, cam.z + dz * 600 + Math.sin(az) * 150);
   sun.target.position.set(cam.x, 0, cam.z);
   const S2 = Math.max(160, Math.min(900, cam.dist * 1.1)), sc = sun.shadow.camera;
   if (sc.right !== S2) { sc.left = -S2; sc.right = S2; sc.top = S2; sc.bottom = -S2; sc.near = 10; sc.far = 2400; sc.updateProjectionMatrix(); }
-  hemi.intensity = .28 * (1 - night) + .1 * night; hemi.color.setRGB(.87, .91, 1).lerp(new THREE.Color(.3, .38, .6), night);
+  hemi.intensity = .28 * (1 - night) + .5 * night; hemi.color.setRGB(.87, .91, 1).lerp(HEMI_NIGHT, night);
   scene.fog.color.copy(FOG_DAY).lerp(FOG_NIGHT, night);
-  if (scene.background && scene.background.isTexture) scene.backgroundIntensity = 1 - night * .93;
+  if (scene.background && scene.background.isTexture) scene.backgroundIntensity = 1 - dark;
   else if (scene.background) scene.background.copy(scene.fog.color);
-  renderer.toneMappingExposure = 1 - night * .15;
+  renderer.toneMappingExposure = 1;
   if (glowMesh) glowMesh.material.color.setRGB(.25 + night * .9, .22 + night * .75, .18 + night * .5);
-  poolMat.opacity = night * .55;
-  for (const m of [M.asphalt, M.walk, M.curb, M.building, M.roof, M.bits, M.leaf, M.trunk, M.lot, M.park, groundMat, personMat]) if (m) m.envMapIntensity = .5 * (1 - night * .85);
-  if (M.car) M.car.envMapIntensity = 1 - night * .8;
+  poolMat.opacity = night * .4;
+  for (const m of [M.asphalt, M.walk, M.curb, M.building, M.roof, M.bits, M.leaf, M.trunk, M.lot, M.park, groundMat, personMat]) if (m) m.envMapIntensity = .5 * (1 - dark * .6);
+  if (M.car) M.car.envMapIntensity = 1 - dark * .6;
   return night;
 }
+// the clock runs three times faster late at night (little traffic, nothing to wait for)
+const clockRate = h => (h >= 21.5 || h < 5) ? 3 : 1;
 
 // ---------------- sound (made in code) ----------------
 const sound = (() => {
@@ -573,6 +625,8 @@ function showMenu(v) { $('menu').classList.toggle('show', v); if (v) { S.menuSpe
 $('menuBtn').onclick = () => showMenu(true);
 $('closeBtn').onclick = () => showMenu(false);
 $('soundBtn').textContent = sound.on ? 'Sound on' : 'Sound off';
+$('nightBtn').textContent = nightOn ? 'Night on' : 'Night off';
+$('nightBtn').onclick = () => { nightOn = !nightOn; localStorage.setItem('flowtown.night', nightOn ? '1' : '0'); $('nightBtn').textContent = nightOn ? 'Night on' : 'Night off'; };
 $('soundBtn').onclick = () => { $('soundBtn').textContent = sound.toggle() ? 'Sound on' : 'Sound off'; };
 for (const b of document.querySelectorAll('#qRow button')) { b.classList.toggle('on', b.dataset.q === qName); b.onclick = () => { localStorage.setItem(QKEY, b.dataset.q); save(); location.reload(); }; }
 $('digBtn').onclick = () => { save(); location.href = 'dig/'; };
@@ -615,7 +669,7 @@ requestAnimationFrame(frame);
 // test hooks
 window.FT = {
   dbg() { return { shadowOn: renderer.shadowMap.enabled, sunCast: sun.castShadow, map: !!sun.shadow.map, ms: sun.shadow.mapSize.x, bg: scene.background && scene.background.isTexture, env: !!scene.environment, cam: sun.shadow.camera.right, sunPos: sun.position.toArray().map(Math.round), q: qName, prog: renderer.info.programs.length }; },
-  get net() { return net; }, get city() { return city; }, get S() { return S; }, cam, placeCamera, setTool, click, setSpeed, toggleView,
+  get net() { return net; }, hover(x, z) { T.mouse = [x, z]; hoverUpdate(); }, get T() { return T; }, get city() { return city; }, get S() { return S; }, cam, placeCamera, setTool, click, setSpeed, toggleView,
   step(sec) { for (let t = 0; t < sec; t += .1) simStep(.1); },
   render() { if (net.ver !== seenNet) rebuildRoads(); if (city.ver !== seenCity) rebuildCity(); lighting((S.time / DAY * 24) % 24); drawCars(); updatePeds(.05, U.uNight.value); drawSignals(); paintOverlay(); drawJams(1); renderer.render(scene, camera); },
   setHour(h) { S.time = Math.floor(S.time / DAY) * DAY + h / 24 * DAY; },

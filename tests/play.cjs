@@ -39,7 +39,7 @@ const TYPES = { js: 'text/javascript', mjs: 'text/javascript', jpg: 'image/jpeg'
   await p.evaluate(([x, z]) => { FT.setTool('signal'); FT.click(x, z); }, k);
   check('lights added', await p.evaluate(() => [...FT.net.nodes.values()].some(n => n.sig)));
   const e0 = (await st()).edges;
-  await p.evaluate(() => { FT.setTool('curve'); FT.click(-160, -60); FT.click(-60, -20); FT.click(40, 60); });
+  await p.evaluate(() => { FT.setTool('curve'); FT.click(-160, -60); FT.click(40, 60); FT.hover(-60, -20); FT.click(-60, -20); });
   check('curved road splits crossings', (await st()).edges > e0 + 2, `${e0} -> ${(await st()).edges}`);
   await p.evaluate(() => FT.step(90));
   const s2 = await st(); check('traffic still flows after edits', s2.arrived > s1.arrived, JSON.stringify(s2));

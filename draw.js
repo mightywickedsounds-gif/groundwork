@@ -36,12 +36,19 @@ function cumOf(pts) { const c = [0]; for (let i = 1; i < pts.length; i++) c.push
 function cutPts(pts, cum, s0, s1) { const out = [along(pts, cum, s0).slice(0, 2)]; for (let i = 0; i < pts.length; i++) if (cum[i] > s0 + .05 && cum[i] < s1 - .05) out.push(pts[i]); out.push(along(pts, cum, s1).slice(0, 2)); return out; }
 function lineX(p, d, q, e) { const den = d[0] * e[1] - d[1] * e[0]; if (Math.abs(den) < 1e-4) return null; const t = ((q[0] - p[0]) * e[1] - (q[1] - p[1]) * e[0]) / den; const u = ((q[0] - p[0]) * d[1] - (q[1] - p[1]) * d[0]) / den; return [t, u]; }
 function quad(a, c, b, K) { const out = []; for (let i = 0; i <= K; i++) { const t = i / K, u = 1 - t; out.push([u * u * a[0] + 2 * u * t * c[0] + t * t * b[0], u * u * a[1] + 2 * u * t * c[1] + t * t * b[1]]); } return out; }
-// rounded corner between two road edges (A heading back along dA, B along dB)
-function corner(A, dA, B, dB, K = 8) {
-  const x = lineX(A, dA, B, dB); let c;
-  if (x && x[0] < .5 && x[1] < .5 && x[0] > -40 && x[1] > -40) c = [A[0] + dA[0] * x[0], A[1] + dA[1] * x[0]];
-  else c = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2];
-  return quad(A, c, B, K);
+// rounded corner between two road edges (A heading back along dA, B along dB); C = junction centre.
+// A proper curb return when the edges meet in front of the junction, else a smooth arc round the centre (no spikes)
+function corner(A, dA, B, dB, C, K = 8) {
+  const x = lineX(A, dA, B, dB), rA = Math.hypot(A[0] - C[0], A[1] - C[1]), rB = Math.hypot(B[0] - C[0], B[1] - C[1]);
+  if (x && x[0] < .3 && x[1] < .3 && x[0] > -40 && x[1] > -40) {
+    const c = [A[0] + dA[0] * x[0], A[1] + dA[1] * x[0]];
+    if (Math.hypot(c[0] - C[0], c[1] - C[1]) < Math.max(rA, rB) * 1.02) return quad(A, c, B, K);
+  }
+  let a0 = Math.atan2(A[1] - C[1], A[0] - C[0]), a1 = Math.atan2(B[1] - C[1], B[0] - C[0]);
+  while (a1 < a0) a1 += Math.PI * 2;
+  const out = [];
+  for (let i = 0; i <= K; i++) { const t = i / K, a = a0 + (a1 - a0) * t, r = rA + (rB - rA) * t; out.push([C[0] + Math.cos(a) * r, C[1] + Math.sin(a) * r]); }
+  out[0] = A; out[K] = B; return out;
 }
 // dashes along a polyline
 function dashes(G, pts, w, dash, gap, y, start = 0) {
@@ -91,43 +98,53 @@ export function buildRoads(net, M, opt = {}) {
   const nodes = net.nodes, ringCenters = new Map();
   for (const n of nodes.values()) if (n.ring && !ringCenters.has(n.ring)) ringCenters.set(n.ring, net.ringCenter(n.ring));
   const lamps = [];
-  for (const e of net.edges.values()) {
-    const a = nodes.get(e.a), b = nodes.get(e.b), hw = hwOf(e);
-    const tA = a.edges.size > 1 ? a.trim : 0, tB = b.edges.size > 1 ? b.trim : 0;
-    if (e.len - tA - tB < .5) continue;
-    const c = cutPts(e.pts, e.cum, tA, e.len - tB), nr = normals(c);
+  // one stretch of road along centreline c: asphalt, sidewalks, curbs, markings, lights
+  function piece(c, e, hw, inner, lights) {
+    if (c.length < 2) return;
+    const nr = normals(c);
     A.strip(off(c, nr, -hw), off(c, nr, hw), Y_ROAD);
-    // sidewalks (not on the island side of a roundabout)
-    let inner = 0;
-    if (e.ring) { const C = ringCenters.get(e.ring); const m = c[c.length >> 1], q = nr[c.length >> 1]; inner = ((C[0] - m[0]) * q[0] + (C[1] - m[1]) * q[1]) > 0 ? 1 : -1; }
     for (const sg of [-1, 1]) {
       if (sg === inner) continue;
       const i0 = off(c, nr, sg * hw), i1 = off(c, nr, sg * (hw + WALK_W));
       W.strip(i0, i1, Y_WALK);
       for (let k = 0; k + 1 < i0.length; k++) sg > 0 ? K.wall(i0[k + 1], i0[k], Y_ROAD - .02, Y_WALK) : K.wall(i0[k], i0[k + 1], Y_ROAD - .02, Y_WALK);
     }
-    // markings
-    const m = cutPts(c, cumOf(c), .8, cumOf(c).at(-1) - .8);
-    if (m.length >= 2) {
+    const cl = cumOf(c), m = cutPts(c, cl, Math.min(.8, cl.at(-1) / 3), cl.at(-1) - Math.min(.8, cl.at(-1) / 3));
+    if (m.length >= 2 && cl.at(-1) > 1.5) {
       const mn = normals(m);
       if (!e.oneway && !e.ring) {
         if (e.kind === 'avenue') { line(MY, off(m, mn, -.16), .12, Y_MARK); line(MY, off(m, mn, .16), .12, Y_MARK); }
         else dashes(MK, m, .14, 3, 5, Y_MARK, 2);
       }
       line(MK, off(m, mn, -(hw - .35)), .13, Y_MARK); line(MK, off(m, mn, hw - .35), .13, Y_MARK);
-      if (e.oneway) { // arrows
-        const cm = cumOf(m), L = cm.at(-1), dir = e.oneway;
-        for (let s = 12; s < L - 8; s += 26) { const p = along(m, cm, s); arrow(MK, p[0], p[1], p[2] * dir, p[3] * dir); }
-      }
+      if (e.oneway && !e.ring) { const cm = cumOf(m), L = cm.at(-1), dir = e.oneway; for (let s = 12; s < L - 8; s += 26) { const p = along(m, cm, s); arrow(MK, p[0], p[1], p[2] * dir, p[3] * dir); } }
     }
-    // street lights
-    if (!e.ring && opt.lights !== false) {
-      const cl = cumOf(c), L = cl.at(-1);
-      for (let s = 10, k = 0; s < L - 6; s += 34, k++) { const p = along(c, cl, s), sg = k % 2 ? 1 : -1; lamps.push([p[0] - p[3] * sg * (hw + WALK_W - .7), p[1] + p[2] * sg * (hw + WALK_W - .7), Math.atan2(p[3] * sg, -p[2] * sg)]); }
-    }
+    if (lights) { const L = cl.at(-1); for (let s = 10, k = 0; s < L - 6; s += 34, k++) { const p = along(c, cl, s), sg = k % 2 ? 1 : -1; lamps.push([p[0] - p[3] * sg * (hw + WALK_W - .7), p[1] + p[2] * sg * (hw + WALK_W - .7), Math.atan2(p[3] * sg, -p[2] * sg)]); } }
+  }
+  for (const e of net.edges.values()) {
+    const a = nodes.get(e.a), b = nodes.get(e.b), hw = hwOf(e);
+    const tA = a.edges.size > 1 ? a.trim : 0, tB = b.edges.size > 1 ? b.trim : 0;
+    if (e.len - tA - tB < .5) continue;
+    const c = cutPts(e.pts, e.cum, tA, e.len - tB), nr = normals(c);
+    let inner = 0;   // the island side of a roundabout has no sidewalk
+    if (e.ring) { const C = ringCenters.get(e.ring); const m = c[c.length >> 1], q = nr[c.length >> 1]; inner = ((C[0] - m[0]) * q[0] + (C[1] - m[1]) * q[1]) > 0 ? 1 : -1; }
+    piece(c, e, hw, inner, !e.ring && opt.lights !== false);
+  }
+  // a bend where two roads join end to end: one smooth curved stretch, not a junction
+  const elbow = new Set();
+  for (const n of nodes.values()) {
+    if (n.ring || n.edges.size !== 2) continue;
+    const [e1, e2] = [...n.edges].map(id => net.edges.get(id));
+    if (hwOf(e1) !== hwOf(e2) || !!e1.oneway !== !!e2.oneway) continue;
+    const end = e => { const fromA = e.a === n.id, p = along(e.pts, e.cum, fromA ? n.trim : e.len - n.trim); return [p[0], p[1]]; };
+    const P1 = end(e1), P2 = end(e2);
+    const into = (e1.oneway === 1 && e1.b === n.id) || (e1.oneway === -1 && e1.a === n.id);
+    piece(quad(P1, [n.x, n.z], P2, Math.max(4, Math.ceil(n.trim * 1.2))), { oneway: e1.oneway ? (into ? 1 : -1) : 0, kind: e1.kind }, hwOf(e1), 0, false);
+    elbow.add(n.id);
   }
   // junction patches
   for (const n of nodes.values()) {
+    if (elbow.has(n.id)) continue;
     const legs = [];
     for (const id of n.edges) {
       const e = net.edges.get(id), hw = hwOf(e), t = n.edges.size > 1 ? n.trim : 0;
@@ -149,14 +166,14 @@ export function buildRoads(net, M, opt = {}) {
       const L = legs[i], N = legs[(i + 1) % legs.length];
       ring.push([L.P[0] - L.r[0] * L.hw, L.P[1] - L.r[1] * L.hw], [L.P[0] + L.r[0] * L.hw, L.P[1] + L.r[1] * L.hw]);
       const a0 = [L.P[0] + L.r[0] * L.hw, L.P[1] + L.r[1] * L.hw], b0 = [N.P[0] - N.r[0] * N.hw, N.P[1] - N.r[1] * N.hw];
-      const cv = corner(a0, L.d, b0, N.d);
+      const cv = corner(a0, L.d, b0, N.d, [n.x, n.z]);
       for (let k = 1; k < cv.length - 1; k++) ring.push(cv[k]);
       // is this corner the island side of a roundabout?
       let island = false;
       if (C) { const mid = cv[cv.length >> 1]; const tc = [C[0] - n.x, C[1] - n.z], tm = [mid[0] - n.x, mid[1] - n.z]; island = tc[0] * tm[0] + tc[1] * tm[1] > 0 && L.e.ring && N.e.ring; }
       if (!island) {
         const a1 = [L.P[0] + L.r[0] * (L.hw + WALK_W), L.P[1] + L.r[1] * (L.hw + WALK_W)], b1 = [N.P[0] - N.r[0] * (N.hw + WALK_W), N.P[1] - N.r[1] * (N.hw + WALK_W)];
-        const co = corner(a1, L.d, b1, N.d);
+        const co = corner(a1, L.d, b1, N.d, [n.x, n.z]);
         W.strip(cv, co, Y_WALK);
         for (let k = 0; k + 1 < cv.length; k++) K.wall(cv[k + 1], cv[k], Y_ROAD - .02, Y_WALK);
       }
@@ -188,7 +205,7 @@ export function buildRoads(net, M, opt = {}) {
   // roundabout islands
   for (const [rid, C] of ringCenters) {
     if (!C) continue;
-    const R = RING_R - ONEWAY_W / 2 - .05, pts = [];
+    const R = net.ringR(rid) - ONEWAY_W / 2 - .05, pts = [];
     for (let k = 0; k < 40; k++) { const a = k / 40 * Math.PI * 2; pts.push([C[0] + Math.cos(a) * R, C[1] + Math.sin(a) * R]); }
     IS.fan(C, pts, Y_WALK + .02);
     const outer = pts.map(p => [p[0], p[1]]), inner = pts.map(p => [C[0] + (p[0] - C[0]) * .9, C[1] + (p[1] - C[1]) * .9]);
@@ -251,7 +268,7 @@ function buildingMaterial(U) {
         }`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n roughnessFactor = mix(roughnessFactor, .14, fWin);')
       .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\n metalnessFactor = mix(metalnessFactor, .3, fWin);')
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n { float k = h21(floor(vWp.xz * .7) + floor(vWp.y / 3.3)); totalEmissiveRadiance += mix(vec3(1., .72, .42), vec3(.8, .86, 1.), step(.75, k)) * fLit * uNight * (.35 + .45 * k); }');
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n { float k = h21(floor(vWp.xz * .7) + floor(vWp.y / 3.3)); totalEmissiveRadiance += mix(vec3(1., .72, .42), vec3(.8, .86, 1.), step(.75, k)) * fLit * uNight * (.28 + .35 * k); }');
   };
   return m;
 }
