@@ -101,6 +101,7 @@ export class Net {
     const approx = dist(a, c) + dist(c, b), M = Math.max(2, Math.ceil(approx / 2.5));
     const pts = []; for (let i = 0; i <= M; i++) pts.push(qpt(a, c, b, i / M));
     e.pts = pts; e.cum = cumOf(pts); e.len = e.cum[e.cum.length - 1];
+    let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; for (const p of pts) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); } e.bb = [x0, x1, z0, z1];
   }
   addEdge(a, b, cx, cz, o = {}) {
     if (a === b) return null;
@@ -133,60 +134,142 @@ export class Net {
   nearestNode(x, z, r = SNAP) { let best = null, bd = r; for (const n of this.nodes.values()) { const d = Math.hypot(n.x - x, n.z - z); if (d < bd) { bd = d; best = n; } } return best; }
   nearestEdge(x, z, r = SNAP) {
     let best = null, bd = r;
-    for (const e of this.edges.values()) { const c = closestOnPoly(e.pts, e.cum, x, z); if (c.d < bd) { bd = c.d; best = { e, s: c.s, d: c.d }; } }
+    for (const e of this.edges.values()) { const b = e.bb; if (x < b[0] - bd || x > b[1] + bd || z < b[2] - bd || z > b[3] + bd) continue; const c = closestOnPoly(e.pts, e.cum, x, z); if (c.d < bd) { bd = c.d; best = { e, s: c.s, d: c.d }; } }
     return best;
   }
-  // a click point -> node (existing, on a road, or new)
-  snapNode(x, z, make = true) {
-    const n = this.nearestNode(x, z); if (n) return n;
-    const h = this.nearestEdge(x, z);
-    if (h && h.s > 5 && h.s < h.e.len - 5) { if (!make) return { x, z, virt: true }; const p = along(h.e.pts, h.e.cum, h.s); return this.splitEdge(h.e, this.tAt(h.e, h.s), [p[0], p[1]]); }
-    if (!make) return null;
-    return this.addNode(x, z);
-  }
-  // draw a road from p0 to p1 (optional bend point c). Splits crossings into junctions. Returns created edges.
-  addRoad(p0, p1, c = null, o = {}) {
-    const A = this.snapNode(p0[0], p0[1]), B = this.snapNode(p1[0], p1[1]);
-    if (A === B) return [];
-    let a = [A.x, A.z], b = [B.x, B.z];
-    if (dist(a, b) < 6) return [];
-    let cc = c ? c : lerp2(a, b, .5);
-    // crossings with existing roads
-    const M = Math.max(4, Math.ceil((dist(a, cc) + dist(cc, b)) / 2.5)); const P = []; for (let i = 0; i <= M; i++) P.push(qpt(a, cc, b, i / M));
-    const hits = [];
-    for (const e of [...this.edges.values()]) {
-      if (e.a === A.id || e.b === A.id || e.a === B.id || e.b === B.id) {
-        // still allow crossings away from the shared node
-      }
-      for (let i = 1; i < P.length; i++) for (let j = 1; j < e.pts.length; j++) {
-        const x = segX(P[i - 1], P[i], e.pts[j - 1], e.pts[j]); if (!x) continue;
-        const pt = lerp2(P[i - 1], P[i], x[0]); if (dist(pt, a) < 6 || dist(pt, b) < 6) continue;
-        hits.push({ t: (i - 1 + x[0]) / M, e, s: e.cum[j - 1] + (e.cum[j] - e.cum[j - 1]) * x[1], pt });
+  // do these edges cross any road they don't share a junction with?
+  crossesOthers(list) {
+    for (const e of list) {
+      if (!this.edges.has(e.id)) continue;
+      let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; for (const p of e.pts) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); }
+      for (const f of this.edges.values()) {
+        if (f === e || f.a === e.a || f.a === e.b || f.b === e.a || f.b === e.b) continue;
+        const [fx0, fx1, fz0, fz1] = f.bb;
+        if (fx0 > x1 || x0 > fx1 || fz0 > z1 || z0 > fz1) continue;
+        for (let i = 1; i < e.pts.length; i++) for (let j = 1; j < f.pts.length; j++) { const x = segX(e.pts[i - 1], e.pts[i], f.pts[j - 1], f.pts[j]); if (x && x[0] > .01 && x[0] < .99 && x[1] > .01 && x[1] < .99) return true; }
       }
     }
-    hits.sort((p, q) => p.t - q.t);
-    const stops = [{ t: 0, n: A }];
-    for (const h of hits) {
-      if (h.t - stops[stops.length - 1].t < .02) continue;
-      if (!this.edges.has(h.e.id)) {         // edge was split by an earlier hit: find its piece
-        const near = this.nearestEdge(h.pt[0], h.pt[1], 2); if (!near) continue; h.e = near.e; h.s = near.s;
+    return false;
+  }
+  // put the network back as it was (cars keep their places where their lanes still exist)
+  restore(snap) { const cars = this.cars; this.load(snap); this.cars = cars; this.built = -1; }
+  // a click point -> node (existing, on a road, or new)
+  snapNode(x, z, make = true, r = SNAP) {
+    const q = this.probe(x, z, r);
+    if (!make) return q.n || (q.e ? { x: q.p[0], z: q.p[1], virt: true } : null);
+    return this.realize(q);
+  }
+  // what a point would join: an existing node, a spot on a road, or open ground
+  probe(x, z, r = SNAP) {
+    const n = this.nearestNode(x, z, r), h = this.nearestEdge(x, z, r);
+    if (n && (!h || Math.hypot(n.x - x, n.z - z) <= h.d + 7)) return { n };
+    if (h) {
+      const A = this.nodes.get(h.e.a), B = this.nodes.get(h.e.b);
+      if (h.e.ring) return { n: Math.hypot(A.x - x, A.z - z) < Math.hypot(B.x - x, B.z - z) ? A : B };
+      if (h.s < 9) return { n: A };
+      if (h.s > h.e.len - 9) return { n: B };
+      const p = along(h.e.pts, h.e.cum, h.s); return { e: h.e, s: h.s, p: [p[0], p[1]] };
+    }
+    return { p: [x, z] };
+  }
+  realize(q) {
+    if (q.n) return this.nodes.has(q.n.id) ? q.n : this.addNode(q.n.x, q.n.z);
+    if (q.e) {
+      const e = this.edges.has(q.e.id) ? q.e : (this.nearestEdge(q.p[0], q.p[1], 3) || {}).e;
+      if (e && !e.ring) { const c = closestOnPoly(e.pts, e.cum, q.p[0], q.p[1]); if (c.s > 3 && c.s < e.len - 3) return this.splitEdge(e, this.tAt(e, c.s), q.p); }
+      const n = this.nearestNode(q.p[0], q.p[1], 6); if (n) return n;
+    }
+    return this.addNode(q.p[0], q.p[1]);
+  }
+  // plan a road without changing anything: endpoints, curve, crossings, or a reason it can't be built
+  planRoad(p0, p1, c = null, r = SNAP) {
+    let qa = this.probe(p0[0], p0[1], r), qb = this.probe(p1[0], p1[1], r);
+    const P = q => q.n ? [q.n.x, q.n.z] : q.p;
+    if (qa.n && qb.n && qa.n === qb.n) { if (dist(p0, p1) > 14) qb = { p: p1 }; else return { reason: 'Too short' }; }
+    if (qa.e && qb.e && qa.e === qb.e) return { reason: 'There\'s already a road there' };
+    let a = P(qa), b = P(qb);
+    if (dist(a, b) < 8) return { reason: 'Too short' };
+    if (qa.n && qb.n) for (const id of qa.n.edges) { const f = this.edges.get(id); if (f.a === qb.n.id || f.b === qb.n.id) return { reason: 'There\'s already a road there' }; }
+    let cc = c || lerp2(a, b, .5);
+    const curve = () => { const M = Math.max(4, Math.ceil((dist(a, cc) + dist(cc, b)) / 2.5)), pts = []; for (let i = 0; i <= M; i++) pts.push(qpt(a, cc, b, i / M)); return pts; };
+    let pts = curve();
+    // crossings; a free end just past a road snaps back onto it
+    const hitsOf = pts => {
+      const out = [], M = pts.length - 1;
+      let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; for (const p of pts) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); }
+      for (const e of this.edges.values()) if (!(e.bb[0] > x1 || e.bb[1] < x0 || e.bb[2] > z1 || e.bb[3] < z0)) for (let i = 1; i < pts.length; i++) for (let j = 1; j < e.pts.length; j++) {
+        const x = segX(pts[i - 1], pts[i], e.pts[j - 1], e.pts[j]); if (!x) continue;
+        out.push({ t: (i - 1 + x[0]) / M, e, s: e.cum[j - 1] + (e.cum[j] - e.cum[j - 1]) * x[1], pt: lerp2(pts[i - 1], pts[i], x[0]) });
       }
-      let n = this.nearestNode(h.pt[0], h.pt[1], 7);
-      if (!n) { if (h.s < 4 || h.s > h.e.len - 4) continue; n = this.splitEdge(h.e, this.tAt(h.e, h.s), h.pt); }
-      if (n === A || n === B || stops.some(s => s.n === n)) continue;
-      stops.push({ t: h.t, n });
+      return out.sort((p, q) => p.t - q.t);
+    };
+    let hits = hitsOf(pts);
+    const endFix = (q, near) => { if (q.n || q.e) return q; const h = near(); if (!h) return q; return h.e.ring ? q : (h.s < 9 ? { n: this.nodes.get(h.e.a) } : h.s > h.e.len - 9 ? { n: this.nodes.get(h.e.b) } : { e: h.e, s: h.s, p: h.pt }); };
+    const nqb = endFix(qb, () => [...hits].reverse().find(h => dist(h.pt, b) < 10 && dist(h.pt, a) > 10));
+    const nqa = endFix(qa, () => hits.find(h => dist(h.pt, a) < 10 && dist(h.pt, b) > 10));
+    if (nqa !== qa || nqb !== qb) {
+      qa = nqa; qb = nqb; const a2 = P(qa), b2 = P(qb);
+      if (!c) cc = lerp2(a2, b2, .5); a = a2; b = b2;
+      if (dist(a, b) < 8) return { reason: 'Too short' };
+      pts = curve(); hits = hitsOf(pts);
+    }
+    // every crossing becomes a junction: an end of the crossed road if one is close, else a new one on it
+    const ends = new Set([qa.n, qb.n].filter(Boolean)), endEdges = new Set([qa.e, qb.e].filter(Boolean));
+    const stops = [];
+    for (const h of hits) {
+      if (endEdges.has(h.e)) continue;
+      if ((qa.n && (h.e.a === qa.n.id || h.e.b === qa.n.id) && dist(h.pt, a) < 12) || (qb.n && (h.e.a === qb.n.id || h.e.b === qb.n.id) && dist(h.pt, b) < 12)) continue;
+      const EA = this.nodes.get(h.e.a), EB = this.nodes.get(h.e.b);
+      let st = null;
+      for (const N of [EA, EB]) if (Math.hypot(N.x - h.pt[0], N.z - h.pt[1]) < 9 && (!st || Math.hypot(N.x - h.pt[0], N.z - h.pt[1]) < Math.hypot(st.n.x - h.pt[0], st.n.z - h.pt[1]))) st = { t: h.t, n: N };
+      if (!st) st = { t: h.t, e: h.e, s: h.s, pt: h.pt };
+      if (h.e.ring) { st.ring = h.e.ring; if (st.e) { const c = this.ringCenter(h.e.ring), R = this.ringR(h.e.ring), ang = Math.atan2(h.pt[1] - c[1], h.pt[0] - c[0]); st.pt = [c[0] + Math.cos(ang) * R, c[1] + Math.sin(ang) * R]; } }
+      if (st.n && (ends.has(st.n) || stops.some(x => x.n === st.n))) continue;
+      stops.push(st);
+    }
+    const ringOf = q => q.ring || (q.n && q.n.ring) || 0;
+    // pieces must be long enough to drive (gaps here are what made roads glitch before)
+    const list = [{ t: 0, pt: a, ring: ringOf(qa) }, ...stops.map(x => ({ ...x, pt: x.n ? [x.n.x, x.n.z] : x.pt })), { t: 1, pt: b, ring: ringOf(qb) }];
+    for (let k = 1; k < list.length; k++) {
+      if (list[k].ring && list[k].ring === list[k - 1].ring) continue;   // through a roundabout: no road across the island
+      if (dist(list[k].pt, list[k - 1].pt) < 5) return { reason: 'Too close to another road' };
+    }
+    return { qa, qb, a, b, cc, stops, pts };
+  }
+  // build a road from p0 to p1 (optional bend control c). Crossings become junctions.
+  // Returns the new edges (array); if nothing was built, the array has .reason
+  addRoad(p0, p1, c = null, o = {}, r = SNAP) {
+    const plan = this.planRoad(p0, p1, c, r), made = [];
+    if (plan.reason) { made.reason = plan.reason; return made; }
+    const snap = this.serialize();
+    const A = this.realize(plan.qa), B = this.realize(plan.qb);
+    if (A === B) { made.reason = 'Too short'; return made; }
+    const a = [A.x, A.z], b = [B.x, B.z], cc = c ? plan.cc : lerp2(a, b, .5);
+    const stops = [{ t: 0, n: A }];
+    for (const st of plan.stops) {
+      let n = st.n && this.nodes.has(st.n.id) ? st.n : null;
+      if (!n) {
+        const near = this.nearestEdge(st.pt[0], st.pt[1], 3);
+        if (!near) continue;
+        n = near.s < 2 ? this.nodes.get(near.e.a) : near.s > near.e.len - 2 ? this.nodes.get(near.e.b) : this.splitEdge(near.e, this.tAt(near.e, near.s), st.pt);
+        if (st.ring && !n.ring) { n.ring = st.ring; const any = [...this.nodes.values()].find(m => m.ring === st.ring && m.rc); if (any) n.rc = any.rc; }
+      }
+      if (n === A || n === B || stops.some(x => x.n === n)) continue;
+      stops.push({ t: st.t, n });
     }
     stops.push({ t: 1, n: B });
-    // split the new curve at the stops (de Casteljau), endpoints pinned to the nodes
-    const made = []; let p0c = a, pc = cc, p1c = b, tPrev = 0;
+    let p0c = a, pc = cc, p1c = b, tPrev = 0;
     for (let k = 1; k < stops.length; k++) {
       const t = k === stops.length - 1 ? 1 : (stops[k].t - tPrev) / (1 - tPrev);
       const q0 = lerp2(p0c, pc, t), q1 = lerp2(pc, p1c, t), m = lerp2(q0, q1, t);
       const n0 = stops[k - 1].n, n1 = stops[k].n;
-      const e = this.addEdge(n0.id, n1.id, q0[0], q0[1], o); if (e) made.push(e);
+      if (!(n0.ring && n0.ring === n1.ring)) { const e = this.addEdge(n0.id, n1.id, q0[0], q0[1], o) || this.addEdge(n0.id, n1.id, null, null, o); if (e) made.push(e); }
       p0c = m; pc = q1; tPrev = stops[k].t;
     }
     for (const n of [A, B]) if (!n.edges.size) this.nodes.delete(n.id);
+    if (!made.length) made.reason = 'There\'s already a road there';
+    else if (this.crossesOthers(made)) { this.restore(snap); const out = []; out.reason = 'Too close to another road'; return out; }
+    made.end = [B.x, B.z];
     this.ver++;
     return made;
   }
@@ -199,32 +282,55 @@ export class Net {
     const e = this.edges.get(eid); if (!e || e.ring) return null;
     e.oneway = e.oneway === 0 ? 1 : e.oneway === 1 ? -1 : 0; this.ver++; return e.oneway;
   }
-  // replace a junction with a roundabout. Returns ring id or a reason string.
-  makeRoundabout(nid, R = RING_R) {
-    const n = this.nodes.get(nid); if (!n) return 'NO JUNCTION';
-    if (n.ring) return 'ALREADY A ROUNDABOUT';
-    if (n.edges.size < 3) return 'NEEDS 3+ ROADS';
+  // how big a roundabout fits at node n (0 if none)
+  ringFit(n, Rwant = RING_R) {
+    let R = Rwant; for (const id of n.edges) R = Math.min(R, this.edges.get(id).len - 7);
+    for (const e of this.edges.values()) {   // other roads nearby must stay outside the ring
+      if (e.a === n.id || e.b === n.id) continue;
+      const c = closestOnPoly(e.pts, e.cum, n.x, n.z); if (c.d < R + 9) R = Math.min(R, c.d - 9);
+    }
+    return R >= 8 ? R : 0;
+  }
+  // turn a junction, bend or road end into a roundabout. Returns ring id or a reason string.
+  makeRoundabout(nid, Rwant = RING_R) {
+    const n = this.nodes.get(nid); if (!n) return 'Tap a road or junction';
+    if (n.ring) return 'Already a roundabout';
+    if (!n.edges.size) return 'Tap a road or junction';
+    const R = this.ringFit(n, Rwant); if (!R) return 'Not enough room here';
+    const snap = this.serialize(), eid0 = this.eid;
     const spokes = [];
-    for (const id of [...n.edges]) {
-      const e = this.edges.get(id);
-      if (e.len < R + 10) return 'NOT ENOUGH ROOM';
-      const fromA = e.a === n.id, s = fromA ? R : e.len - R;
-      const p = along(e.pts, e.cum, s); const ang = Math.atan2(p[1] - n.z, p[0] - n.x);
-      spokes.push({ e, fromA, s, ang });
+    for (const id of n.edges) {
+      const e = this.edges.get(id), fromA = e.a === n.id, s = fromA ? R : e.len - R;
+      const p = along(e.pts, e.cum, s); spokes.push({ e, fromA, s, ang: Math.atan2(p[1] - n.z, p[0] - n.x) });
     }
     spokes.sort((p, q) => p.ang - q.ang);
-    for (let i = 0; i < spokes.length; i++) { const d = spokes[(i + 1) % spokes.length].ang - spokes[i].ang + (i === spokes.length - 1 ? Math.PI * 2 : 0); if (d < .45) return 'ROADS TOO CLOSE'; }
+    // roads leaving at nearly the same angle share one entrance
+    const groups = [];
+    for (const sp of spokes) { const g = groups[groups.length - 1]; if (g && sp.ang - g.at(-1).ang < .5) g.push(sp); else groups.push([sp]); }
+    if (groups.length > 1) { const f = groups[0], l = groups.at(-1); if (f[0].ang + Math.PI * 2 - l.at(-1).ang < .5) { for (const sp of f) l.push({ ...sp, ang: sp.ang + Math.PI * 2 }); groups.shift(); } }
     const rid = this.rid++, ringNodes = [];
-    for (const sp of spokes) {
-      const keep = sp.fromA ? sp.e.b : sp.e.a;  // far node
-      const m = this.splitEdge(sp.e, this.tAt(sp.e, sp.s));
-      // drop the inner piece (n -> m)
-      for (const id of [...m.edges]) { const f = this.edges.get(id); if (f.a === n.id || f.b === n.id) this.delEdge(id); }
-      m.x = n.x + Math.cos(sp.ang) * R; m.z = n.z + Math.sin(sp.ang) * R; m.ring = rid; m.sig = null;
-      for (const id of m.edges) { const f = this.edges.get(id); if (f.a === keep || f.b === keep) this.edgeGeom(f); }
-      ringNodes.push({ n: m, ang: sp.ang });
+    for (const g of groups) {
+      let node = null, sx = 0, sz = 0;
+      for (const sp of g) {
+        sx += Math.cos(sp.ang); sz += Math.sin(sp.ang);
+        const m = this.splitEdge(sp.e, this.tAt(sp.e, sp.s));
+        for (const id of [...m.edges]) { const f = this.edges.get(id); if (f.a === n.id || f.b === n.id) this.delEdge(id); }
+        if (!this.nodes.has(n.id)) this.nodes.set(n.id, n);
+        if (!node) { node = m; continue; }
+        for (const id of [...m.edges]) {   // hook this road onto the shared entrance
+          const f = this.edges.get(id), o = { oneway: f.oneway, kind: f.kind };
+          if (f.a === m.id) this.addEdge(node.id, f.b, f.cx, f.cz, o); else this.addEdge(f.a, node.id, f.cx, f.cz, o);
+          this.delEdge(id);
+        }
+        this.nodes.delete(m.id);
+      }
+      const ang = Math.atan2(sz, sx);
+      node.x = n.x + Math.cos(ang) * R; node.z = n.z + Math.sin(ang) * R; node.ring = rid; node.sig = null;
+      for (const id of node.edges) this.edgeGeom(this.edges.get(id));
+      ringNodes.push({ n: node, ang });
     }
     this.nodes.delete(n.id);
+    ringNodes.sort((p, q) => p.ang - q.ang);
     // fill big gaps so arcs stay round
     const all = [];
     for (let i = 0; i < ringNodes.length; i++) {
@@ -233,17 +339,29 @@ export class Net {
       const k = Math.floor((a1 - a0) / 1.75);
       for (let j = 1; j <= k; j++) { const ang = a0 + (a1 - a0) * j / (k + 1); const f = this.addNode(n.x + Math.cos(ang) * R, n.z + Math.sin(ang) * R); f.ring = rid; all.push({ n: f, ang }); }
     }
+    for (const r of all) r.n.rc = [n.x, n.z, R];
     // one-way arcs going the way of decreasing angle (island on the driver's left)
     for (let i = 0; i < all.length; i++) {
       const from = all[(i + 1) % all.length], to = all[i];
-      let a0 = from.ang, a1 = to.ang; if (a0 < a1) a0 += Math.PI * 2;
+      let a0 = from.ang, a1 = to.ang; while (a0 <= a1) a0 += Math.PI * 2;
       const mid = (a0 + a1) / 2, k = R / Math.cos((a0 - a1) / 2);
       this.addEdge(from.n.id, to.n.id, n.x + Math.cos(mid) * k, n.z + Math.sin(mid) * k, { oneway: 1, ring: rid });
     }
+    if (this.crossesOthers([...this.edges.values()].filter(e => e.id >= eid0))) { this.restore(snap); return 'Not enough room here'; }
     this.ver++;
     return rid;
   }
-  ringCenter(rid) { let x = 0, z = 0, k = 0; for (const n of this.nodes.values()) if (n.ring === rid) { x += n.x; z += n.z; k++; } return k ? [x / k, z / k] : null; }
+  // a roundabout on a plain stretch of road: split it there first
+  roundaboutOnRoad(e, s) {
+    const R = Math.min(RING_R, s - 7, e.len - s - 7);
+    if (R < 8) return 'Too close to a junction';
+    const p = along(e.pts, e.cum, s);
+    for (const f of this.edges.values()) if (f !== e && closestOnPoly(f.pts, f.cum, p[0], p[1]).d < 17) return 'Not enough room here';
+    const snap = this.serialize(), n = this.splitEdge(e, this.tAt(e, s), [p[0], p[1]]);
+    const r = this.makeRoundabout(n.id, R); if (typeof r !== 'number') this.restore(snap); return r;
+  }
+  ringCenter(rid) { let x = 0, z = 0, k = 0; for (const n of this.nodes.values()) if (n.ring === rid) { if (n.rc) return [n.rc[0], n.rc[1]]; x += n.x; z += n.z; k++; } return k ? [x / k, z / k] : null; }
+  ringR(rid) { for (const n of this.nodes.values()) if (n.ring === rid && n.rc) return n.rc[2]; return RING_R; }
   removeRoundabout(rid) {
     const c = this.ringCenter(rid); if (!c) return false;
     const ring = [...this.nodes.values()].filter(n => n.ring === rid);
@@ -265,12 +383,12 @@ export class Net {
     this.ver++; return true;
   }
   serialize() {
-    return { nodes: [...this.nodes.values()].map(n => [n.id, +n.x.toFixed(2), +n.z.toFixed(2), n.sig ? 1 : 0, n.ring]),
+    return { nodes: [...this.nodes.values()].map(n => [n.id, +n.x.toFixed(2), +n.z.toFixed(2), n.sig ? 1 : 0, n.ring, n.rc || 0]),
       edges: [...this.edges.values()].map(e => [e.id, e.a, e.b, +e.cx.toFixed(2), +e.cz.toFixed(2), e.oneway, e.ring, e.kind]), nid: this.nid, eid: this.eid, rid: this.rid };
   }
   load(d) {
     this.nodes.clear(); this.edges.clear(); this.cars = [];
-    for (const [id, x, z, sig, ring] of d.nodes) this.nodes.set(id, { id, x, z, sig: sig ? { phase: 0, t: 0, st: 'g' } : null, ring, edges: new Set() });
+    for (const [id, x, z, sig, ring, rc] of d.nodes) this.nodes.set(id, { id, x, z, sig: sig ? { phase: 0, t: 0, st: 'g' } : null, ring, rc: rc || null, edges: new Set() });
     for (const [id, a, b, cx, cz, oneway, ring, kind] of d.edges) {
       if (!this.nodes.has(a) || !this.nodes.has(b)) continue;
       const e = { id, a, b, cx, cz, oneway, ring, kind, lanes: 1 }; this.edgeGeom(e); this.edges.set(id, e);
