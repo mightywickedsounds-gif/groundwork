@@ -112,3 +112,7 @@ The owner's report: once a road was placed, trying to drag the view placed more 
 - **Busy phones:** whether a touch is a hold (draw) or a quick drag (move the map) is decided from when the finger actually moved, not from a timer, so a phone that's busy drawing the city can't mistake one for the other.
 - Tests: browser checks now include real touch gestures on a phone-sized screen (quick drag moves the map and builds nothing, hold-and-drag draws, a road ending on a street's sidewalk joins it, a drag with the pin waiting builds nothing). Build stress test: 0 crossings without a junction. Traffic tests unchanged.
 
+### Round 6: phones keep matching files
+
+The owner's report: the Lanes tool wasn't working on the live site. It works on a fresh load, so the likely cause is the phone mixing files: it fetched the new page (with the Lanes button) but kept the old copy of the game code, which doesn't know the tool. The page now asks for each game file with a version number (`?v=6` in `index.html`), so a new version always loads a matching set. If a phone still shows the old game, close the tab and open the site again.
+
