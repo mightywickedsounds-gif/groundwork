@@ -6,7 +6,7 @@ const tries = +(process.argv[2] || 400), R = rng(42);
 const net = new Net(), city = createCity(net, 7);
 for (let i = 0; i < 3; i++) { const d = city.nextDistrict(); city.unlock(d[0], d[1]); }
 city.sync();
-const reasons = {}; let ok = 0, rOk = 0, rTry = 0;
+const reasons = {}; let ok = 0, rOk = 0, rTry = 0, lanesDone = 0;
 const pick = () => [(R() - .5) * 700, (R() - .5) * 700];
 for (let i = 0; i < tries; i++) {
   const k = R();
@@ -15,6 +15,11 @@ for (let i = 0; i < tries; i++) {
     const r = R() < .6 ? net.makeRoundabout(n.id) : (() => { const es = [...net.edges.values()].filter(e => !e.ring); const e = es[(R() * es.length) | 0]; return net.roundaboutOnRoad(e, e.len * (.2 + R() * .6)); })();
     if (typeof r === 'number') rOk++; else reasons['ring: ' + r] = (reasons['ring: ' + r] || 0) + 1;
     continue;
+  }
+  if (k > .9) {    // more lanes on a random road
+    const es = [...net.edges.values()].filter(e => !e.ring); const e = es[(R() * es.length) | 0];
+    for (let n = 1 + ((R() * 4) | 0); n > 0; n--) if (!process.env.NOLANES) net.cycleLanes(e.id);
+    lanesDone++; continue;
   }
   // roads: often starting where the last one ended, like a player chaining
   const a = pick(), b = [a[0] + (R() - .5) * 260, a[1] + (R() - .5) * 260];
@@ -37,6 +42,7 @@ for (let i = 0; i < E.length; i++) { if (E[i].len < 3) short++; for (let j = i +
 // 2) traffic still runs on the result
 for (let s = 0; s < 3000; s++) { city.demand(.1, 8); city.release(.1); net.step(.1); }
 for (const c of net.cars) if (!isFinite(c.x)) throw new Error('NaN');
-const roads = tries - rTry;
-console.log({ roadsBuilt: `${ok}/${roads}`, roundabouts: `${rOk}/${rTry}`, reasons, crossingsWithoutJunction: crossings, tinyRoads: short, edges: E.length, arrived: net.stats.arrived, cars: net.cars.length });
+const roads = tries - rTry - lanesDone;
+const wide = E.filter(e => e.nl > 1 || e.tl).length;
+console.log({ roadsBuilt: `${ok}/${roads}`, roundabouts: `${rOk}/${rTry}`, widened: lanesDone, wideRoads: wide, reasons, crossingsWithoutJunction: crossings, tinyRoads: short, edges: E.length, arrived: net.stats.arrived, cars: net.cars.length });
 if (crossings || short) { console.log('FAIL'); process.exit(1); } else console.log('PASS');

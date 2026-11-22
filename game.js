@@ -1,7 +1,7 @@
 // Flowtown: keep a growing city's traffic moving.
 import * as THREE from 'three';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
-import { Net, RING_R, ONEWAY_W, WALK_W, LANE_W, along, closestOnPoly } from './net.js';
+import { Net, RING_R, ONEWAY_W, WALK_W, LANE_W, along, closestOnPoly, laneOff } from './net.js';
 import { createCity, DAY, CHUNK, BLOCK } from './city.js';
 import { makeMaterials, buildRoads, buildCity, vehicleGeos, vehicleMaterial, makeFleet, staticCarGeo, carColor, personGeo, lampGeo, signalGeo, hwOf } from './draw.js';
 
@@ -124,8 +124,9 @@ function rebuildRoads() {
   disposeGroup(sigG); sigG = new THREE.Group(); sigLamps = [];
   const heads = [];
   for (const n of net.nodes.values()) if (n.sig) for (const L of n.ins) {
+    if (L.li || L.pk) continue;     // one pole per road, at the kerb
     const p = along(L.pts, L.cum, L.len), h = [p[2], p[3]], r = [-h[1], h[0]], hw = hwOf(L.edge);
-    const off = L.edge.oneway ? hw + .9 : LANE_W / 2 + .9;
+    const off = hw - laneOff(L.edge, 0) + .9;
     const px = p[0] + r[0] * off + h[0] * .4, pz = p[1] + r[1] * off + h[1] * .4, th = Math.atan2(-h[1], h[0]);
     heads.push([px, pz, th]);
     // lamps on the face looking back at drivers: local (-.19, y, -2.9)
@@ -230,10 +231,11 @@ const jamMarks = []; const jamGeo = new THREE.CircleGeometry(1, 40).rotateX(-Mat
 for (let i = 0; i < 24; i++) { const m = new THREE.Mesh(jamGeo, new THREE.MeshBasicMaterial({ color: 0xff3020, transparent: true, opacity: 0, depthWrite: false, toneMapped: false })); m.renderOrder = 3; m.visible = false; scene.add(m); jamMarks.push(m); }
 
 // ---------------- tools ----------------
-const TOOLS = ['road', 'curve', 'signal', 'ring', 'oneway', 'erase'];
+const TOOLS = ['road', 'curve', 'signal', 'ring', 'oneway', 'lanes', 'erase'];
+const laneName = (nl, tl) => `${nl} lane${nl > 1 ? 's' : ''}${tl ? ' + turn lanes' : ''}`;
 const HINT = touch
-  ? { road: 'Drag to draw a road. Tap to keep going from the pin', curve: 'Drag to draw, then drag to bend it', signal: 'Tap a junction for lights', ring: 'Tap a junction or road for a roundabout', oneway: 'Tap a road to switch its direction', erase: 'Tap a road or roundabout to remove it' }
-  : { road: 'Click to start, click to place. It keeps going from the end', curve: 'Click the start, click the end, then move to bend and click', signal: 'Click a junction for lights', ring: 'Click a junction or road for a roundabout', oneway: 'Click a road to switch its direction', erase: 'Click a road or roundabout to remove it' };
+  ? { road: 'Drag to draw a road. Tap to keep going from the pin', curve: 'Drag to draw, then drag to bend it', signal: 'Tap a junction for lights', ring: 'Tap a junction or road for a roundabout', oneway: 'Tap a road to switch its direction', lanes: 'Tap a road for more lanes', erase: 'Tap a road or roundabout to remove it' }
+  : { road: 'Click to start, click to place. It keeps going from the end', curve: 'Click the start, click the end, then move to bend and click', signal: 'Click a junction for lights', ring: 'Click a junction or road for a roundabout', oneway: 'Click a road to switch its direction', lanes: 'Click a road for more lanes', erase: 'Click a road or roundabout to remove it' };
 const T = { tool: '', pts: [], pend: null, bend: null, draw: null, hover: null, mouse: null, plan: null };
 function setTool(t) {
   T.tool = T.tool === t ? '' : t; T.pts = []; T.pend = null; T.bend = null; T.draw = null; previewMesh.visible = false; hoverMesh.visible = false; pin.visible = false;
@@ -280,6 +282,12 @@ function hoverUpdate() {
     return;
   }
   if (T.tool === 'oneway') { const h = net.nearestEdge(m[0], m[1], R); if (h && !h.e.ring) { T.hover = { e: h.e }; ribbon(hoverMesh, h.e.pts, hwOf(h.e) + .6); } return; }
+  if (T.tool === 'lanes') {   // show how wide it will be, and what it becomes
+    const h = net.nearestEdge(m[0], m[1], R); if (!h || h.e.ring) { hint(); return; }
+    const [nl, tl] = net.nextLanes(h.e); T.hover = { e: h.e };
+    ribbon(hoverMesh, h.e.pts, hwOf({ ...h.e, nl, tl }) + .6); hint(`${touch ? 'Tap' : 'Click'} for ${laneName(nl, tl)}`); $('hint').classList.remove('bad');
+    return;
+  }
   if (T.tool === 'signal') {
     let best = null, bd = Math.max(16, R); for (const n of net.nodes.values()) { if (n.edges.size < 3) continue; const d = Math.hypot(n.x - m[0], n.z - m[1]); if (d < bd) { bd = d; best = n; } }
     if (best) { T.hover = { n: best }; ringShape(hoverMesh, best.x, best.z, best.trim + 1, best.trim + 3); if (best.sig) hoverMesh.material.color.setRGB(1, .75, .3); }
@@ -331,6 +339,10 @@ function click(x, z) {
     if (h.ring) { const c = net.ringCenter(h.ring); net.removeRoundabout(h.ring); afterEdit(null); burst(c[0], c[1], 120, [1, .45, .3], 14); toast('Roundabout removed'); }
     else if (h.e) { const pts = h.e.pts; net.removeEdge(h.e.id); afterEdit(pts, [1, .45, .3]); }
     T.hover = null; return;
+  }
+  if (t === 'lanes') {
+    if (!h) return; const r = net.cycleLanes(h.e.id); if (!r) return;
+    afterEdit(net.roadChain(h.e).flatMap(e => e.pts)); toast(laneName(r.nl, r.tl) + (r.lights ? ' · lights added' : '')); hoverUpdate(); return;
   }
   if (t === 'oneway') { if (!h) return; const r = net.cycleOneWay(h.e.id); if (r != null) { afterEdit(h.e.pts); toast(r === 0 ? 'Two-way' : 'One-way'); } return; }
   if (t === 'signal') {
@@ -410,7 +422,7 @@ const keys = new Set();
 addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   keys.add(e.code);
-  const n = '123456'.indexOf(e.key); if (n >= 0) setTool(TOOLS[n]);
+  const n = '1234567'.indexOf(e.key); if (n >= 0) setTool(TOOLS[n]);
   if (e.code === 'Escape') { if (T.pend) T.pend = null; else if (T.pts.length) T.pts = []; else setTool(''); previewMesh.visible = false; hint(); hoverUpdate(); }
   if (e.code === 'Space') { e.preventDefault(); setSpeed(S.speed ? 0 : (S.lastSpeed || 1)); }
   if (e.code === 'KeyT') toggleView();
@@ -669,7 +681,7 @@ requestAnimationFrame(frame);
 // test hooks
 window.FT = {
   dbg() { return { shadowOn: renderer.shadowMap.enabled, sunCast: sun.castShadow, map: !!sun.shadow.map, ms: sun.shadow.mapSize.x, bg: scene.background && scene.background.isTexture, env: !!scene.environment, cam: sun.shadow.camera.right, sunPos: sun.position.toArray().map(Math.round), q: qName, prog: renderer.info.programs.length }; },
-  get net() { return net; }, hover(x, z) { T.mouse = [x, z]; hoverUpdate(); }, get T() { return T; }, get city() { return city; }, get S() { return S; }, cam, placeCamera, setTool, click, setSpeed, toggleView,
+  get net() { return net; }, along, hover(x, z) { T.mouse = [x, z]; hoverUpdate(); }, get T() { return T; }, get city() { return city; }, get S() { return S; }, cam, placeCamera, setTool, click, setSpeed, toggleView,
   step(sec) { for (let t = 0; t < sec; t += .1) simStep(.1); },
   render() { if (net.ver !== seenNet) rebuildRoads(); if (city.ver !== seenCity) rebuildCity(); lighting((S.time / DAY * 24) % 24); drawCars(); updatePeds(.05, U.uNight.value); drawSignals(); paintOverlay(); drawJams(1); renderer.render(scene, camera); },
   setHour(h) { S.time = Math.floor(S.time / DAY) * DAY + h / 24 * DAY; },

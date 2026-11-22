@@ -10,6 +10,7 @@ The old digging game still works at https://mightywickedsounds-gif.github.io/gro
 
 - **The city grows by itself.** It starts with three districts. Every few in-game hours a new district opens at the edge with its own streets, homes, offices, shops, parks and parking lots. More people means more cars.
 - **Everyone has somewhere to be.** People drive from home to work in the morning rush (around 8:00), run errands at midday and drive home in the evening rush (around 17:30). Each driver picks the quickest route and switches to another way when they're stuck.
+- **Wide roads.** Any road can get 2 or 3 lanes each way and turn lanes. Drivers pick their lane early, move over when there's a gap (the car behind lets them in if they're waiting), and follow the arrows painted in each lane: the kerb lane goes straight or right, the inside lane goes straight or left, and turn lanes in the middle hold the cars turning left so the rest keep moving.
 - **Real traffic rules.** Cars keep their distance, slow for turns, queue at junctions and don't block a junction they can't get out of. Plain junctions work first come, first served. Traffic lights switch between directions and end a green early when nobody is waiting. At roundabouts, entering cars give way to cars already on the ring.
 - **Gridlock meter (top right).** It rises while lots of drivers are stuck and when drivers give up. It falls again when traffic flows. At 100% the city locks up and the game ends (you can keep fixing it or start a new city). Red pulsing circles show the worst junctions.
 - **Day and night.** The sun moves through the day; at night windows, headlights, tail lights and street lights come on.
@@ -23,7 +24,8 @@ The old digging game still works at https://mightywickedsounds-gif.github.io/gro
 | Lights | 3 | Click a junction to add or remove traffic lights. |
 | Round | 4 | Tap a junction, a bend or any stretch of road to put a roundabout there. It sizes itself to fit and clears the buildings in the way. A road drawn through a roundabout joins it. |
 | One-way | 5 | Click a road: two-way, then one way, then the other way. |
-| Remove | 6 | Click a road to remove it, or the middle of a roundabout to turn it back into a junction. |
+| Lanes | 6 | Click a road (the stretch between two junctions) to step it through: 1 lane + turn lanes, 2 lanes, 2 lanes + turn lanes, 3 lanes + turn lanes, back to 1 lane. Wider roads clear the buildings in the way. Where wide roads cross, traffic lights go up by themselves (remove them with Lights if you like). |
+| Remove | 7 | Click a road to remove it, or the middle of a roundabout to turn it back into a junction. |
 | Traffic view | T | Colours every lane green (moving) to red (jammed). |
 
 Any road you build through buildings or trees clears them.
@@ -57,6 +59,7 @@ The game saves in your browser every 10 seconds and when you leave. Menu → Gra
 - `node tests/sim.mjs [districts] [hours]` runs the traffic with no browser and reports trips, stuck cars and why they're stuck. `MODE=sig` puts lights on every junction, `MODE=ring` makes every junction a roundabout.
 - `node tests/grow.mjs [days]` lets the city grow with no help from the player and prints the gridlock meter over time.
 - `node tests/build.mjs [tries]` builds hundreds of random roads, curves and roundabouts and checks no road ever crosses another without a junction.
+- `node tests/lanes.mjs [hours]` checks wide roads: the arrows at a crossroads, left turns using the turn lane, and the same city run with plain streets and then with every avenue widened.
 - `node tests/play.cjs [folder]` opens the game in a hidden browser, checks the tools work and saves screenshots.
 
 ## History
@@ -84,3 +87,17 @@ The owner's report: roads often refused to build ("can't build there") or came o
 - **Roundabouts:** work on junctions, bends, road ends and any stretch of road; they shrink to fit (down to a mini roundabout) and roads leaving at nearly the same angle share an entrance (no more "roads too close"). On the normal city grid every junction (33 of 33) takes one.
 - **Night:** a soft moonlit blue instead of black, gentler window lights, and the clock runs three times faster from 21:30 to 5:00. Menu → Night off keeps it daytime.
 - Tests: sim, grow, build (0 bad crossings) and the browser checks all pass; phone gestures (drag to draw, tap to continue, two-finger pan, tap a road for a roundabout) were checked with simulated touches.
+
+### Round 4: wide roads and turn lanes
+
+(The request mentioned a video; it didn't come through to me, so this is the usual kind: lanes each way, lane lines, a middle turn lane and arrows painted in each lane. Say what looks different from the video and it can be changed.)
+
+- **New Lanes tool (key 6, Remove is now 7).** Tap a road to step it through 1 lane + turn lanes, 2 lanes, 2 lanes + turn lanes, 3 lanes + turn lanes, then back to 1. It changes the stretch between two junctions (bends included). The hover shows how wide it will be and what it becomes.
+- **How it looks:** white dashed lines between lanes, double yellow down the middle of wide roads, and with turn lanes a painted middle strip: hatched where nobody turns, opening into a left-turn lane before each junction where a left turn is possible. Each lane has arrows near the junction showing where it may go. Traffic lights stand at the kerb of wide roads.
+- **How drivers use it:** they plan their lane as part of their route, move over when there's a safe gap, slow down and wait near the end if there isn't one, and the car behind lets them in. They drift across smoothly instead of jumping. Busier lanes cost more, so straight traffic spreads over both lanes. Left-turners wait in the turn lane instead of holding up everyone behind them. Where two lanes squeeze into one, cars take turns.
+- **Lights where wide roads cross:** a big junction with no lights only lets one direction through at a time, and the tests showed wide crossings without lights jamming worse than narrow ones. So the Lanes tool puts lights up where wide roads cross (3 or more wide roads at a junction). With lights, wide avenues carried 9% to 22% more trips than plain streets in every test city, with fewer drivers giving up and shorter trips.
+- **Junction fixes that came up on the way:** a car that was waved into a junction but then found the road beyond full now lets go after 2 seconds, so it doesn't block everyone else; a car changing lanes keeps the start of a road clear for cars leaving the junction; a left-turner waiting more than 12 seconds in a turn lane gets let through by oncoming traffic.
+- **Two old building bugs fixed:** a road crossing another exactly on one of its measuring points was wrongly refused as "too close"; and when a new road cut through two roads lying very close together, the two old roads could end up crossing each other without a junction (the safety check now covers every piece a new road creates, so this is refused instead).
+- **Saves:** old saves load as before (every road 1 lane); the lane setup of each road is saved.
+- **Tests:** sim (plain streets: same numbers as before on the same random seeds), sim with lights everywhere and roundabouts everywhere, grow (left alone, the city still locks up on day 3, a little later than before and with fewer drivers giving up), build (0 crossings without a junction, now with random lane changes mixed in; also 0 in a 1000-road run), the new lanes test and the browser checks all pass. Screens checked on a computer and a phone-sized screen (the dock now has 8 tiles and fits).
+

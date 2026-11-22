@@ -41,7 +41,22 @@ const TYPES = { js: 'text/javascript', mjs: 'text/javascript', jpg: 'image/jpeg'
   const e0 = (await st()).edges;
   await p.evaluate(() => { FT.setTool('curve'); FT.click(-160, -60); FT.click(40, 60); FT.hover(-60, -20); FT.click(-60, -20); });
   check('curved road splits crossings', (await st()).edges > e0 + 2, `${e0} -> ${(await st()).edges}`);
+  // lanes: widen two crossing avenues near the middle to 2 lanes + turn lanes (3 taps each)
+  const av = await p.evaluate(() => {
+    const n = [...FT.net.nodes.values()].find(n => n.edges.size === 4 && !n.ring && !n.sig && [...n.edges].every(id => FT.net.edges.get(id).kind === 'avenue'))
+      || [...FT.net.nodes.values()].find(n => n.edges.size === 4 && !n.ring && !n.sig);
+    if (!n) return null;
+    const es = [...n.edges].map(id => FT.net.edges.get(id));
+    FT.setTool('lanes');
+    for (const e of es) for (let k = 0; k < 5 && !(e.nl === 2 && e.tl === 1); k++) { const q = FT.along(e.pts, e.cum, e.len / 2); FT.hover(q[0], q[1]); FT.click(q[0], q[1]); }
+    return [n.x, n.z, n.id, es.map(e => [e.nl, e.tl])];
+  });
+  check('lanes tool widens roads', av && av[3].every(([nl, tl]) => nl === 2 && tl === 1), JSON.stringify(av));
+  check('lights added where wide roads cross', await p.evaluate(id => !!FT.net.nodes.get(id).sig, av[2]));
   await p.evaluate(() => FT.step(90));
+  check('cars use the extra lanes', await p.evaluate(() => FT.net.cars.some(c => c.lane.li > 0 || c.lane.pk)));
+  await shot('lanes', { x: av[0] + 10, z: av[1] + 25, dist: 95, yaw: .5, pitch: .78 }, 10);
+  await shot('lanes-top', { x: av[0], z: av[1], dist: 140, yaw: 0, pitch: 1.35 }, 10);
   const s2 = await st(); check('traffic still flows after edits', s2.arrived > s1.arrived, JSON.stringify(s2));
   await shot('roundabout', { x: j[0], z: j[1], dist: 110, yaw: .3, pitch: 1.0 }, 10);
   await p.evaluate(() => FT.toggleView());

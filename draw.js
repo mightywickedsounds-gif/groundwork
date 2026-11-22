@@ -1,10 +1,10 @@
 // Everything you see: roads, junctions, markings, buildings, trees, cars, people, signals.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { ROAD_W, ONEWAY_W, WALK_W, LANE_W, RING_R, along } from './net.js';
+import { ROAD_W, ONEWAY_W, WALK_W, LANE_W, RING_R, along, halfW, laneOff } from './net.js';
 
 const Y_ROAD = .03, Y_WALK = .16, Y_MARK = .045;
-export const hwOf = e => (e.oneway || e.ring ? ONEWAY_W : ROAD_W) / 2;
+export const hwOf = halfW;
 
 // ---------- geometry builder ----------
 class Geo {
@@ -99,7 +99,21 @@ export function buildRoads(net, M, opt = {}) {
   for (const n of nodes.values()) if (n.ring && !ringCenters.has(n.ring)) ringCenters.set(n.ring, net.ringCenter(n.ring));
   const lamps = [];
   // one stretch of road along centreline c: asphalt, sidewalks, curbs, markings, lights
-  function piece(c, e, hw, inner, lights) {
+  // a painted line at offset o (right of a->b) between arc lengths s0..s1 of polyline m
+  function seg(G, m, cm, o, s0, s1, w = .13, dashed = false) {
+    s0 = Math.max(0, s0); s1 = Math.min(cm.at(-1), s1); if (s1 - s0 < .4) return;
+    const p = cutPts(m, cm, s0, s1), q = off(p, normals(p), o);
+    if (dashed) dashes(G, q, w, 3, 6, Y_MARK, 1); else line(G, q, w, Y_MARK);
+  }
+  // diagonal hatching across the strip between offsets o0..o1 (a painted median)
+  function hatch(G, m, cm, o0, o1, s0, s1) {
+    for (let s = s0 + 1; s + 2.2 < s1; s += 4) {
+      const a = along(m, cm, s), b = along(m, cm, s + 2.2);
+      const p = [a[0] - a[3] * (o0 + .25), a[1] + a[2] * (o0 + .25)], q = [b[0] - b[3] * (o1 - .25), b[1] + b[2] * (o1 - .25)];
+      line(G, [p, q], .3, Y_MARK);
+    }
+  }
+  function piece(c, e, hw, inner, lights, pk = [0, 0]) {
     if (c.length < 2) return;
     const nr = normals(c);
     A.strip(off(c, nr, -hw), off(c, nr, hw), Y_ROAD);
@@ -111,13 +125,29 @@ export function buildRoads(net, M, opt = {}) {
     }
     const cl = cumOf(c), m = cutPts(c, cl, Math.min(.8, cl.at(-1) / 3), cl.at(-1) - Math.min(.8, cl.at(-1) / 3));
     if (m.length >= 2 && cl.at(-1) > 1.5) {
-      const mn = normals(m);
+      const mn = normals(m), cm = cumOf(m), Lm = cm.at(-1), nl = e.ring ? 1 : (e.nl || 1), tl = !e.ring && e.tl;
+      const Pa = Math.max(0, pk[0] - .8), Pb = Math.max(0, pk[1] - .8);   // turn lane lengths at each end
       if (!e.oneway && !e.ring) {
-        if (e.kind === 'avenue') { line(MY, off(m, mn, -.16), .12, Y_MARK); line(MY, off(m, mn, .16), .12, Y_MARK); }
+        if (tl) {   // a painted middle: turn lanes at the ends, hatching between; yellow toward oncoming traffic, white beside your own lanes
+          const H = LANE_W / 2;
+          seg(MY, m, cm, H, 0, Lm - Pb); seg(MK, m, cm, H, Lm - Pb, Lm);
+          seg(MY, m, cm, -H, Pa, Lm); seg(MK, m, cm, -H, 0, Pa);
+          hatch(MY, m, cm, -H, H, Pa + 1, Lm - Pb - 1);
+        } else if (e.kind === 'avenue' || nl > 1) { line(MY, off(m, mn, -.16), .12, Y_MARK); line(MY, off(m, mn, .16), .12, Y_MARK); }
         else dashes(MK, m, .14, 3, 5, Y_MARK, 2);
+        for (let i = 0; i + 1 < nl; i++) { const o = (laneOff(e, i) + laneOff(e, i + 1)) / 2; seg(MK, m, cm, o, 0, Lm, .13, true); seg(MK, m, cm, -o, 0, Lm, .13, true); }
+      } else if (!e.ring) {
+        const sg = e.oneway;   // lane offsets face the way of travel
+        for (let i = 0; i + 1 < nl; i++) seg(MK, m, cm, sg * (laneOff(e, i) + laneOff(e, i + 1)) / 2, 0, Lm, .13, true);
+        if (tl) {
+          const o = sg * (laneOff(e, nl - 1) + laneOff(e, nl)) / 2, P = sg > 0 ? Pb : Pa, e0 = sg > 0 ? Lm - P : 0, e1 = sg > 0 ? Lm : P;
+          if (P) seg(MK, m, cm, o, e0, e1);
+          const edge = -sg * (hw - .35), h0 = sg > 0 ? 0 : P, h1 = sg > 0 ? Lm - P : Lm;
+          seg(MY, m, cm, o, h0, h1); hatch(MY, m, cm, Math.min(o, edge), Math.max(o, edge), h0 + 1, h1 - 1);
+        }
       }
       line(MK, off(m, mn, -(hw - .35)), .13, Y_MARK); line(MK, off(m, mn, hw - .35), .13, Y_MARK);
-      if (e.oneway && !e.ring) { const cm = cumOf(m), L = cm.at(-1), dir = e.oneway; for (let s = 12; s < L - 8; s += 26) { const p = along(m, cm, s); arrow(MK, p[0], p[1], p[2] * dir, p[3] * dir); } }
+      if (e.oneway && !e.ring) { const dir = e.oneway; for (let s = 12; s < Lm - 22; s += 26) { const p = along(m, cm, s); for (let i = 0; i < nl; i++) { const o = dir * laneOff(e, i); arrow(MK, p[0] - p[3] * o, p[1] + p[2] * o, p[2] * dir, p[3] * dir); } } }
     }
     if (lights) { const L = cl.at(-1); for (let s = 10, k = 0; s < L - 6; s += 34, k++) { const p = along(c, cl, s), sg = k % 2 ? 1 : -1; lamps.push([p[0] - p[3] * sg * (hw + WALK_W - .7), p[1] + p[2] * sg * (hw + WALK_W - .7), Math.atan2(p[3] * sg, -p[2] * sg)]); } }
   }
@@ -128,18 +158,18 @@ export function buildRoads(net, M, opt = {}) {
     const c = cutPts(e.pts, e.cum, tA, e.len - tB), nr = normals(c);
     let inner = 0;   // the island side of a roundabout has no sidewalk
     if (e.ring) { const C = ringCenters.get(e.ring); const m = c[c.length >> 1], q = nr[c.length >> 1]; inner = ((C[0] - m[0]) * q[0] + (C[1] - m[1]) * q[1]) > 0 ? 1 : -1; }
-    piece(c, e, hw, inner, !e.ring && opt.lights !== false);
+    piece(c, e, hw, inner, !e.ring && opt.lights !== false, e.pk);
   }
   // a bend where two roads join end to end: one smooth curved stretch, not a junction
   const elbow = new Set();
   for (const n of nodes.values()) {
     if (n.ring || n.edges.size !== 2) continue;
     const [e1, e2] = [...n.edges].map(id => net.edges.get(id));
-    if (hwOf(e1) !== hwOf(e2) || !!e1.oneway !== !!e2.oneway) continue;
+    if (hwOf(e1) !== hwOf(e2) || !!e1.oneway !== !!e2.oneway || (e1.nl || 1) !== (e2.nl || 1) || !!e1.tl !== !!e2.tl) continue;
     const end = e => { const fromA = e.a === n.id, p = along(e.pts, e.cum, fromA ? n.trim : e.len - n.trim); return [p[0], p[1]]; };
     const P1 = end(e1), P2 = end(e2);
     const into = (e1.oneway === 1 && e1.b === n.id) || (e1.oneway === -1 && e1.a === n.id);
-    piece(quad(P1, [n.x, n.z], P2, Math.max(4, Math.ceil(n.trim * 1.2))), { oneway: e1.oneway ? (into ? 1 : -1) : 0, kind: e1.kind }, hwOf(e1), 0, false);
+    piece(quad(P1, [n.x, n.z], P2, Math.max(4, Math.ceil(n.trim * 1.2))), { oneway: e1.oneway ? (into ? 1 : -1) : 0, kind: e1.kind, nl: e1.nl, tl: e1.tl }, hwOf(e1), 0, false);
     elbow.add(n.id);
   }
   // junction patches
@@ -184,9 +214,9 @@ export function buildRoads(net, M, opt = {}) {
       if (L.e.ring) continue;
       const entering = !(L.e.oneway && L.e.oneway === -L.into);   // traffic comes in on this leg
       const sgIn = -1;     // incoming lane is on the leg's left looking out = -r
-      const two = !L.e.oneway;
+      const two = !L.e.oneway, pkHere = L.e.tl && L.e.pk && L.e.pk[L.e.b === n.id ? 1 : 0];
       if (entering) {
-        const o0 = two ? 0 : -L.hw + .2, o1 = two ? sgIn * (L.hw - .25) : L.hw - .2;
+        const o0 = two ? (L.e.tl ? (pkHere ? LANE_W / 2 : -LANE_W / 2) : 0) : -L.hw + .2, o1 = two ? sgIn * (L.hw - .25) : L.hw - .2;
         const p0 = [L.P[0] + L.r[0] * o0, L.P[1] + L.r[1] * o0], p1 = [L.P[0] + L.r[0] * o1, L.P[1] + L.r[1] * o1];
         if (n.ring) { // give-way line: short dashes
           const d = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
@@ -200,6 +230,14 @@ export function buildRoads(net, M, opt = {}) {
           MK.flat(q, q2, [q2[0] + L.d[0] * 2.6, q2[1] + L.d[1] * 2.6], [q[0] + L.d[0] * 2.6, q[1] + L.d[1] * 2.6], Y_MARK);
         }
       }
+    }
+  }
+  // arrows painted in each lane before a junction: which way that lane may go
+  for (const n of nodes.values()) {
+    if (n.ring || n.edges.size < 3 || !n.ins) continue;
+    for (const L of n.ins) {
+      const e = L.edge; if (e.ring || !(L.pk || (e.nl || 1) > 1 || e.tl) || L.len < 12 || !L.mv) continue;
+      for (const back of L.pk || L.len < 40 ? [4.6] : [4.6, 26]) { const p = along(L.pts, L.cum, L.len - back); turnArrow(MK, p[0], p[1], p[2], p[3], L.mv); }
     }
   }
   // roundabout islands
@@ -220,6 +258,22 @@ export function buildRoads(net, M, opt = {}) {
   return g;
 }
 function stop(G, p0, p1, d) { G.flat([p0[0] + d[0] * .05, p0[1] + d[1] * .05], [p1[0] + d[0] * .05, p1[1] + d[1] * .05], [p1[0] + d[0] * .55, p1[1] + d[1] * .55], [p0[0] + d[0] * .55, p0[1] + d[1] * .55], Y_MARK); }
+// lane arrow: mv bits 1 straight, 2 right, 4 left. Tip points along (dx, dz); right is (-dz, dx)
+function turnArrow(G, x, z, dx, dz, mv) {
+  const P = (f, s) => [x + dx * f - dz * s, z + dz * f + dx * s];
+  const tri = (a, b, c) => { const i = G.v(a[0], Y_MARK, a[1]), j = G.v(b[0], Y_MARK, b[1]), k = G.v(c[0], Y_MARK, c[1]); G.up(i, j, k); };
+  const top = mv & 1 ? .4 : -.9;
+  G.flat(P(-3, -.13), P(-3, .13), P(top, .13), P(top, -.13), Y_MARK);
+  if (mv & 1) tri(P(.4, -.5), P(.4, .5), P(1.6, 0));
+  for (const [bit, sd] of [[2, 1], [4, -1]]) {
+    if (!(mv & bit)) continue;
+    const a = P(-1.15, 0), b = P(-.35, sd * .95);         // a short bend out to the side, then the head
+    line(G, [a, b], .26, Y_MARK);
+    const h = [b[0] - a[0], b[1] - a[1]], L = Math.hypot(h[0], h[1]); h[0] /= L; h[1] /= L;
+    const nx = -h[1], nz = h[0];
+    tri([b[0] + nx * .45, b[1] + nz * .45], [b[0] - nx * .45, b[1] - nz * .45], [b[0] + h[0] * 1.05, b[1] + h[1] * 1.05]);
+  }
+}
 function arrow(G, x, z, dx, dz) {
   const r = [-dz, dx], P = (f, s) => [x + dx * f + r[0] * s, z + dz * f + r[1] * s];
   G.flat(P(-2.6, -.13), P(-2.6, .13), P(.4, .13), P(.4, -.13), Y_MARK);

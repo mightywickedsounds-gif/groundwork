@@ -11,6 +11,24 @@ export const RING_R = 15;           // roundabout centre-line radius
 const LIMIT = 13.9;                 // 50 km/h
 const ACC = 1.6, DEC = 2.6, S0 = 2.2, HEAD = 1.15;  // IDM car following
 const GIVE_UP = 120;                // seconds stuck before a driver gives up
+export const MAX_LANES = 3;         // lanes each way
+// what the Lanes tool steps through: [lanes each way, turn lanes]
+export const LANE_STEPS = [[1, 0], [1, 1], [2, 0], [2, 1], [3, 1]];
+
+// half the width of a road's carriageway (kerb to kerb / 2)
+export function halfW(e) {
+  const nl = e.ring ? 1 : (e.nl || 1), tl = e.ring ? 0 : (e.tl || 0);
+  if (e.oneway || e.ring) return nl === 1 && !tl ? ONEWAY_W / 2 : (nl * LANE_W + (tl ? LANE_W : 0) + .6) / 2;
+  return nl * LANE_W + (tl ? LANE_W / 2 : 0);
+}
+// how far right of the centreline lane i sits, facing the way it drives (0 = kerb lane, nl = turn lane)
+export function laneOff(e, i) {
+  if (e.ring) return 0;
+  const nl = e.nl || 1, tl = e.tl || 0;
+  if (e.oneway) return nl === 1 && !tl ? 0 : halfW(e) - .3 - (i + .5) * LANE_W;
+  if (i >= nl) return 0;              // the turn lane sits in the middle
+  return (tl ? LANE_W / 2 : 0) + (nl - 1 - i + .5) * LANE_W;
+}
 
 export function rng(seed) {
   let s = seed >>> 0 || 1;
@@ -108,7 +126,7 @@ export class Net {
     for (const id of this.nodes.get(a).edges) { const f = this.edges.get(id); if ((f.a === a && f.b === b) || (f.a === b && f.b === a)) return null; }
     const A = this.nodes.get(a), B = this.nodes.get(b);
     if (cx == null) { cx = (A.x + B.x) / 2; cz = (A.z + B.z) / 2; }
-    const e = { id: this.eid++, a, b, cx, cz, oneway: o.oneway || 0, ring: o.ring || 0, kind: o.kind || 'street', lanes: 1 };
+    const e = { id: this.eid++, a, b, cx, cz, oneway: o.oneway || 0, ring: o.ring || 0, kind: o.kind || 'street', nl: o.nl || 1, tl: o.tl || 0, lanes: [] };
     this.edgeGeom(e); if (e.len < 4) return null;
     this.edges.set(e.id, e); A.edges.add(e.id); B.edges.add(e.id);
     return e;
@@ -122,7 +140,7 @@ export class Net {
   splitEdge(e, t, at) {
     const A = this.nodes.get(e.a), B = this.nodes.get(e.b), a = [A.x, A.z], c = [e.cx, e.cz], b = [B.x, B.z];
     const q0 = lerp2(a, c, t), q1 = lerp2(c, b, t), m = at || lerp2(q0, q1, t);
-    const n = this.addNode(m[0], m[1]); const o = { oneway: e.oneway, ring: e.ring, kind: e.kind };
+    const n = this.addNode(m[0], m[1]); const o = { oneway: e.oneway, ring: e.ring, kind: e.kind, nl: e.nl, tl: e.tl };
     this.delEdge(e.id);
     if (!this.nodes.has(A.id)) this.nodes.set(A.id, A);
     if (!this.nodes.has(B.id)) this.nodes.set(B.id, B);
@@ -201,7 +219,8 @@ export class Net {
         const x = segX(pts[i - 1], pts[i], e.pts[j - 1], e.pts[j]); if (!x) continue;
         out.push({ t: (i - 1 + x[0]) / M, e, s: e.cum[j - 1] + (e.cum[j] - e.cum[j - 1]) * x[1], pt: lerp2(pts[i - 1], pts[i], x[0]) });
       }
-      return out.sort((p, q) => p.t - q.t);
+      out.sort((p, q) => p.t - q.t);
+      return out.filter((h, i) => !out.slice(0, i).some(g => g.e === h.e && dist(g.pt, h.pt) < .5));   // a crossing right on a sample point counts once
     };
     let hits = hitsOf(pts);
     const endFix = (q, near) => { if (q.n || q.e) return q; const h = near(); if (!h) return q; return h.e.ring ? q : (h.s < 9 ? { n: this.nodes.get(h.e.a) } : h.s > h.e.len - 9 ? { n: this.nodes.get(h.e.b) } : { e: h.e, s: h.s, p: h.pt }); };
@@ -241,7 +260,7 @@ export class Net {
   addRoad(p0, p1, c = null, o = {}, r = SNAP) {
     const plan = this.planRoad(p0, p1, c, r), made = [];
     if (plan.reason) { made.reason = plan.reason; return made; }
-    const snap = this.serialize();
+    const snap = this.serialize(), eid0 = this.eid;
     const A = this.realize(plan.qa), B = this.realize(plan.qb);
     if (A === B) { made.reason = 'Too short'; return made; }
     const a = [A.x, A.z], b = [B.x, B.z], cc = c ? plan.cc : lerp2(a, b, .5);
@@ -268,7 +287,8 @@ export class Net {
     }
     for (const n of [A, B]) if (!n.edges.size) this.nodes.delete(n.id);
     if (!made.length) made.reason = 'There\'s already a road there';
-    else if (this.crossesOthers(made)) { this.restore(snap); const out = []; out.reason = 'Too close to another road'; return out; }
+    // the new road and every road it split must not cross anything without a junction
+    else if (this.crossesOthers([...this.edges.values()].filter(e => e.id >= eid0))) { this.restore(snap); const out = []; out.reason = 'Too close to another road'; return out; }
     made.end = [B.x, B.z];
     this.ver++;
     return made;
@@ -281,6 +301,35 @@ export class Net {
   cycleOneWay(eid) {
     const e = this.edges.get(eid); if (!e || e.ring) return null;
     e.oneway = e.oneway === 0 ? 1 : e.oneway === 1 ? -1 : 0; this.ver++; return e.oneway;
+  }
+  // this road plus the pieces joined end to end with it (through bends, not through junctions)
+  roadChain(e) {
+    const out = [e], seen = new Set([e.id]);
+    for (const start of [e.a, e.b]) {
+      let nid = start, cur = e;
+      for (;;) {
+        const n = this.nodes.get(nid); if (!n || n.ring || n.edges.size !== 2) break;
+        const id = [...n.edges].find(i => i !== cur.id); if (seen.has(id)) break;
+        const f = this.edges.get(id); if (!f || f.ring) break;
+        seen.add(id); out.push(f); cur = f; nid = f.a === nid ? f.b : f.a;
+      }
+    }
+    return out;
+  }
+  // Lanes tool: 1 lane -> 1 + turn lanes -> 2 -> 2 + turn lanes -> 3 + turn lanes -> 1
+  nextLanes(e) { const i = LANE_STEPS.findIndex(s => s[0] === (e.nl || 1) && s[1] === (e.tl || 0)); return LANE_STEPS[(i + 1) % LANE_STEPS.length]; }
+  cycleLanes(eid) {
+    const e = this.edges.get(eid); if (!e || e.ring) return null;
+    const [nl, tl] = this.nextLanes(e), chain = this.roadChain(e);
+    for (const f of chain) { f.nl = nl; f.tl = tl; }
+    // where wide roads cross (or one ends at another) at a plain junction, put up traffic lights (one at a time doesn't work there)
+    let lights = 0;
+    if (nl >= 2) for (const f of chain) for (const nid of [f.a, f.b]) {
+      const n = this.nodes.get(nid); if (!n || n.ring || n.sig || n.edges.size < 3) continue;
+      let wide = 0; for (const id of n.edges) if ((this.edges.get(id).nl || 1) >= 2) wide++;
+      if (wide >= 3) { n.sig = { phase: 0, t: 0, st: 'g' }; lights++; }
+    }
+    this.ver++; return { nl, tl, lights };
   }
   // how big a roundabout fits at node n (0 if none)
   ringFit(n, Rwant = RING_R) {
@@ -318,7 +367,7 @@ export class Net {
         if (!this.nodes.has(n.id)) this.nodes.set(n.id, n);
         if (!node) { node = m; continue; }
         for (const id of [...m.edges]) {   // hook this road onto the shared entrance
-          const f = this.edges.get(id), o = { oneway: f.oneway, kind: f.kind };
+          const f = this.edges.get(id), o = { oneway: f.oneway, kind: f.kind, nl: f.nl, tl: f.tl };
           if (f.a === m.id) this.addEdge(node.id, f.b, f.cx, f.cz, o); else this.addEdge(f.a, node.id, f.cx, f.cz, o);
           this.delEdge(id);
         }
@@ -373,7 +422,7 @@ export class Net {
       for (const id of [...m.edges]) {
         const f = this.edges.get(id), far = f.a === m.id ? f.b : f.a, toward = f.a === m.id;
         const F = this.nodes.get(far); this.delEdge(id); if (!this.nodes.has(far)) this.nodes.set(far, F);
-        const o = { oneway: f.oneway, kind: f.kind };
+        const o = { oneway: f.oneway, kind: f.kind, nl: f.nl, tl: f.tl };
         if (toward) this.addEdge(center.id, far, (center.x + F.x) / 2, (center.z + F.z) / 2, o);
         else this.addEdge(far, center.id, (center.x + F.x) / 2, (center.z + F.z) / 2, o);
       }
@@ -384,14 +433,14 @@ export class Net {
   }
   serialize() {
     return { nodes: [...this.nodes.values()].map(n => [n.id, +n.x.toFixed(2), +n.z.toFixed(2), n.sig ? 1 : 0, n.ring, n.rc || 0]),
-      edges: [...this.edges.values()].map(e => [e.id, e.a, e.b, +e.cx.toFixed(2), +e.cz.toFixed(2), e.oneway, e.ring, e.kind]), nid: this.nid, eid: this.eid, rid: this.rid };
+      edges: [...this.edges.values()].map(e => [e.id, e.a, e.b, +e.cx.toFixed(2), +e.cz.toFixed(2), e.oneway, e.ring, e.kind, e.nl || 1, e.tl || 0]), nid: this.nid, eid: this.eid, rid: this.rid };
   }
   load(d) {
     this.nodes.clear(); this.edges.clear(); this.cars = [];
     for (const [id, x, z, sig, ring, rc] of d.nodes) this.nodes.set(id, { id, x, z, sig: sig ? { phase: 0, t: 0, st: 'g' } : null, ring, rc: rc || null, edges: new Set() });
-    for (const [id, a, b, cx, cz, oneway, ring, kind] of d.edges) {
+    for (const [id, a, b, cx, cz, oneway, ring, kind, nl, tl] of d.edges) {
       if (!this.nodes.has(a) || !this.nodes.has(b)) continue;
-      const e = { id, a, b, cx, cz, oneway, ring, kind, lanes: 1 }; this.edgeGeom(e); this.edges.set(id, e);
+      const e = { id, a, b, cx, cz, oneway, ring, kind, nl: nl || 1, tl: tl || 0, lanes: [] }; this.edgeGeom(e); this.edges.set(id, e);
       this.nodes.get(a).edges.add(id); this.nodes.get(b).edges.add(id);
     }
     for (const n of [...this.nodes.values()]) if (!n.edges.size) this.nodes.delete(n.id);
@@ -400,58 +449,134 @@ export class Net {
 
   // ---------------- lanes ----------------
   trimOf(n) {
-    if (n.ring) return 5.5;
+    let hw = 0, hmin = 1e9; for (const id of n.edges) { const w = halfW(this.edges.get(id)); hw = Math.max(hw, w); hmin = Math.min(hmin, w); }
+    const H = Math.max(ROAD_W / 2, hw), xw = H - ROAD_W / 2;   // wider roads need bigger junctions
+    if (n.ring) return 5.5 + xw * .6;
     const deg = n.edges.size; if (deg <= 1) return 0;
     const angs = [];
     for (const id of n.edges) { const e = this.edges.get(id); const p = e.a === n.id ? e.pts[1] : e.pts[e.pts.length - 2]; angs.push(Math.atan2(p[1] - n.z, p[0] - n.x)); }
     angs.sort((a, b) => a - b); let mn = 7;
     for (let i = 0; i < angs.length; i++) { const d = (i + 1 < angs.length ? angs[i + 1] : angs[0] + Math.PI * 2) - angs[i]; mn = Math.min(mn, d); }
-    if (deg === 2) return mn > 2.6 ? 1 : Math.min(9, 4 / Math.tan(Math.min(mn, 3.1) / 2) + 1.5);
-    return Math.max(7.5, Math.min(22, 5.2 / Math.tan(Math.min(mn, 3.1) / 2) + 3));
+    if (deg === 2) {
+      const bend = mn > 2.6 ? 1 : Math.min(9 + xw, (H + .5) / Math.tan(Math.min(mn, 3.1) / 2) + 1.5);
+      const dw = hw - hmin; return dw > 1 ? Math.max(bend, 5 + dw * 1.6) : bend;   // room for the road to widen or narrow
+    }
+    return Math.max(7.5 + xw, Math.min(22 + xw * 2, (H + 1.7) / Math.tan(Math.min(mn, 3.1) / 2) + 3));
+  }
+  // unit heading of travel on edge e at node nid: arriving (into) or leaving
+  endHeading(e, nid, into) {
+    const P = e.pts, M = P.length - 1;
+    const [p, q] = into ? (e.b === nid ? [P[M - 1], P[M]] : [P[1], P[0]]) : (e.a === nid ? [P[0], P[1]] : [P[M], P[M - 1]]);
+    const dx = q[0] - p[0], dz = q[1] - p[1], L = Math.hypot(dx, dz) || 1; return [dx / L, dz / L];
+  }
+  // arc position s on lane A -> the same spot on a lane B beside it
+  mapS(A, s, B) { const F = A.Fa + (s / A.len) * (A.Fb - A.Fa); return (F - B.Fa) / ((B.Fb - B.Fa) || 1e-6) * B.len; }
+  // one connector lane through node n from lane L to lane O
+  connect(n, L, O, old) {
+    const key = L.key + '>' + O.key; if (this.lanes.has(key)) return;
+    const p0 = L.pts[L.pts.length - 1], p1 = O.pts[0];
+    const h0 = along(L.pts, L.cum, L.len); const h1 = along(O.pts, O.cum, 0);
+    const cr = h0[2] * h1[3] - h0[3] * h1[2], dt = h0[2] * h1[2] + h0[3] * h1[3];
+    let ctl = lerp2(p0, p1, .5);
+    if (Math.abs(cr) > .08) {
+      const x = segLine(p0, [h0[2], h0[3]], p1, [h1[2], h1[3]]);
+      if (x && x[0] > 0 && x[0] < 40 && x[1] < 0) ctl = [p0[0] + h0[2] * x[0], p0[1] + h0[3] * x[0]];
+    } else if (dt < 0) {       // U-turn at a dead end: swing out wide
+      ctl = [ (p0[0] + p1[0]) / 2 + h0[2] * 7, (p0[1] + p1[1]) / 2 + h0[3] * 7 ];
+    }
+    const M = Math.max(3, Math.ceil((dist(p0, ctl) + dist(ctl, p1)) / 1.5)); const pts = []; for (let i = 0; i <= M; i++) pts.push(qpt(p0, ctl, p1, i / M));
+    const cum = cumOf(pts), len = cum[cum.length - 1];
+    const ang = Math.atan2(cr, dt), turn = Math.abs(ang) < .5 ? 0 : ang > 0 ? 1 : 2;  // 0 straight, 1 right, 2 left
+    const chord = dist(p0, p1), R = Math.abs(ang) > .1 ? chord / (2 * Math.sin(Math.abs(ang) / 2)) : 1e3;
+    const c = { key, conn: true, in: L, out: O, node: n, pts, cum, len: Math.max(.5, len), cars: [], turn, ang,
+      vmax: Math.min(LIMIT, Math.max(3.2, Math.sqrt(2.6 * R))), conflicts: [], busy: 0, next: [O], spd: LIMIT, prio: L.prio };
+    const o = old.get(c.key); if (o) c.spd = o.spd;
+    this.lanes.set(c.key, c); n.conns.push(c); L.next.push(c);
   }
   // rebuild every lane + connector; cars keep their place where their lane survives
   rebuild() {
     const old = this.lanes; this.lanes = new Map(); this.links = [];
     const trims = new Map(); for (const n of this.nodes.values()) { n.trim = this.trimOf(n); trims.set(n.id, n.trim); n.ins = []; n.outs = []; n.conns = []; n.deg = n.edges.size; }
+    // where turn lanes open: a road with turn lanes, at a junction where its drivers can turn left
+    for (const e of this.edges.values()) {
+      e.pk = [0, 0];
+      if (!e.tl || e.ring) continue;
+      for (const end of [0, 1]) {
+        const n = this.nodes.get(end ? e.b : e.a), dirIn = end ? 1 : -1;
+        if (n.ring || n.edges.size < 3 || (e.oneway && e.oneway !== dirIn)) continue;
+        const hin = this.endHeading(e, n.id, true); let left = false;
+        for (const id of n.edges) {
+          if (id === e.id) continue;
+          const f = this.edges.get(id), dOut = f.a === n.id ? 1 : -1; if (f.oneway && f.oneway !== dOut) continue;
+          const ho = this.endHeading(f, n.id, false);
+          if (Math.atan2(hin[0] * ho[1] - hin[1] * ho[0], hin[0] * ho[0] + hin[1] * ho[1]) < -.5) left = true;
+        }
+        if (!left) continue;
+        const room = e.len - this.nodes.get(e.a).trim - this.nodes.get(e.b).trim, P = Math.min(36, room * .45);
+        if (P >= 10) e.pk[end] = P;
+      }
+    }
     for (const e of this.edges.values()) {
       e.lanes = [];
+      const nl = e.ring ? 1 : Math.max(1, Math.min(MAX_LANES, e.nl || 1));
       for (const dir of [1, -1]) {
         if (e.oneway && e.oneway !== dir) continue;
         const from = this.nodes.get(dir > 0 ? e.a : e.b), to = this.nodes.get(dir > 0 ? e.b : e.a);
         const base = dir > 0 ? e.pts : [...e.pts].reverse();
-        const off = offset(base, e.oneway ? 0 : LANE_W / 2), cum = cumOf(off), L = cum[cum.length - 1];
-        let t0 = from.trim, t1 = to.trim; if (t0 + t1 > L - 3) { const k = (L - 3) / (t0 + t1); t0 *= k; t1 *= k; }
-        const pts = cut(off, cum, t0, L - t1);
-        const lane = { key: e.id + (dir > 0 ? 'f' : 'b'), edge: e, dir, from, to, pts, cum: cumOf(pts), conn: false, cars: [], vmax: e.ring ? 8.5 : LIMIT, prio: !!e.ring, t0, k: 1, next: [], spd: LIMIT, inc: 0 };
-        lane.len = lane.cum[lane.cum.length - 1];
-        lane.k = lane.len / Math.max(1, L - t0 - t1);
-        const o = old.get(lane.key); if (o) lane.spd = o.spd;
-        this.lanes.set(lane.key, lane); this.links.push(lane); e.lanes.push(lane);
-        from.outs.push(lane); to.ins.push(lane);
+        const P = e.pk[dir > 0 ? 1 : 0], grp = [];
+        for (let i = 0; i <= nl; i++) {
+          const pk = i === nl; if (pk && !P) break;
+          const lo = laneOff(e, i), off = offset(base, lo), cum = cumOf(off), L = cum[cum.length - 1];
+          let t0 = from.trim, t1 = to.trim; if (t0 + t1 > L - 3) { const k = (L - 3) / (t0 + t1); t0 *= k; t1 *= k; }
+          const s0 = pk ? Math.max(t0, L - t1 - P) : t0;
+          const pts = cut(off, cum, s0, L - t1);
+          const key = e.id + (dir > 0 ? 'f' : 'b') + (pk ? 'p' : i ? i : '');
+          const lane = { key, edge: e, dir, from, to, pts, cum: cumOf(pts), conn: false, cars: [], vmax: e.ring ? 8.5 : LIMIT, prio: !!e.ring, t0, k: 1, next: [], spd: LIMIT, inc: 0,
+            li: i, pk, off: lo, Fa: s0 / L, Fb: (L - t1) / L, chg: [], mv: 0 };
+          lane.len = lane.cum[lane.cum.length - 1];
+          lane.k = lane.len / Math.max(1, L - t0 - t1);
+          const o = old.get(lane.key); if (o) lane.spd = o.spd;
+          this.lanes.set(lane.key, lane); this.links.push(lane); e.lanes.push(lane); grp.push(lane);
+          if (!pk) from.outs.push(lane);
+          to.ins.push(lane);
+        }
+        // a driver may move to the lane beside them; into the turn lane only from the lane next to it
+        for (const l of grp) l.chg = l.pk ? [] : grp.filter(o => o.pk ? l.li === nl - 1 : Math.abs(o.li - l.li) === 1);
       }
     }
-    // connectors through each node
+    // connectors through each node: which lane may go where (like the arrows painted on the road)
     for (const n of this.nodes.values()) {
-      for (const L of n.ins) for (const O of n.outs) {
-        if (O.edge === L.edge && n.deg > 1) continue;
-        const p0 = L.pts[L.pts.length - 1], p1 = O.pts[0];
-        const h0 = along(L.pts, L.cum, L.len); const h1 = along(O.pts, O.cum, 0);
-        const cr = h0[2] * h1[3] - h0[3] * h1[2], dt = h0[2] * h1[2] + h0[3] * h1[3];
-        let ctl = lerp2(p0, p1, .5);
-        if (Math.abs(cr) > .08) {
-          const x = segLine(p0, [h0[2], h0[3]], p1, [h1[2], h1[3]]);
-          if (x && x[0] > 0 && x[0] < 40 && x[1] < 0) ctl = [p0[0] + h0[2] * x[0], p0[1] + h0[3] * x[0]];
-        } else if (dt < 0) {       // U-turn at a dead end: swing out wide
-          ctl = [ (p0[0] + p1[0]) / 2 + h0[2] * 7, (p0[1] + p1[1]) / 2 + h0[3] * 7 ];
+      const apps = new Map(), exits = new Map(), grpOf = (m, l) => { const k = l.edge.id + ':' + l.dir; if (!m.has(k)) m.set(k, { edge: l.edge, main: [], pk: null }); return m.get(k); };
+      for (const L of n.ins) { const a = grpOf(apps, L); if (L.pk) a.pk = L; else a.main[L.li] = L; }
+      for (const O of n.outs) grpOf(exits, O).main[O.li] = O;
+      for (const ap of apps.values()) {
+        const L0 = ap.main[0], h0 = along(L0.pts, L0.cum, L0.len), mvs = [];
+        for (const ex of exits.values()) {
+          const uturn = ex.edge === ap.edge; if (uturn && n.deg > 1) continue;
+          const O0 = ex.main[0], h1 = along(O0.pts, O0.cum, 0);
+          let ang = Math.atan2(h0[2] * h1[3] - h0[3] * h1[2], h0[2] * h1[2] + h0[3] * h1[3]);
+          const u = uturn || Math.abs(ang) > 2.7; if (u) ang = -Math.PI;
+          const t = u ? 3 : Math.abs(ang) < .5 ? 0 : ang > 0 ? 1 : 2;     // straight, right, left, U-turn
+          mvs.push({ ex, ang, t, w: t === 0 ? 3 : 1 });
         }
-        const M = Math.max(3, Math.ceil((dist(p0, ctl) + dist(ctl, p1)) / 1.5)); const pts = []; for (let i = 0; i <= M; i++) pts.push(qpt(p0, ctl, p1, i / M));
-        const cum = cumOf(pts), len = cum[cum.length - 1];
-        const ang = Math.atan2(cr, dt), turn = Math.abs(ang) < .5 ? 0 : ang > 0 ? 1 : 2;  // 0 straight, 1 right, 2 left
-        const chord = dist(p0, p1), R = Math.abs(ang) > .1 ? chord / (2 * Math.sin(Math.abs(ang) / 2)) : 1e3;
-        const c = { key: L.key + '>' + O.key, conn: true, in: L, out: O, node: n, pts, cum, len: Math.max(.5, len), cars: [], turn, ang,
-          vmax: Math.min(LIMIT, Math.max(3.2, Math.sqrt(2.6 * R))), conflicts: [], busy: 0, next: [O], spd: LIMIT, prio: L.prio };
-        const o = old.get(c.key); if (o) c.spd = o.spd;
-        this.lanes.set(c.key, c); n.conns.push(c); L.next.push(c);
+        if (!mvs.length) continue;
+        mvs.sort((p, q) => q.ang - p.ang);        // rightmost turn first, like the lanes (kerb lane first)
+        const k = ap.main.length;
+        let main = mvs, pkM = [];
+        if (ap.pk) { pkM = mvs.filter(m => m.t >= 2); main = mvs.filter(m => m.t < 2); if (!main.length) main = mvs; }
+        // share the movements out over the lanes: kerb lane turns right, middle lane goes straight, inner lane turns left
+        const W = main.reduce((a, m) => a + m.w, 0); let c = 0;
+        for (const m of main) { m.S = []; for (let i = 0; i < k; i++) { const lo = Math.max(c, i * W / k), hi = Math.min(c + m.w, (i + 1) * W / k); if (hi - lo > 1e-6) m.S.push(ap.main[i]); } c += m.w; }
+        if (ap.pk) for (const m of pkM) { if (main !== mvs) m.S = []; m.S.push(ap.pk); }
+        for (const m of mvs) {
+          const S = m.S, s = S.length, O = m.ex.main, o = O.length, bit = [1, 2, 4, 8][m.t];
+          for (const L of S) L.mv |= bit;
+          for (let q = 0; q < s; q++) {
+            if (m.t >= 2) this.connect(n, S[s - 1 - q], O[Math.max(0, o - 1 - q)], old);      // left: inside lane to inside lane
+            else if (m.t === 1 || s >= o) this.connect(n, S[q], O[Math.min(q, o - 1)], old);  // right / straight, from the kerb
+            else { this.connect(n, S[q], O[q], old); if (q === s - 1) for (let j = s; j < o; j++) this.connect(n, S[q], O[j], old); }  // road widens: spread out
+          }
+        }
       }
       // conflicts: different approaches whose paths cross or merge
       const cs = n.conns;
@@ -478,6 +603,7 @@ export class Net {
     for (const car of this.cars) {
       let lane = this.lanes.get(car.lane.key);
       if (!lane && car.lane.conn) { lane = this.lanes.get(car.lane.out.key); if (lane) car.s = 0; }
+      if (!lane && !car.lane.conn) { lane = this.lanes.get(car.lane.edge.id + (car.lane.dir > 0 ? 'f' : 'b')); if (lane) car.s = lane.len * Math.max(0, Math.min(1, ((car.lane.Fa + car.s / car.lane.len * (car.lane.Fb - car.lane.Fa)) - lane.Fa) / ((lane.Fb - lane.Fa) || 1))); }   // its lane went: the kerb lane
       if (!lane) continue;
       car.lane = lane; car.s = Math.min(car.s, lane.len); car.granted = lane.conn ? lane : null; car.oldRoute = car.route; car.oldRi = car.ri; car.route = null; lane.cars.push(car);
       const d = this.lanes.get(car.destKey); if (!d) continue;
@@ -502,28 +628,37 @@ export class Net {
     if (l.conn) { const n = l.node; c += n.sig ? 7 : n.deg > 2 ? (l.prio ? .5 : 2.5) : 0; if (l.turn === 2) c += 2; }
     return c;
   }
-  // lanes from `start` (car at s) to dest lane; returns array of lanes or null
-  route(start, s, dest, destS) {
+  // extra time for moving over to lane B (busier lane: costs more)
+  chgCost(l, B) { return 2 + (B.cars.length - l.cars.length) * .8; }
+  // lanes from `start` (car at s) to dest lane; returns array of lanes or null. noChg: stay in this lane for now
+  route(start, s, dest, destS, noChg = false) {
     if (start === dest && destS > s + 3) return [start];
     const best = new Map(), prev = new Map(), h = new Heap();
     const c0 = (start.len - s) / Math.max(1.2, start.spd);
-    for (const nx of start.next) { const c = c0 + this.cost(nx); best.set(nx, c); prev.set(nx, start); h.push(c, nx); }
+    const put = (nx, c, from) => { if (c < (best.get(nx) ?? 1e18)) { best.set(nx, c); prev.set(nx, from); h.push(c, nx); } };
+    for (const nx of start.next) put(nx, c0 + this.cost(nx), start);
+    if (!noChg && start.chg) for (const B of start.chg) {      // move over first
+      const sb = this.mapS(start, s, B); if (sb > B.len - 8) continue;
+      if (B === dest) { if (destS > sb + 6) put(B, this.chgCost(start, B) + (destS - Math.max(0, sb)) / Math.max(1.2, B.spd), start); continue; }
+      put(B, this.chgCost(start, B) + (B.len - Math.max(0, sb)) / Math.max(1.2, B.spd), start);
+    }
     let guard = 0;
     while (h.size && guard++ < 40000) {
       const [c, l] = h.pop(); if (c > (best.get(l) ?? 1e18)) continue;
       if (l === dest) { const path = [l]; let p = prev.get(l); while (p) { path.push(p); if (p === start) break; p = prev.get(p); } return path.reverse(); }
-      for (const nx of l.next) {
-        const nc = c + (nx === dest ? destS / Math.max(1.2, nx.spd) : this.cost(nx));
-        if (nc < (best.get(nx) ?? 1e18)) { best.set(nx, nc); prev.set(nx, l); h.push(nc, nx); }
+      for (const nx of l.next) put(nx, c + (nx === dest ? destS / Math.max(1.2, nx.spd) : this.cost(nx)), l);
+      if (l.chg && l !== start) for (const B of l.chg) {
+        if (B === dest && destS < 8) continue;
+        put(B, c + Math.max(.3, this.chgCost(l, B) + (B === dest ? destS / Math.max(1.2, B.spd) : this.cost(B)) - this.cost(l)), l);
       }
     }
     return null;
   }
-  reroute(car) {
-    let r = this.route(car.lane, car.s, car.dest, car.destS);
+  reroute(car, noChg = false) {
+    let r = this.route(car.lane, car.s, car.dest, car.destS, noChg);
     if (!r && car.dest.edge) { // try the other side of the street
-      const other = car.dest.edge.lanes.find(l => l !== car.dest);
-      if (other) { const s2 = Math.max(1, Math.min(other.len - 1, other.len - car.destS)); r = this.route(car.lane, car.s, other, s2); if (r) { car.dest = other; car.destKey = other.key; car.destS = s2; } }
+      const other = car.dest.edge.lanes.find(l => l !== car.dest && !l.li && !l.pk);
+      if (other) { const s2 = Math.max(1, Math.min(other.len - 1, other.len - car.destS)); r = this.route(car.lane, car.s, other, s2, noChg); if (r) { car.dest = other; car.destKey = other.key; car.destS = s2; } }
     }
     if (r) { car.route = r; car.ri = 0; }
     else if (!car.route) car.route = null;
@@ -533,6 +668,7 @@ export class Net {
   spotOn(e, x, z) {
     const c = closestOnPoly(e.pts, e.cum, x, z), out = [];
     for (const l of e.lanes) {
+      if (l.li || l.pk) continue;         // trips start and end in the kerb lane
       const arc = l.dir > 0 ? c.s : e.len - c.s;
       const s = (arc - (l.dir > 0 ? l.from.trim : l.from.trim)) * l.k;
       out.push({ lane: l, s: Math.max(1.5, Math.min(l.len - 1.5, s)) });
@@ -575,7 +711,7 @@ export class Net {
   canEnter(car, conn, distLeft) {
     const n = conn.node;
     if (!this.room(car, conn)) { car.why = 'room'; return false; }
-    if (n.deg <= 2 && !n.ring) return true;
+    if (n.deg <= 2 && !n.ring && !conn.conflicts.length) return true;   // (two lanes merging into one still take turns)
     if (conn.out.prio && !conn.in.prio) {    // entering a roundabout: never fill the ring
       const r = this.ringOcc.get(conn.out.edge.ring);
       if (r && r.occ + car.len + 6 > r.cap * .55) { car.why = 'ringfull'; return false; }
@@ -598,7 +734,7 @@ export class Net {
       const nxt = f.route && f.route[f.ri + 1]; if (nxt !== c) continue;
       const d = L.len - f.s;
       if (theyFirst === true) { if (d < 6 + f.v * 3.2) { car.why = 'yieldprio'; return false; } }
-      else if (theyFirst === null) { if (f.arrT && (!car.arrT || f.arrT < car.arrT - .01 || (Math.abs(f.arrT - car.arrT) < .01 && f.id < car.id)) && this.room(f, c)) { car.why = 'fcfs'; return false; } }
+      else if (theyFirst === null) { if (f.arrT && (!car.arrT || f.arrT < car.arrT - .01 || (Math.abs(f.arrT - car.arrT) < .01 && f.id < car.id)) && (this.room(f, c) || (L.pk && this.time - f.arrT > 12))) { car.why = 'fcfs'; return false; } }   // a long wait in a turn lane gets let through
     }
     return true;
   }
@@ -618,7 +754,12 @@ export class Net {
       } else if (s.st === 'y' && s.t > 3) { s.st = 'a'; s.t = 0; }
       else if (s.st === 'a' && s.t > 1.5) { s.st = 'g'; s.t = 0; s.phase = (s.phase + 1) % s.groups; }
     }
-    for (const l of this.lanes.values()) { if (l.cars.length > 1) l.cars.sort((a, b) => b.s - a.s); l.inc = 0; }
+    for (const l of this.lanes.values()) { if (l.cars.length > 1) l.cars.sort((a, b) => b.s - a.s); l.inc = 0; l.mq = null; }
+    // drivers who need to move over; once they have waited a moment, the car behind lets them in
+    for (const car of this.cars) {
+      const B = car.route[car.ri + 1]; car.chgTo = B && !B.conn && !car.lane.conn ? B : null;
+      if (car.chgTo && car.chgWait > 1.2) (B.mq || (B.mq = [])).push({ s: this.mapS(car.lane, car.s, B), len: car.len, id: car.id });
+    }
     // how full each roundabout is
     this.ringOcc = new Map();
     for (const l of this.lanes.values()) {
@@ -634,11 +775,32 @@ export class Net {
 
     const done = [];
     for (const car of this.cars) {
-      const lane = car.lane, idx = lane.cars.indexOf(car);
+      let lane = car.lane, mustBy = 1e4;
+      const B = car.chgTo;
+      if (B) {   // moving over to the lane beside: when there's a gap, else slow down and wait near the end
+        const sb = this.mapS(lane, car.s, B);
+        if (sb >= (B.pk ? .5 : car.len + 1) && sb < B.len - 1 && this.gapOK(car, B, sb)) {
+          lane.cars.splice(lane.cars.indexOf(car), 1);
+          let j = 0; while (j < B.cars.length && B.cars[j].s > sb) j++; B.cars.splice(j, 0, car);
+          car.lat = (car.lat || 0) + lane.off - B.off; car.lane = lane = B; car.s = sb; car.ri++; car.chgTo = null; car.chgWait = 0;
+        } else {
+          mustBy = Math.min(lane.len, this.mapS(B, B.len, lane)) - 1.5;
+          if (B === car.dest) mustBy = Math.min(mustBy, this.mapS(B, car.destS, lane) - 2);
+          if (mustBy - car.s < 30 && car.v < 5) car.chgWait = (car.chgWait || 0) + dt;
+        }
+      }
+      const idx = lane.cars.indexOf(car);
       let gap = 1e4, lv = 0, ahead = lane.len - car.s, v0 = lane.vmax * car.slow;
       if (idx > 0) { const L = lane.cars[idx - 1]; gap = L.s - L.len - car.s; lv = L.v; car.gw = 'leader'; } else car.gw = 'free';
+      if (lane.mq) for (const q of lane.mq) {   // let a waiting driver in from the next lane
+        if (q.id === car.id) continue;
+        const g = q.s - q.len - car.s; if (g > .5 && g < 30 && g < gap) { gap = g; lv = 0; car.gw = 'let'; }
+      }
       // destination: stop at it
-      if (lane === car.dest) { const d = car.destS - car.s; if (d < gap) { gap = d + 3; lv = 0; car.gw = 'dest'; } }
+      if (car.chgTo) {
+        const g = mustBy - car.s; if (g < gap) { gap = Math.max(0, g); lv = 0; car.gw = 'merge'; }
+        if (g < 45) v0 = Math.min(v0, 7);
+      } else if (lane === car.dest) { const d = car.destS - car.s; if (d < gap) { gap = d + 3; lv = 0; car.gw = 'dest'; } }
       else if (idx === 0 || ahead < 80) {
         // look ahead along the route
         let d = ahead, k = car.ri + 1, prevConnOk = true, steps = 0, lead = idx === 0;
@@ -668,6 +830,11 @@ export class Net {
         }
         void prevConnOk;
       }
+      // let go of the junction if we can't actually drive into it (the road beyond filled up)
+      if (car.granted && car.granted !== lane && !lane.conn && gap < ahead + 3 && car.v < 1) {
+        car.holdT = (car.holdT || 0) + dt;
+        if (car.holdT > 2) { car.granted.busy = Math.max(0, car.granted.busy - 1); car.granted = null; car.holdT = 0; car.arrT = this.time - 5; }
+      } else car.holdT = 0;
       // IDM
       const v = car.v, dv = v - lv, ss = S0 + Math.max(0, v * HEAD + v * dv / (2 * Math.sqrt(ACC * DEC)));
       let a = ACC * (1 - Math.pow(v / Math.max(.5, v0), 4)) - ACC * (ss / Math.max(.1, gap)) ** 2;
@@ -682,6 +849,7 @@ export class Net {
         const nx = car.route[car.ri + 1];
         if (!nx) { car.s = car.lane.len; break; }
         if (nx.conn && car.granted !== nx) { car.s = car.lane.len; car.v = 0; break; }
+        if (!nx.conn && !car.lane.conn) { car.s = car.lane.len; car.v = 0; break; }   // still needs to move over
         const was = car.lane;
         car.s -= was.len; was.cars.splice(was.cars.indexOf(car), 1);
         if (was.conn) was.busy = Math.max(0, was.busy - 1);
@@ -694,7 +862,7 @@ export class Net {
       if (car.v < 3) car.wait += dt;
       // a car stuck at a junction tries another way now and then
       car.rerouteT += dt;
-      if (car.stuck > 12 && car.rerouteT > 10 && !car.lane.conn && !car.granted) { car.rerouteT = 0; this.reroute(car); }
+      if (car.stuck > 12 && car.rerouteT > 10 && !car.lane.conn && !car.granted) { car.rerouteT = 0; this.reroute(car, car.chgWait > 6); car.chgWait = 0; }
       if (car.stuck > GIVE_UP) { car.gave = true; done.push(car); }
       // lane speed estimate for routing (slow EMA)
       car.lane.spd += (car.v - car.lane.spd) * Math.min(1, dt * .08);
@@ -703,7 +871,24 @@ export class Net {
     // empty lanes drift back to free flow
     for (const l of this.lanes.values()) if (!l.cars.length) l.spd += (l.vmax - l.spd) * Math.min(1, dt * .05);
     // world positions for drawing
-    for (const car of this.cars) { const p = along(car.lane.pts, car.lane.cum, car.s - car.len / 2); car.x = p[0]; car.z = p[1]; car.hx = p[2]; car.hz = p[3]; }
+    for (const car of this.cars) {
+      const p = along(car.lane.pts, car.lane.cum, car.s - car.len / 2); car.x = p[0]; car.z = p[1]; car.hx = p[2]; car.hz = p[3];
+      if (car.lat) {   // drifting across after a lane change
+        const r = Math.sign(car.lat) * Math.min(Math.abs(car.lat), dt * 1.5); car.lat -= r; if (Math.abs(car.lat) < .01) car.lat = 0;
+        car.x += -p[3] * car.lat; car.z += p[2] * car.lat;
+        const k = Math.max(-.3, Math.min(.3, -(r / dt) / Math.max(3, car.v))); let hx = p[2] - p[3] * k, hz = p[3] + p[2] * k; const L = Math.hypot(hx, hz) || 1; car.hx = hx / L; car.hz = hz / L;
+      }
+    }
+  }
+  // is there room to move into lane B at sb (cars ahead and behind far enough)?
+  gapOK(car, B, sb) {
+    if (!B.pk && sb - car.len < B.inc + 2) return false;   // keep the start clear for cars coming out of the junction
+    for (const o of B.cars) {
+      if (o === car) continue;
+      if (o.s >= sb) { if (o.s - o.len - sb < 1.5 + car.v * .5) return false; }
+      else if (sb - car.len - o.s < 1.5 + o.v * .9 + Math.max(0, o.v - car.v) * 1.2) return false;
+    }
+    return true;
   }
   remove(car) {
     const l = car.lane, i = l.cars.indexOf(car); if (i >= 0) l.cars.splice(i, 1);
