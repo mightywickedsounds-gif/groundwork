@@ -230,12 +230,12 @@ for (let i = 0; i < 24; i++) { const m = new THREE.Mesh(jamGeo, new THREE.MeshBa
 
 // ---------------- tools ----------------
 const TOOLS = ['road', 'curve', 'signal', 'ring', 'oneway', 'erase'];
-const HINT = { road: 'Click to start a road, click again to place it', curve: 'Click start, then the bend, then the end', signal: 'Click a junction to add or remove lights', ring: 'Click a junction to build a roundabout', oneway: 'Click a road to switch its direction', erase: 'Click a road or roundabout to remove it', '': 'Drag to move, right-drag to turn, scroll to zoom' };
+const HINT = { road: 'Click to start a road, click again to place it', curve: 'Click start, then the bend, then the end', signal: 'Click a junction to add or remove lights', ring: 'Click a junction to build a roundabout', oneway: 'Click a road to switch its direction', erase: 'Click a road or roundabout to remove it' };
 const T = { tool: '', pts: [], hover: null, mouse: null };
 function setTool(t) {
   T.tool = T.tool === t ? '' : t; T.pts = []; previewMesh.visible = false; hoverMesh.visible = false;
-  for (const b of document.querySelectorAll('#tools button')) b.classList.toggle('on', b.dataset.tool === T.tool);
-  $('hint').textContent = HINT[T.tool] || '';
+  for (const b of document.querySelectorAll('#tools button[data-tool]')) b.classList.toggle('on', b.dataset.tool === T.tool);
+  $('hint').textContent = (HINT[T.tool] || '').replace(/^Click/, touch ? 'Tap' : 'Click');
 }
 function snapPoint(x, z) {
   const n = net.nearestNode(x, z, 10); if (n) return { p: [n.x, n.z], kind: 'node' };
@@ -388,7 +388,7 @@ function keyMove(dt) {
 function toast(msg, bad = false) { const t = $('toast'); t.textContent = msg; t.classList.toggle('bad', bad); t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 1800); }
 function setSpeed(v) { if (v) S.lastSpeed = v; S.speed = v; for (const b of document.querySelectorAll('#speed button')) b.classList.toggle('on', +b.dataset.speed === v); }
 function toggleView() { S.view = !S.view; $('viewBtn').classList.toggle('on', S.view); if (overlay) overlay.visible = S.view; paintOverlay(); }
-for (const b of document.querySelectorAll('#tools button')) b.addEventListener('click', () => { setTool(b.dataset.tool); sound.start(); });
+for (const b of document.querySelectorAll('#tools button[data-tool]')) b.addEventListener('click', () => { setTool(b.dataset.tool); sound.start(); });
 for (const b of document.querySelectorAll('#speed button')) b.addEventListener('click', () => setSpeed(+b.dataset.speed));
 $('viewBtn').addEventListener('click', toggleView);
 const fmt = n => n >= 1e4 ? (n / 1e3).toFixed(1) + 'k' : String(n);
@@ -396,7 +396,7 @@ const growInterval = () => Math.max(85, 170 - (S.districts - 3) * 7);
 function hud() {
   const h = (S.time / DAY * 24) % 24, day = Math.floor(S.time / DAY) + 1;
   $('clock').textContent = String(Math.floor(h)).padStart(2, '0') + ':' + String(Math.floor(h % 1 * 60)).padStart(2, '0');
-  $('day').textContent = 'Day ' + day;
+  $('day').textContent = 'DAY ' + day;
   const { res } = city.totals();
   $('sPop').textContent = fmt(res); $('sCars').textContent = fmt(net.cars.length); $('sFlow').textContent = Math.round(S.flow * 100) + '%';
   const tr = net.stats.ema || 0; $('sTrip').textContent = Math.floor(tr / 60) + ':' + String(Math.floor(tr % 60)).padStart(2, '0');

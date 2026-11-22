@@ -48,7 +48,7 @@ The game saves in your browser every 10 seconds and when you leave. Menu → Gra
 - `net.js`: the road network and the traffic (lanes, junction rules, lights, roundabouts, route finding, car following)
 - `city.js`: the city (street plan, districts, buildings, trips)
 - `draw.js`: everything you see (roads, curbs, sidewalks, markings, buildings with windows, trees, cars, people, lights)
-- `assets/`: grass photo and sky lighting (Poly Haven, CC0)
+- `assets/`: grass photo and sky lighting (Poly Haven, CC0); `assets/fonts/` Overpass, a highway-sign style typeface (SIL Open Font License, see `LICENSE.txt`)
 - `tests/`: automatic checks (see below)
 - `dig/`: the old digging game, unchanged
 
@@ -67,3 +67,7 @@ The digging game moved to `dig/` (its saves still work). The new game was built 
 - Traffic simulation: each car follows the one ahead smoothly, slows for bends, and waits at junctions until it's its turn and there's room on the other side. Lights adapt to waiting cars. Roundabouts give priority to the ring and stop letting cars in when the ring is nearly full (without that, a full ring locked up completely).
 - Test results (no player help): with 3 districts the roads clear every night with almost no drivers giving up. Left alone, the growing city starts jamming on day 3 and locks up near the end of day 3, so the player has to step in around day 2. Lights or roundabouts on every single junction do not beat the plain junctions overall (roundabouts everywhere also knock down 86 buildings); they help where they're placed well, which is the game.
 - Speed: one simulation step with 1,400 cars takes about 2-8 ms.
+
+### Round 2: new look for the screen
+
+The see-through panels and floating text are gone. The screen now looks like road signs: a green guide sign (time, day, people, cars, flow, average trip, next district), a yellow warning sign for the gridlock meter (striped fill when it gets bad), a solid asphalt-dark tool dock with yellow for the selected tool and speed, white sign pop-ups (red for "can't do that"), a green sign start screen and a red stop-sign game-over screen. Type is Overpass (modelled on highway signs), served from the site itself. Phones get a two-row dock and shorter labels.

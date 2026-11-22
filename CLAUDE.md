@@ -11,6 +11,6 @@ A browser traffic game, hosted on GitHub Pages from `main` (root): https://might
 
 It's an original game in the traffic/city genre: don't copy any existing game's name, art, levels or look.
 
-Screen style (owner): keep the HUD minimal like a real game: short uppercase labels, no paragraphs on screen, no emoji. Look: semi-realistic aerial city (real lighting and shadows), simplified driving.
+Screen style (owner): solid road-sign UI (round 2): green guide sign `#hud`, yellow warning sign `#jam`, asphalt dock `#bar` with yellow for the active tile, `.sign` panels (inset border line), Overpass font in `assets/fonts/`. The owner hates the see-through/glassy floating-text look (it reads as AI-made): no translucent panels, text shadows, glows or letter-spaced captions in the UI. Keep it minimal: short labels, no paragraphs on screen, no emoji. Look: semi-realistic aerial city (real lighting and shadows), simplified driving.
 
 The owner isn't a programmer: explain changes in plain English and log each round in README.md under History.

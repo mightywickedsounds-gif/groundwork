@@ -9,112 +9,143 @@
 <meta name="theme-color" content="#101214">
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <style>
-  :root { --ink:#f4f2ec; --dim:rgba(244,242,236,.62); --acc:#5fd4e8; --bad:#ff5a46; --warn:#f2c14e; --shadow:0 1px 2px rgba(0,0,0,.8), 0 0 10px rgba(0,0,0,.35);
-    --font:"Bahnschrift","DIN Alternate","Roboto Condensed","Arial Narrow",system-ui,sans-serif; }
+  @font-face { font-family:Overpass; font-weight:600; src:url(assets/fonts/overpass-600.woff2) format('woff2'); font-display:swap; }
+  @font-face { font-family:Overpass; font-weight:800; src:url(assets/fonts/overpass-800.woff2) format('woff2'); font-display:swap; }
+  @font-face { font-family:Overpass; font-weight:900; src:url(assets/fonts/overpass-900.woff2) format('woff2'); font-display:swap; }
+  :root { --green:#0b6a3c; --white:#f6f6f1; --yellow:#f5c000; --ink:#121314; --asphalt:#1b1d20; --tile:#2b2e33; --tile2:#363a40; --red:#c9221b;
+    --font:Overpass,"Arial Narrow",system-ui,sans-serif; --drop:0 3px 0 rgba(0,0,0,.35); }
   * { box-sizing:border-box; }
-  html,body { margin:0; height:100%; overflow:hidden; background:#101214; color:var(--ink); font:15px/1.2 var(--font); -webkit-user-select:none; user-select:none; touch-action:none; }
+  html,body { margin:0; height:100%; overflow:hidden; background:#101214; color:var(--white); font:600 15px/1.15 var(--font); -webkit-user-select:none; user-select:none; touch-action:none; }
   canvas#view { position:fixed; inset:0; width:100%; height:100%; display:block; }
-  .t { text-shadow:var(--shadow); }
-  .cap { text-transform:uppercase; letter-spacing:.09em; }
   .num { font-variant-numeric:tabular-nums; }
   button { font-family:var(--font); }
+  .sign { border-radius:10px; box-shadow:inset 0 0 0 3px var(--bg), inset 0 0 0 5px var(--line), var(--drop); background:var(--bg); }
 
-  #hud { position:fixed; left:max(18px, env(safe-area-inset-left)); top:max(14px, env(safe-area-inset-top)); pointer-events:none; }
-  #clock { font-size:26px; font-weight:700; letter-spacing:.04em; }
-  #day { font-size:12px; color:var(--dim); margin-left:8px; }
-  #stats { margin-top:6px; display:flex; gap:16px; font-size:12px; color:var(--dim); }
-  #stats b { display:block; color:var(--ink); font-size:16px; font-weight:700; }
-  #grow { margin-top:8px; font-size:11px; color:var(--dim); }
-  #grow i { display:block; width:150px; height:2px; background:rgba(255,255,255,.18); margin-top:4px; }
-  #grow i u { display:block; height:100%; width:0; background:var(--acc); text-decoration:none; }
+  /* green guide sign: time + city */
+  #hud { --bg:var(--green); --line:var(--white); position:fixed; left:max(14px, env(safe-area-inset-left)); top:max(12px, env(safe-area-inset-top)); padding:12px 16px 12px; pointer-events:none; min-width:262px; }
+  #hud .top { display:flex; align-items:center; gap:10px; }
+  #clock { font-size:34px; font-weight:900; letter-spacing:-.01em; line-height:1; padding-top:3px; }
+  #day { background:var(--white); color:var(--green); font-weight:900; font-size:13px; padding:4px 7px 2px; border-radius:5px; }
+  #stats { margin-top:9px; display:grid; grid-template-columns:repeat(4, auto); gap:2px 16px; font-size:11.5px; }
+  #stats b { display:block; font-size:19px; font-weight:800; line-height:1.05; }
+  #stats span { opacity:.78; }
+  #grow { margin-top:10px; padding-top:9px; border-top:2px solid rgba(246,246,241,.85); font-size:12px; display:flex; align-items:center; gap:10px; }
+  #grow i { flex:1; height:6px; background:rgba(0,0,0,.28); border-radius:3px; overflow:hidden; }
+  #grow i u { display:block; height:100%; width:0; background:var(--yellow); }
 
-  #topr { position:fixed; right:max(16px, env(safe-area-inset-right)); top:max(14px, env(safe-area-inset-top)); display:flex; gap:12px; align-items:flex-start; }
-  #jam { width:210px; text-align:right; pointer-events:none; }
-  #jamLbl { font-size:12px; color:var(--dim); display:flex; justify-content:space-between; }
-  #jamLbl b { color:var(--ink); }
-  #jamBar { height:5px; margin-top:5px; background:rgba(255,255,255,.18); }
-  #jamBar i { display:block; height:100%; width:0; background:var(--ink); transition:background .3s; }
-  #jamBar.warn i { background:var(--warn); } #jamBar.bad i { background:var(--bad); }
-  .iconBtn { width:36px; height:36px; border:0; background:transparent; padding:6px; cursor:pointer; color:var(--ink); filter:drop-shadow(0 1px 2px rgba(0,0,0,.8)); }
-  .iconBtn svg { width:100%; height:100%; display:block; }
+  /* yellow warning sign: gridlock */
+  #topr { position:fixed; right:max(14px, env(safe-area-inset-right)); top:max(12px, env(safe-area-inset-top)); display:flex; gap:8px; align-items:flex-start; }
+  #jam { --bg:var(--yellow); --line:var(--ink); color:var(--ink); width:230px; padding:11px 15px 13px; pointer-events:none; }
+  #jamLbl { display:flex; gap:8px; justify-content:space-between; align-items:baseline; font-weight:900; font-size:15px; }
+  #jamLbl b { font-size:22px; font-weight:900; }
+  #jamBar { height:12px; margin-top:7px; background:rgba(18,19,20,.16); border-radius:3px; overflow:hidden; }
+  #jamBar i { display:block; height:100%; width:0; background:var(--ink); }
+  #jamBar.warn i { background:repeating-linear-gradient(-45deg, var(--ink) 0 7px, #e0700c 7px 14px); }
+  #jamBar.bad i { background:repeating-linear-gradient(-45deg, var(--ink) 0 7px, var(--red) 7px 14px); }
+  .tileBtn { width:50px; height:50px; border:0; border-radius:10px; background:var(--asphalt); color:var(--white); cursor:pointer; padding:13px; box-shadow:var(--drop); }
+  .tileBtn svg { width:100%; height:100%; display:block; }
 
-  #bar { position:fixed; left:50%; bottom:max(14px, env(safe-area-inset-bottom)); transform:translateX(-50%); display:flex; gap:14px; align-items:flex-end; }
-  #tools, #speed { display:flex; gap:5px; }
-  #tools button, #speed button, #viewBtn { position:relative; height:52px; min-width:62px; padding:6px 8px 5px; border:0; border-radius:6px; background:rgba(12,14,16,.5); color:rgba(244,242,236,.6); cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:3px; font-size:10px; letter-spacing:.08em; text-transform:uppercase; }
-  #tools button svg, #viewBtn svg { width:24px; height:24px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
-  #tools button.on, #viewBtn.on { color:var(--ink); background:rgba(12,14,16,.72); box-shadow:inset 0 -2px 0 var(--acc); }
-  #tools button kbd { position:absolute; left:5px; top:3px; font:600 9px var(--font); opacity:.55; }
-  #speed button { min-width:40px; justify-content:center; font-size:13px; font-weight:700; }
-  #speed button.on { color:var(--ink); background:rgba(12,14,16,.72); box-shadow:inset 0 -2px 0 var(--acc); }
+  /* asphalt dock: tools + speed */
+  #bar { position:fixed; left:50%; bottom:max(12px, env(safe-area-inset-bottom)); transform:translateX(-50%); display:flex; gap:6px; align-items:stretch; padding:6px; background:var(--asphalt); border-radius:16px; box-shadow:var(--drop); }
+  #tools, #speed { display:flex; gap:6px; }
+  .sep { width:2px; background:#33363b; margin:6px 2px; border-radius:1px; }
+  #tools button, #viewBtn, #speed button { position:relative; height:58px; min-width:66px; padding:8px 8px 6px; border:0; border-radius:11px; background:var(--tile); color:var(--white); cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; font-size:12px; font-weight:800; }
+  #tools button:hover, #viewBtn:hover, #speed button:hover { background:var(--tile2); }
+  #tools button svg, #viewBtn svg { width:24px; height:24px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
+  #tools button.on, #viewBtn.on, #speed button.on { background:var(--yellow); color:var(--ink); }
+  #tools button .sh { display:none; }
+  #tools button, #viewBtn { white-space:nowrap; }
+  #tools button kbd { position:absolute; left:7px; top:5px; font:800 10px var(--font); opacity:.45; }
+  #speed button { min-width:46px; font-size:15px; font-weight:900; }
+  #speed button svg { width:15px; height:15px; }
 
-  #hint { position:fixed; left:50%; bottom:calc(max(14px, env(safe-area-inset-bottom)) + 66px); transform:translateX(-50%); font-size:12px; color:var(--dim); white-space:nowrap; pointer-events:none; }
-  #toast { position:fixed; left:50%; top:22%; transform:translateX(-50%); font-size:16px; font-weight:700; letter-spacing:.12em; opacity:0; transition:opacity .25s; pointer-events:none; white-space:nowrap; }
-  #toast.show { opacity:1; }
-  #toast.bad { color:#ffb3a8; }
+  #hint { position:fixed; left:50%; bottom:calc(max(12px, env(safe-area-inset-bottom)) + 80px); transform:translateX(-50%); background:var(--asphalt); color:var(--white); font-size:13px; padding:7px 12px 5px; border-radius:8px; white-space:nowrap; pointer-events:none; box-shadow:var(--drop); }
+  #hint:empty { display:none; }
+  #toast { text-transform:uppercase; --bg:var(--white); --line:var(--ink); position:fixed; left:50%; top:18%; transform:translateX(-50%); color:var(--ink); font-size:18px; font-weight:900; padding:12px 18px 9px; display:none; pointer-events:none; white-space:nowrap; }
+  #toast.show { display:block; }
+  #toast.bad { --bg:var(--red); --line:var(--white); color:var(--white); }
 
-  .screen { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(8,9,10,.55); }
+  .screen { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(10,11,12,.6); }
   .screen.show { display:flex; }
-  .panel { min-width:280px; max-width:92vw; padding:24px 26px; background:rgba(14,16,18,.92); border-radius:8px; }
-  .panel h1 { margin:0 0 4px; font-size:34px; letter-spacing:.14em; }
-  .panel h2 { margin:0 0 14px; font-size:13px; color:var(--dim); font-weight:400; letter-spacing:.1em; }
-  .panel .btns { display:flex; flex-direction:column; gap:8px; margin-top:16px; }
-  .panel .btns button { height:42px; border:0; border-radius:5px; background:rgba(255,255,255,.08); color:var(--ink); font-size:13px; letter-spacing:.12em; text-transform:uppercase; cursor:pointer; }
-  .panel .btns button.main { background:var(--acc); color:#071418; font-weight:700; }
-  .panel .row { display:flex; gap:6px; }
-  .panel .row button { flex:1; }
-  .panel .row button.on { box-shadow:inset 0 -2px 0 var(--acc); }
-  .keys { display:grid; grid-template-columns:auto auto; gap:6px 18px; font-size:12px; color:var(--dim); }
-  .keys b { color:var(--ink); font-weight:600; }
-  .big { font-size:13px; color:var(--dim); line-height:1.6; }
-  .big b { color:var(--ink); }
+  .panel { width:min(420px, 92vw); padding:26px 26px 22px; }
+  .panel.guide { --bg:var(--green); --line:var(--white); }
+  .panel.stop { --bg:var(--red); --line:var(--white); }
+  .panel.dark { background:var(--asphalt); border-radius:16px; box-shadow:var(--drop); }
+  .panel h1 { margin:0; font-size:52px; font-weight:900; line-height:1; letter-spacing:-.01em; }
+  .panel h2 { margin:6px 0 16px; font-size:18px; font-weight:800; opacity:.9; }
+  .panel h3 { margin:16px 0 8px; font-size:13px; font-weight:800; opacity:.6; }
+  .panel h3:first-child { margin-top:0; }
+  .big { font-size:15px; line-height:1.5; }
+  .big b { font-weight:900; }
+  .btns { display:flex; flex-direction:column; gap:8px; margin-top:20px; }
+  .btns button { height:50px; border:0; border-radius:10px; background:rgba(0,0,0,.25); color:var(--white); font-size:16px; font-weight:800; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:10px; }
+  .dark .btns button { background:var(--tile); }
+  .btns button.main { background:var(--yellow); color:var(--ink); font-weight:900; font-size:18px; }
+  .btns button.main svg { width:20px; height:20px; }
+  .seg { display:flex; gap:6px; }
+  .seg button { flex:1; height:42px; border:0; border-radius:9px; background:var(--tile); color:var(--white); font-size:14px; font-weight:800; cursor:pointer; }
+  .seg button.on { background:var(--yellow); color:var(--ink); }
+  .keys { display:grid; grid-template-columns:auto 1fr; gap:7px 16px; font-size:13px; }
+  .keys b { font-weight:800; }
+  .keys span { opacity:.7; }
 
-  body.touch #tools button kbd { display:none; }
   @media (max-width:760px) {
-    #bar { gap:6px; flex-wrap:wrap; justify-content:center; width:96vw; }
-    #tools button, #viewBtn { min-width:48px; height:48px; font-size:8.5px; padding:5px 4px 4px; }
-    #speed button { min-width:34px; height:48px; }
-    #jam { width:140px; }
-    #hint { bottom:calc(max(14px, env(safe-area-inset-bottom)) + 112px); }
+    #hud { min-width:0; padding:9px 12px 10px; }
+    #clock { font-size:26px; }
+    #stats { gap:2px 11px; font-size:10px; } #stats b { font-size:15px; }
+    #grow { font-size:10.5px; }
+    #jam { width:150px; padding:9px 12px 11px; } #jamLbl { font-size:12px; } #jamLbl b { font-size:17px; }
+    .tileBtn { width:42px; height:42px; padding:10px; }
+    #bar { flex-wrap:wrap; justify-content:center; width:calc(100vw - 16px); gap:5px; padding:5px; }
+    #tools { gap:5px; } .sep { display:none; }
+    #tools button, #viewBtn { min-width:0; width:calc((100vw - 16px - 10px - 30px) / 7); height:54px; font-size:10px; padding:6px 2px 4px; }
+    #speed { width:100%; } #speed button { flex:1; height:36px; }
+    #tools button kbd { display:none; }
+    #tools button .lg { display:none; } #tools button .sh { display:inline; }
+    #hint { bottom:calc(max(12px, env(safe-area-inset-bottom)) + 112px); font-size:12px; }
+    .panel h1 { font-size:42px; }
   }
+  @media (max-width:420px) { #stats { gap:2px 9px; } #stats b { font-size:14px; } #clock { font-size:24px; } #jam { width:126px; padding:8px 10px 10px; } #jamLbl { font-size:11px; } #jamLbl b { font-size:15px; } }
 </style>
 </head>
 <body>
 <canvas id="view"></canvas>
 
-<div id="hud" class="t">
-  <div><span id="clock" class="num">06:00</span><span id="day" class="cap">Day 1</span></div>
-  <div id="stats" class="cap">
-    <div><b id="sPop" class="num">0</b>People</div>
-    <div><b id="sCars" class="num">0</b>Cars</div>
-    <div><b id="sFlow" class="num">100%</b>Flow</div>
-    <div><b id="sTrip" class="num">0:00</b>Avg trip</div>
+<div id="hud" class="sign">
+  <div class="top"><span id="clock" class="num">06:00</span><span id="day">DAY 1</span></div>
+  <div id="stats">
+    <div><b id="sPop" class="num">0</b><span>People</span></div>
+    <div><b id="sCars" class="num">0</b><span>Cars</span></div>
+    <div><b id="sFlow" class="num">100%</b><span>Flow</span></div>
+    <div><b id="sTrip" class="num">0:00</b><span>Avg trip</span></div>
   </div>
-  <div id="grow" class="cap"><span id="growTxt">City growing</span><i><u id="growBar"></u></i></div>
+  <div id="grow"><span id="growTxt">City growing</span><i><u id="growBar"></u></i></div>
 </div>
 
 <div id="topr">
-  <div id="jam" class="t">
-    <div id="jamLbl" class="cap"><span>Gridlock</span><b id="jamPct" class="num">0%</b></div>
+  <div id="jam" class="sign">
+    <div id="jamLbl"><span>GRIDLOCK</span><b id="jamPct" class="num">0%</b></div>
     <div id="jamBar"><i></i></div>
   </div>
-  <button id="menuBtn" class="iconBtn" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+  <button id="menuBtn" class="tileBtn" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
 </div>
 
-<div id="hint" class="t cap"></div>
-<div id="toast" class="t cap"></div>
+<div id="hint"></div>
+<div id="toast" class="sign"></div>
 
 <div id="bar">
   <div id="tools">
     <button data-tool="road" aria-label="Road"><kbd>1</kbd><svg viewBox="0 0 24 24"><path d="M7 21 10 3M17 21 14 3M12 5v2M12 11v2M12 17v2"/></svg>Road</button>
-    <button data-tool="curve" aria-label="Curve"><kbd>2</kbd><svg viewBox="0 0 24 24"><path d="M4 20C4 9 10 4 20 4"/><path d="M8 20C8 12 12 8 20 8"/></svg>Curve</button>
-    <button data-tool="signal" aria-label="Lights"><kbd>3</kbd><svg viewBox="0 0 24 24"><rect x="8" y="2.5" width="8" height="15" rx="2"/><circle cx="12" cy="6.5" r="1.3"/><circle cx="12" cy="10" r="1.3"/><circle cx="12" cy="13.5" r="1.3"/><path d="M12 17.5V22"/></svg>Lights</button>
-    <button data-tool="ring" aria-label="Roundabout"><kbd>4</kbd><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg>Round</button>
+    <button data-tool="curve" aria-label="Curve"><kbd>2</kbd><svg viewBox="0 0 24 24"><path d="M4 20C4 9 10 4 20 4"/><path d="M9 20C9 12.5 12.5 9 20 9"/></svg>Curve</button>
+    <button data-tool="signal" aria-label="Lights"><kbd>3</kbd><svg viewBox="0 0 24 24"><rect x="8" y="2.5" width="8" height="15" rx="2"/><circle cx="12" cy="6.5" r="1.2"/><circle cx="12" cy="10" r="1.2"/><circle cx="12" cy="13.5" r="1.2"/><path d="M12 17.5V22"/></svg>Lights</button>
+    <button data-tool="ring" aria-label="Roundabout"><kbd>4</kbd><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg><span class="lg">Roundabout</span><span class="sh">Round</span></button>
     <button data-tool="oneway" aria-label="One way"><kbd>5</kbd><svg viewBox="0 0 24 24"><path d="M3 12h16M14 7l5 5-5 5"/></svg>One-way</button>
-    <button data-tool="erase" aria-label="Remove"><kbd>6</kbd><svg viewBox="0 0 24 24"><path d="M5 5l14 14M19 5 5 19"/></svg>Remove</button>
+    <button data-tool="erase" aria-label="Remove"><kbd>6</kbd><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>Remove</button>
+    <button id="viewBtn" aria-label="Traffic view"><svg viewBox="0 0 24 24"><path d="M3 18h5M11 18h3M17 18h4M3 12h9M15 12h6M3 6h3M9 6h12"/></svg>Traffic</button>
   </div>
-  <button id="viewBtn" aria-label="Traffic view"><svg viewBox="0 0 24 24"><path d="M3 18h5M10 18h4M16 18h5"/><path d="M3 12h9M14 12h7" /><path d="M3 6h3M8 6h13"/></svg>Traffic</button>
+  <div class="sep"></div>
   <div id="speed">
-    <button data-speed="0" aria-label="Pause"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg></button>
+    <button data-speed="0" aria-label="Pause"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="4" width="5" height="16" rx="1"/><rect x="14" y="4" width="5" height="16" rx="1"/></svg></button>
     <button data-speed="1">1x</button>
     <button data-speed="2">2x</button>
     <button data-speed="4">4x</button>
@@ -122,44 +153,43 @@
 </div>
 
 <div id="start" class="screen show">
-  <div class="panel">
+  <div class="panel guide sign">
     <h1>FLOWTOWN</h1>
-    <h2 class="cap">Keep the city moving</h2>
-    <div class="big">The city never stops growing. Reshape its streets with<br><b>roads, curves, traffic lights, roundabouts and one-ways</b><br>before the traffic locks up.</div>
+    <h2>Keep the city moving</h2>
+    <div class="big">The city never stops growing. Rebuild its streets with <b>roads, curves, lights, roundabouts and one-ways</b> before the traffic locks up.</div>
     <div class="btns">
-      <button id="playBtn" class="main">Play</button>
+      <button id="playBtn" class="main"><span>Play</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg></button>
       <button id="newBtn" style="display:none">New city</button>
     </div>
   </div>
 </div>
 
 <div id="menu" class="screen">
-  <div class="panel">
-    <h2 class="cap">Menu</h2>
-    <div class="cap" style="font-size:11px;color:var(--dim);margin-bottom:6px">Graphics</div>
-    <div class="row btns" style="margin-top:0" id="qRow"><button data-q="high">High</button><button data-q="medium">Medium</button><button data-q="low">Low</button></div>
-    <div class="cap" style="font-size:11px;color:var(--dim);margin:14px 0 6px">Controls</div>
+  <div class="panel dark">
+    <h3>Graphics</h3>
+    <div class="seg" id="qRow"><button data-q="high">High</button><button data-q="medium">Medium</button><button data-q="low">Low</button></div>
+    <h3>Controls</h3>
     <div class="keys">
-      <b>Move</b><span>Drag / W A S D</span>
-      <b>Turn and tilt</b><span>Right-drag / Q E / two fingers</span>
-      <b>Zoom</b><span>Scroll / pinch</span>
-      <b>Tools</b><span>1-6, Esc to drop</span>
+      <b>Move</b><span>Drag, or W A S D</span>
+      <b>Turn and tilt</b><span>Right-drag, Q E, or two fingers</span>
+      <b>Zoom</b><span>Scroll or pinch</span>
+      <b>Tools</b><span>1 to 6, Esc to drop</span>
       <b>Pause</b><span>Space</span>
       <b>Traffic view</b><span>T</span>
     </div>
     <div class="btns">
+      <button id="closeBtn" class="main">Back to the city</button>
       <button id="soundBtn">Sound on</button>
       <button id="resetBtn">New city</button>
       <button id="digBtn">Play the digging game</button>
-      <button id="closeBtn" class="main">Back</button>
     </div>
   </div>
 </div>
 
 <div id="over" class="screen">
-  <div class="panel">
+  <div class="panel stop sign">
     <h1>GRIDLOCK</h1>
-    <h2 class="cap">The city has locked up</h2>
+    <h2>The city has locked up</h2>
     <div class="big" id="overTxt"></div>
     <div class="btns">
       <button id="goOnBtn" class="main">Keep fixing it</button>
