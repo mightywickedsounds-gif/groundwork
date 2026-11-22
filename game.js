@@ -1,7 +1,7 @@
 // Flowtown: keep a growing city's traffic moving.
 import * as THREE from 'three';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
-import { Net, RING_R, ONEWAY_W, WALK_W, LANE_W, along, closestOnPoly } from './net.js';
+import { Net, RING_R, ONEWAY_W, WALK_W, LANE_W, along, closestOnPoly, laneOff } from './net.js';
 import { createCity, DAY, CHUNK, BLOCK } from './city.js';
 import { makeMaterials, buildRoads, buildCity, vehicleGeos, vehicleMaterial, makeFleet, staticCarGeo, carColor, personGeo, lampGeo, signalGeo, hwOf } from './draw.js';
 
@@ -124,8 +124,9 @@ function rebuildRoads() {
   disposeGroup(sigG); sigG = new THREE.Group(); sigLamps = [];
   const heads = [];
   for (const n of net.nodes.values()) if (n.sig) for (const L of n.ins) {
+    if (L.li || L.pk) continue;     // one pole per road, at the kerb
     const p = along(L.pts, L.cum, L.len), h = [p[2], p[3]], r = [-h[1], h[0]], hw = hwOf(L.edge);
-    const off = L.edge.oneway ? hw + .9 : LANE_W / 2 + .9;
+    const off = hw - laneOff(L.edge, 0) + .9;
     const px = p[0] + r[0] * off + h[0] * .4, pz = p[1] + r[1] * off + h[1] * .4, th = Math.atan2(-h[1], h[0]);
     heads.push([px, pz, th]);
     // lamps on the face looking back at drivers: local (-.19, y, -2.9)
@@ -230,10 +231,11 @@ const jamMarks = []; const jamGeo = new THREE.CircleGeometry(1, 40).rotateX(-Mat
 for (let i = 0; i < 24; i++) { const m = new THREE.Mesh(jamGeo, new THREE.MeshBasicMaterial({ color: 0xff3020, transparent: true, opacity: 0, depthWrite: false, toneMapped: false })); m.renderOrder = 3; m.visible = false; scene.add(m); jamMarks.push(m); }
 
 // ---------------- tools ----------------
-const TOOLS = ['road', 'curve', 'signal', 'ring', 'oneway', 'erase'];
+const TOOLS = ['road', 'curve', 'signal', 'ring', 'oneway', 'lanes', 'erase'];
+const laneName = (nl, tl) => `${nl} lane${nl > 1 ? 's' : ''}${tl ? ' + turn lanes' : ''}`;
 const HINT = touch
-  ? { road: 'Drag to draw a road. Tap to keep going from the pin', curve: 'Drag to draw, then drag to bend it', signal: 'Tap a junction for lights', ring: 'Tap a junction or road for a roundabout', oneway: 'Tap a road to switch its direction', erase: 'Tap a road or roundabout to remove it' }
-  : { road: 'Click to start, click to place. It keeps going from the end', curve: 'Click the start, click the end, then move to bend and click', signal: 'Click a junction for lights', ring: 'Click a junction or road for a roundabout', oneway: 'Click a road to switch its direction', erase: 'Click a road or roundabout to remove it' };
+  ? { road: 'Hold, then drag to draw a road. Tap to keep going from the pin', curve: 'Hold, then drag to draw. Then drag to bend it', signal: 'Tap a junction for lights', ring: 'Tap a junction or road for a roundabout', oneway: 'Tap a road to switch its direction', lanes: 'Tap a road for more lanes', erase: 'Tap a road or roundabout to remove it' }
+  : { road: 'Click to start, click to place. It keeps going from the end', curve: 'Click the start, click the end, then move to bend and click', signal: 'Click a junction for lights', ring: 'Click a junction or road for a roundabout', oneway: 'Click a road to switch its direction', lanes: 'Click a road for more lanes', erase: 'Click a road or roundabout to remove it' };
 const T = { tool: '', pts: [], pend: null, bend: null, draw: null, hover: null, mouse: null, plan: null };
 function setTool(t) {
   T.tool = T.tool === t ? '' : t; T.pts = []; T.pend = null; T.bend = null; T.draw = null; previewMesh.visible = false; hoverMesh.visible = false; pin.visible = false;
@@ -280,6 +282,12 @@ function hoverUpdate() {
     return;
   }
   if (T.tool === 'oneway') { const h = net.nearestEdge(m[0], m[1], R); if (h && !h.e.ring) { T.hover = { e: h.e }; ribbon(hoverMesh, h.e.pts, hwOf(h.e) + .6); } return; }
+  if (T.tool === 'lanes') {   // show how wide it will be, and what it becomes
+    const h = net.nearestEdge(m[0], m[1], R); if (!h || h.e.ring) { hint(); return; }
+    const [nl, tl] = net.nextLanes(h.e); T.hover = { e: h.e };
+    ribbon(hoverMesh, h.e.pts, hwOf({ ...h.e, nl, tl }) + .6); hint(`${touch ? 'Tap' : 'Click'} for ${laneName(nl, tl)}`); $('hint').classList.remove('bad');
+    return;
+  }
   if (T.tool === 'signal') {
     let best = null, bd = Math.max(16, R); for (const n of net.nodes.values()) { if (n.edges.size < 3) continue; const d = Math.hypot(n.x - m[0], n.z - m[1]); if (d < bd) { bd = d; best = n; } }
     if (best) { T.hover = { n: best }; ringShape(hoverMesh, best.x, best.z, best.trim + 1, best.trim + 3); if (best.sig) hoverMesh.material.color.setRGB(1, .75, .3); }
@@ -332,6 +340,10 @@ function click(x, z) {
     else if (h.e) { const pts = h.e.pts; net.removeEdge(h.e.id); afterEdit(pts, [1, .45, .3]); }
     T.hover = null; return;
   }
+  if (t === 'lanes') {
+    if (!h) return; const r = net.cycleLanes(h.e.id); if (!r) return;
+    afterEdit(net.roadChain(h.e).flatMap(e => e.pts)); toast(laneName(r.nl, r.tl) + (r.lights ? ' · lights added' : '')); hoverUpdate(); return;
+  }
   if (t === 'oneway') { if (!h) return; const r = net.cycleOneWay(h.e.id); if (r != null) { afterEdit(h.e.pts); toast(r === 0 ? 'Two-way' : 'One-way'); } return; }
   if (t === 'signal') {
     if (!h) return; if (h.n.ring) return toast('Roundabouts don\'t need lights', true);
@@ -346,15 +358,27 @@ function click(x, z) {
 }
 
 // ---------------- input ----------------
-// phones: with Road or Curve picked, one finger draws and two fingers move the map
+// phones: a quick drag always moves the map; with Road or Curve picked, press and hold, then drag, to draw.
+// Two fingers turn, tilt and zoom. Bending a curve that's waiting: plain drag.
 const ptrs = new Map(); let drag = null, pinch = null;
+const HOLD = 260;   // ms to hold still before a drag draws
 const drawing = e => e.pointerType !== 'mouse' && (T.tool === 'road' || T.tool === 'curve');
+function startDraw(d, sure = false) {   // the finger has been held still: from here on this drag draws
+  if (drag !== d || ptrs.size !== 1 || (d.moved > 6 && !sure) || !d.g0 || d.draw) return;
+  d.draw = true; d.held = true; const q = net.probe(d.g0[0], d.g0[1], snapR()); d.start = q.n ? [q.n.x, q.n.z] : q.p;
+  cursor.position.set(d.start[0], .35, d.start[1]); cursor.visible = true; burst(d.start[0], d.start[1], 18, [.5, .95, 1], 3);
+  if (navigator.vibrate) navigator.vibrate(12);
+  hint(T.tool === 'road' ? 'Drag to where the road ends' : 'Drag to where the curve ends'); $('hint').classList.remove('bad');
+}
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('pointerdown', e => {
   canvas.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
   sound.start();
-  if (ptrs.size === 1) { const g = groundAt(e.clientX, e.clientY); drag = { x0: e.clientX, y0: e.clientY, btn: e.button, moved: 0, g0: g, draw: drawing(e) && e.button === 0 }; if (drag.draw && g) { const q = net.probe(g[0], g[1], snapR()); drag.start = q.n ? [q.n.x, q.n.z] : q.p; } }
-  else { drag = null; if (T.draw) { T.draw = null; previewMesh.visible = false; hint(); } }
+  if (ptrs.size === 1) {
+    const g = groundAt(e.clientX, e.clientY); drag = { x0: e.clientX, y0: e.clientY, t0: e.timeStamp, btn: e.button, moved: 0, g0: g, draw: false };
+    if (drawing(e) && e.button === 0) { if (T.tool === 'curve' && T.pend) drag.draw = true; else { const d = drag; d.mayDraw = true; d.timer = setTimeout(() => startDraw(d), HOLD); } }
+  }
+  else { if (drag) clearTimeout(drag.timer); drag = null; if (T.draw) { T.draw = null; previewMesh.visible = false; hint(); } }
   if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), ang: Math.atan2(b.y - a.y, b.x - a.x), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, g0: groundAt((a.x + b.x) / 2, (a.y + b.y) / 2) }; }
 });
 canvas.addEventListener('pointermove', e => {
@@ -371,6 +395,12 @@ canvas.addEventListener('pointermove', e => {
   }
   if (!drag) return;
   const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0; drag.moved = Math.max(drag.moved, Math.hypot(dx, dy));
+  // first real movement decides, by the touch's own timestamps (timers run late on a busy phone):
+  // held still long enough first = draw, else = move the map
+  if (drag.mayDraw && !drag.checked && drag.moved > 6) {
+    drag.checked = true; clearTimeout(drag.timer);
+    if (e.timeStamp - drag.t0 >= HOLD) startDraw(drag, true); else if (drag.draw) { drag.draw = drag.held = false; hint(); }
+  }
   if (drag.draw) {
     if (drag.moved < 10) return;
     const g = groundAt(e.clientX, e.clientY); if (!g) return;
@@ -385,6 +415,7 @@ function up(e) {
   const had = ptrs.has(e.pointerId); ptrs.delete(e.pointerId);
   if (ptrs.size < 2) pinch = null;
   if (!had || !drag) return;
+  clearTimeout(drag.timer);
   const g = groundAt(e.clientX, e.clientY);
   if (drag.draw && drag.moved >= 10 && g) {
     if (T.tool === 'curve' && T.pend) place(T.pend[0], T.pend[1], g);
@@ -396,6 +427,7 @@ function up(e) {
     hoverUpdate(); drag = null; return;
   }
   if (drag.btn === 2 && drag.moved < 6) { T.pts = []; T.pend = null; previewMesh.visible = false; hint(); hoverUpdate(); drag = null; return; }
+  if (drag.draw && drag.moved < 10) { hint(); drag = null; return; }   // held but didn't drag: nothing
   if (drag.btn === 0 && drag.moved < 10 && g) { click(g[0], g[1]); if (e.pointerType === 'mouse') { T.mouse = g; hoverUpdate(); } }
   drag = null;
 }
@@ -410,7 +442,7 @@ const keys = new Set();
 addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   keys.add(e.code);
-  const n = '123456'.indexOf(e.key); if (n >= 0) setTool(TOOLS[n]);
+  const n = '1234567'.indexOf(e.key); if (n >= 0) setTool(TOOLS[n]);
   if (e.code === 'Escape') { if (T.pend) T.pend = null; else if (T.pts.length) T.pts = []; else setTool(''); previewMesh.visible = false; hint(); hoverUpdate(); }
   if (e.code === 'Space') { e.preventDefault(); setSpeed(S.speed ? 0 : (S.lastSpeed || 1)); }
   if (e.code === 'KeyT') toggleView();
@@ -669,7 +701,7 @@ requestAnimationFrame(frame);
 // test hooks
 window.FT = {
   dbg() { return { shadowOn: renderer.shadowMap.enabled, sunCast: sun.castShadow, map: !!sun.shadow.map, ms: sun.shadow.mapSize.x, bg: scene.background && scene.background.isTexture, env: !!scene.environment, cam: sun.shadow.camera.right, sunPos: sun.position.toArray().map(Math.round), q: qName, prog: renderer.info.programs.length }; },
-  get net() { return net; }, hover(x, z) { T.mouse = [x, z]; hoverUpdate(); }, get T() { return T; }, get city() { return city; }, get S() { return S; }, cam, placeCamera, setTool, click, setSpeed, toggleView,
+  get net() { return net; }, along, toScreen(x, z) { const v = new THREE.Vector3(x, 0, z).project(camera), r = canvas.getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; }, hover(x, z) { T.mouse = [x, z]; hoverUpdate(); }, get T() { return T; }, get city() { return city; }, get S() { return S; }, cam, placeCamera, setTool, click, setSpeed, toggleView,
   step(sec) { for (let t = 0; t < sec; t += .1) simStep(.1); },
   render() { if (net.ver !== seenNet) rebuildRoads(); if (city.ver !== seenCity) rebuildCity(); lighting((S.time / DAY * 24) % 24); drawCars(); updatePeds(.05, U.uNight.value); drawSignals(); paintOverlay(); drawJams(1); renderer.render(scene, camera); },
   setHour(h) { S.time = Math.floor(S.time / DAY) * DAY + h / 24 * DAY; },

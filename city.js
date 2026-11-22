@@ -1,5 +1,5 @@
 // The city: street plan, buildings, growth and the trips people make. No drawing here.
-import { rng, closestOnPoly } from './net.js';
+import { rng, closestOnPoly, halfW, ROAD_W } from './net.js';
 
 export const BLOCK = 100;          // street grid spacing (m)
 export const CHUNK = 3;            // blocks per district side
@@ -35,16 +35,17 @@ export function createCity(net, seed = 7) {
 
   // does a rectangle (centre, half sizes, angle) touch any road?
   function hitsRoad(x, z, hw, hd, rot, pad = ROAD_CLEAR) {
-    const c = Math.cos(rot), s = Math.sin(rot), R = Math.hypot(hw, hd) + pad + 3;
+    const c = Math.cos(rot), s = Math.sin(rot), R0 = Math.hypot(hw, hd) + pad + 3;
     for (const e of net.edges.values()) {
       const A = e.pts[0], B = e.pts[e.pts.length - 1];
+      const xw = Math.max(0, halfW(e) - ROAD_W / 2), R = R0 + xw, pd = pad + xw;   // wider roads clear more
       if (Math.min(A[0], B[0], e.cx) - R > x || Math.max(A[0], B[0], e.cx) + R < x || Math.min(A[1], B[1], e.cz) - R > z || Math.max(A[1], B[1], e.cz) + R < z) continue;
       const step = 1.5;
       for (let d = 0; d <= e.len; d += step) {
         const i = Math.min(e.pts.length - 1, Math.round(d / e.len * (e.pts.length - 1)));
         const p = e.pts[i]; const dx = p[0] - x, dz = p[1] - z;
         const lx = dx * c + dz * s, lz = -dx * s + dz * c;
-        if (Math.abs(lx) < hw + pad && Math.abs(lz) < hd + pad) return true;
+        if (Math.abs(lx) < hw + pd && Math.abs(lz) < hd + pd) return true;
       }
     }
     return false;
@@ -171,7 +172,12 @@ export function createCity(net, seed = 7) {
       }
       for (let k = 0; k < 2; k++) if (r() < .5) { const z = z0 + r() * S; for (let x = x0; x < x0 + S; x += 7 + r() * 5) out.push([x, z + (r() - .5) * 3, .6 + r() * .4, r()]); }
     }
-    return out.length > 3800 ? out.filter((_, k) => k % Math.ceil(out.length / 3800) === 0) : out;
+    // no trees on roads built out there (a grid of road points, checked after placing so nothing else moves)
+    const cell = 16, grid = new Map(), key = (x, z) => (Math.floor(x / cell) + 2000) * 5000 + Math.floor(z / cell) + 2000;
+    for (const e of net.edges.values()) { const w = halfW(e) + 4.5; for (const p of e.pts) { const k = key(p[0], p[1]); if (!grid.has(k)) grid.set(k, []); grid.get(k).push([p[0], p[1], w]); } }
+    const clear = t => { const cx = Math.floor(t[0] / cell), cz = Math.floor(t[1] / cell); for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) { const L = grid.get((cx + i + 2000) * 5000 + cz + j + 2000); if (L) for (const q of L) if (Math.hypot(q[0] - t[0], q[1] - t[1]) < q[2]) return false; } return true; };
+    const kept = out.filter(clear);
+    return kept.length > 3800 ? kept.filter((_, k) => k % Math.ceil(kept.length / 3800) === 0) : kept;
   };
   C.bounds = function () {
     let a = 1e9, b = -1e9, c = 1e9, d = -1e9;

@@ -99,7 +99,7 @@
     .tileBtn { width:42px; height:42px; padding:10px; }
     #bar { flex-wrap:wrap; justify-content:center; width:calc(100vw - 16px); gap:5px; padding:5px; }
     #tools { gap:5px; } .sep { display:none; }
-    #tools button, #viewBtn { min-width:0; width:calc((100vw - 16px - 10px - 30px) / 7); height:54px; font-size:10px; padding:6px 2px 4px; }
+    #tools button, #viewBtn { min-width:0; width:calc((100vw - 16px - 10px - 35px) / 8); height:54px; font-size:10px; padding:6px 2px 4px; }
     #speed { width:100%; } #speed button { flex:1; height:36px; }
     #tools button kbd { display:none; }
     #tools button .lg { display:none; } #tools button .sh { display:inline; }
@@ -141,7 +141,8 @@
     <button data-tool="signal" aria-label="Lights"><kbd>3</kbd><svg viewBox="0 0 24 24"><rect x="8" y="2.5" width="8" height="15" rx="2"/><circle cx="12" cy="6.5" r="1.2"/><circle cx="12" cy="10" r="1.2"/><circle cx="12" cy="13.5" r="1.2"/><path d="M12 17.5V22"/></svg>Lights</button>
     <button data-tool="ring" aria-label="Roundabout"><kbd>4</kbd><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg><span class="lg">Roundabout</span><span class="sh">Round</span></button>
     <button data-tool="oneway" aria-label="One way"><kbd>5</kbd><svg viewBox="0 0 24 24"><path d="M3 12h16M14 7l5 5-5 5"/></svg>One-way</button>
-    <button data-tool="erase" aria-label="Remove"><kbd>6</kbd><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>Remove</button>
+    <button data-tool="lanes" aria-label="Lanes"><kbd>6</kbd><svg viewBox="0 0 24 24"><path d="M3 21 6 3M21 21 18 3M12 4v2.5M12 10v2.5M12 16v2.5"/><path d="M8.5 17.5v-5l-1.8 1.8M8.5 12.5l1.8 1.8"/></svg>Lanes</button>
+    <button data-tool="erase" aria-label="Remove"><kbd>7</kbd><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>Remove</button>
     <button id="viewBtn" aria-label="Traffic view"><svg viewBox="0 0 24 24"><path d="M3 18h5M11 18h3M17 18h4M3 12h9M15 12h6M3 6h3M9 6h12"/></svg>Traffic</button>
   </div>
   <div class="sep"></div>
@@ -157,7 +158,7 @@
   <div class="panel guide sign">
     <h1>FLOWTOWN</h1>
     <h2>Keep the city moving</h2>
-    <div class="big">The city never stops growing. Rebuild its streets with <b>roads, curves, lights, roundabouts and one-ways</b> before the traffic locks up.</div>
+    <div class="big">The city never stops growing. Rebuild its streets with <b>roads, curves, lights, roundabouts, one-ways and extra lanes</b> before the traffic locks up.</div>
     <div class="btns">
       <button id="playBtn" class="main"><span>Play</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg></button>
       <button id="newBtn" style="display:none">New city</button>
@@ -174,7 +175,7 @@
       <b>Move</b><span>Drag, or W A S D</span>
       <b>Turn and tilt</b><span>Right-drag, Q E, or two fingers</span>
       <b>Zoom</b><span>Scroll or pinch</span>
-      <b>Tools</b><span>1 to 6, Esc to drop</span>
+      <b>Tools</b><span>1 to 7, Esc to drop</span>
       <b>Pause</b><span>Space</span>
       <b>Traffic view</b><span>T</span>
     </div>

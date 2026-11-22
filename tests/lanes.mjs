@@ -1,0 +1,81 @@
+// Multi-lane roads and turn lanes: node tests/lanes.mjs [hours]
+// 1) a single crossroads of wide roads: lane arrows are right, left turns use the turn lane
+// 2) the same city run twice (same random numbers): plain streets vs. wide avenues with turn lanes
+import { Net, rng } from '../net.js';
+import { createCity, DAY } from '../city.js';
+let fails = 0;
+const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + name + (info ? '  ' + info : '')); if (!ok) fails++; };
+const hours = +(process.argv[2] || 24);
+
+// ---- 1) one crossroads ----
+{
+  const net = new Net();
+  net.addRoad([-200, 0], [200, 0]); net.addRoad([0, -200], [0, 200]);
+  for (const e of net.edges.values()) { e.nl = 2; e.tl = 1; }
+  net.ver++; net.rebuild();
+  const c = [...net.nodes.values()].find(n => n.edges.size === 4);
+  const ins = c.ins, pockets = ins.filter(l => l.pk);
+  check('crossroads has 4 turn lanes', pockets.length === 4, `${pockets.length}`);
+  check('every lane goes somewhere', ins.every(l => l.next.length > 0));
+  const names = l => ['', 'straight', 'right', 'straight+right', 'left', 'straight+left', 'right+left', 'all'][l.mv & 7];
+  const a = ins.filter(l => l.edge === ins[0].edge).sort((p, q) => (p.pk ? 9 : p.li) - (q.pk ? 9 : q.li)).map(names);
+  check('lane arrows: kerb straight+right, middle straight, turn lane left', a.join(',') === 'straight+right,straight,left', a.join(','));
+  // drive: from the west end to the north end (a left turn for eastbound traffic)
+  const W = [...net.edges.values()].find(e => Math.min(net.nodes.get(e.a).x, net.nodes.get(e.b).x) < -100);
+  const N = [...net.edges.values()].find(e => Math.min(net.nodes.get(e.a).z, net.nodes.get(e.b).z) < -100);
+  let usedPocket = 0, arrived = 0, lat = 0;
+  for (let t = 0; t < 900; t++) {
+    if (t % 25 === 0) net.spawn({ e: W, x: -150, z: 0 }, { e: N, x: 0, z: -150 });
+    if (t % 31 === 0) net.spawn({ e: W, x: -150, z: 0 }, { e: W, x: 150, z: 0 }) || 0;
+    net.step(.1);
+    for (const car of net.cars) { if (car.lane.pk) car.usedPk = 1; if (car.lat) lat++; }
+  }
+  for (let t = 0; t < 3000; t++) { net.step(.1); for (const car of net.cars) if (car.lane.pk) car.usedPk = 1; }
+  void usedPocket; void arrived;
+  const st = net.stats;
+  check('cars finish their trips', st.arrived >= 30 && net.cars.length === 0, JSON.stringify({ arrived: st.arrived, left: net.cars.length, gaveUp: st.gaveUp }));
+  check('cars change lanes smoothly (sideways drift seen)', lat > 0);
+  // left turners: did they go through the turn lane?
+  const net2 = new Net(); net2.addRoad([-200, 0], [200, 0]); net2.addRoad([0, -200], [0, 200]);
+  for (const e of net2.edges.values()) { e.nl = 2; e.tl = 1; } net2.ver++; net2.rebuild();
+  const W2 = [...net2.edges.values()].find(e => Math.min(net2.nodes.get(e.a).x, net2.nodes.get(e.b).x) < -100);
+  const N2 = [...net2.edges.values()].find(e => Math.min(net2.nodes.get(e.a).z, net2.nodes.get(e.b).z) < -100);
+  const car = net2.spawn({ e: W2, x: -150, z: 0 }, { e: N2, x: 0, z: -150 });
+  check('a left-turning car plans through the turn lane', typeof car === 'object' && car.route.some(l => l.pk), car.route && car.route.map(l => l.key).join(' '));
+  let seen = false; for (let t = 0; t < 1500 && net2.cars.length; t++) { net2.step(.1); if (car.lane.pk) seen = true; }
+  check('...and drives through it', seen && net2.stats.arrived === 1);
+}
+
+// ---- 2) a whole city, twice ----
+function run(wide) {
+  const R = rng(99); const orig = Math.random; Math.random = R;
+  const net = new Net(), city = createCity(net, 7);
+  for (let i = 0; i < 3; i++) { const d = city.nextDistrict(); city.unlock(d[0], d[1]); }
+  city.sync();
+  let changed = 0;
+  let lights = 0;
+  if (wide) for (const e of [...net.edges.values()]) {   // the Lanes tool on every avenue, until 2 lanes + turn lanes
+    if (e.kind !== 'avenue' || e.ring) continue;
+    for (let k = 0; k < 5 && !(e.nl === 2 && e.tl === 1); k++) { const r = net.cycleLanes(e.id); lights += r.lights; changed++; }
+  }
+  const gone = city.sync().length;
+  const dt = .1, steps = Math.round(hours / 24 * DAY / dt); let stuckMax = 0, pk = 0, multi = 0, maxMs = 0;
+  for (let i = 0; i < steps; i++) {
+    const hour = (6 + i * dt / DAY * 24) % 24;
+    city.demand(dt, hour); city.release(dt);
+    const t0 = performance.now(); net.step(dt); maxMs = Math.max(maxMs, performance.now() - t0);
+    for (const c of net.cars) { if (!isFinite(c.x) || !isFinite(c.s)) throw new Error('NaN'); if (c.lane.pk) pk++; else if (c.lane.li) multi++; }
+    stuckMax = Math.max(stuckMax, net.cars.filter(c => c.stuck > 20).length);
+  }
+  Math.random = orig;
+  const s = net.stats;
+  return { changed, lights, buildingsCleared: gone, arrived: s.arrived, gaveUp: s.gaveUp, avgTrip: +(s.tripSec / s.arrived).toFixed(1), stuckMax, carSecsInTurnLanes: Math.round(pk * dt), carSecsInInnerLanes: Math.round(multi * dt), stepMaxMs: +maxMs.toFixed(1) };
+}
+const plain = run(false), wide = run(true);
+console.log('plain streets ', plain);
+console.log('wide avenues  ', wide);
+check('wide roads get used', wide.carSecsInTurnLanes > 0 && wide.carSecsInInnerLanes > 0);
+check('no more drivers give up than with plain streets (+5)', wide.gaveUp <= plain.gaveUp + 5);
+check('more trips get done', wide.arrived > plain.arrived);
+console.log(fails ? fails + ' FAILED' : 'ALL PASSED');
+process.exit(fails ? 1 : 0);
