@@ -8,7 +8,7 @@ city.sync();
 const MODE = process.env.MODE || '';
 if (MODE) { let n = 0, fail = {};
   for (const node of [...net.nodes.values()]) { if (!net.nodes.has(node.id) || node.ring || node.edges.size < 3) continue;
-    if (MODE === 'sig') { net.toggleSignal(node.id); n++; }
+    if (MODE === 'sig') { if (!node.sig) net.toggleSignal(node.id); n++; }
     if (MODE === 'ring') { const r = net.makeRoundabout(node.id); if (typeof r === 'number') n++; else fail[r] = (fail[r] || 0) + 1; }
   }
   const gone = city.sync(); console.log(MODE, 'changed', n, fail, 'buildings lost', gone.length);

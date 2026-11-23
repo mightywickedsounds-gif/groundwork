@@ -1,11 +1,13 @@
 // The city: street plan, buildings, growth and the trips people make. No drawing here.
-import { rng, closestOnPoly, halfW, ROAD_W } from './net.js';
+import { rng, closestOnPoly, halfW, ROAD_W, WALK_W, along } from './net.js';
 
 export const BLOCK = 100;          // street grid spacing (m)
 export const CHUNK = 3;            // blocks per district side
 export const SPAN = 3;             // districts out from the centre each way (7 x 7 districts)
 export const DAY = 480;            // seconds of game time per day at 1x
-const SETBACK = 9.5;               // road centre to first building line
+const TRIPS = .0036;               // trips started per resident per second at rush = 1 (a suburb: everyone drives)
+const SETBACK = 9.5;               // road centre to the lot line on a neighbourhood street
+const SETBACK_AV = 13;             // ... on an arterial (2 lanes each way + a turn lane)
 const ROAD_CLEAR = 6.2;            // road centre to sidewalk edge (buildings must stay outside)
 
 const hash = (a, b, c = 0) => { let h = (a * 374761393 + b * 668265263 + c * 2147483647) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
@@ -31,7 +33,7 @@ export function createCity(net, seed = 7) {
   order.sort((a, b) => a.r - b.r);
   C.order = order.map(o => [o.i, o.j]);
 
-  const zoneOf = (x, z) => { const r = Math.hypot(x, z); return r < 230 ? 'down' : r < 560 ? 'mid' : 'sub'; };
+  const zoneOf = (x, z) => Math.hypot(x, z) < 175 ? 'core' : 'home';   // arterial frontage is 'corridor' (by road kind)
 
   // does a rectangle (centre, half sizes, angle) touch any road?
   function hitsRoad(x, z, hw, hd, rot, pad = ROAD_CLEAR) {
@@ -51,78 +53,142 @@ export function createCity(net, seed = 7) {
     return false;
   }
 
+  // how far each side of a rectangle must move in so no road comes closer than pad: [+x, -x, +z, -z] in its own frame
+  function cutsFor(x, z, hw, hd, rot, pad) {
+    const c = Math.cos(rot), s = Math.sin(rot), R0 = Math.hypot(hw, hd) + pad + 3, cuts = [0, 0, 0, 0];
+    let hit = false;
+    for (const e of net.edges.values()) {
+      const xw = Math.max(0, halfW(e) - ROAD_W / 2), R = R0 + xw, pd = pad + xw;
+      const A = e.pts[0], B = e.pts[e.pts.length - 1];
+      if (Math.min(A[0], B[0], e.cx) - R > x || Math.max(A[0], B[0], e.cx) + R < x || Math.min(A[1], B[1], e.cz) - R > z || Math.max(A[1], B[1], e.cz) + R < z) continue;
+      for (let d = 0; d <= e.len; d += 1.5) {
+        const p = e.pts[Math.min(e.pts.length - 1, Math.round(d / e.len * (e.pts.length - 1)))], dx = p[0] - x, dz = p[1] - z;
+        const lx = dx * c + dz * s, lz = -dx * s + dz * c;
+        if (Math.abs(lx) >= hw + pd || Math.abs(lz) >= hd + pd) continue;
+        hit = true;
+        const need = [hw - lx + pd, hw + lx + pd, hd - lz + pd, hd + lz + pd]; let k = 0; for (let i = 1; i < 4; i++) if (need[i] < need[k]) k = i;   // the nearest side gives way
+        cuts[k] = Math.max(cuts[k], need[k]);
+      }
+    }
+    return hit ? cuts : null;
+  }
+  // a road came through: cut the building (or lot) back from it instead of knocking it down, if enough is left
+  function cutBack(b, pad, minSide, minShare) {
+    const rot = b.rot || 0, cuts = cutsFor(b.x, b.z, b.w / 2, b.d / 2, rot, pad); if (!cuts) return true;
+    const x0 = -b.w / 2 + cuts[1], x1 = b.w / 2 - cuts[0], z0 = -b.d / 2 + cuts[3], z1 = b.d / 2 - cuts[2];
+    const w = x1 - x0, d = z1 - z0;
+    if (w < minSide || d < minSide || w * d < b.w * b.d * minShare) return false;
+    const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2, c = Math.cos(rot), s = Math.sin(rot);
+    const nb = { x: b.x + mx * c - mz * s, z: b.z + mx * s + mz * c, w, d };
+    if (hitsRoad(nb.x, nb.z, w / 2, d / 2, rot, pad)) return false;
+    const k = w * d / (b.w * b.d);
+    if (b.res && b.kind !== 'house') b.res = Math.max(1, Math.round(b.res * k));
+    if (b.jobs) b.jobs = Math.max(1, Math.round(b.jobs * k));
+    b.x = +nb.x.toFixed(2); b.z = +nb.z.toFixed(2); b.w = +w.toFixed(2); b.d = +d.toFixed(2);
+    return true;
+  }
   function addBuilding(b) {
     b.id = C.bid++; C.buildings.push(b); return b;
   }
 
-  // lay out one block: buildings around the edge, park or parking or courtyard inside
+  // lay out one block, like a Central Texas Hill Country suburb: houses with yards on the neighbourhood streets,
+  // shopping strips, big stores, offices and garden apartments (parking in front) along the arterials,
+  // and a small town centre of 2-4 storey buildings near the middle. Nothing tall.
+  const CORE_R = 175;
+  const avenueLine = k => ((k % CHUNK) + CHUNK) % CHUNK === 0;
   function fillBlock(bx, bz) {
     const x0 = gx(bx), z0 = gx(bz), x1 = x0 + BLOCK, z1 = z0 + BLOCK, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
-    const zone = zoneOf(cx, cz), r = rng((bx * 9973 + bz * 7919 + seed * 31) >>> 0);
-    const roll = hash(bx, bz, seed + 5);
-    const ix0 = x0 + SETBACK, ix1 = x1 - SETBACK, iz0 = z0 + SETBACK, iz1 = z1 - SETBACK;
-    if (roll < (zone === 'sub' ? .07 : .1)) {        // park
-      const n = 26 + (r() * 14 | 0);
+    const r = rng((bx * 9973 + bz * 7919 + seed * 31) >>> 0);
+    const roll = hash(bx, bz, seed + 5), core = Math.hypot(cx, cz) < CORE_R;
+    const roadOn = { n: lineOn(0, bz, bx), s: lineOn(0, bz + 1, bx), w: lineOn(1, bx, bz), e: lineOn(1, bx + 1, bz) };
+    const av = { n: avenueLine(bz), s: avenueLine(bz + 1), w: avenueLine(bx), e: avenueLine(bx + 1) };
+    const back = k => (av[k] ? SETBACK_AV : SETBACK);           // road centre to the lot line
+    const ix0 = x0 + back('w'), ix1 = x1 - back('e'), iz0 = z0 + back('n'), iz1 = z1 - back('s');
+    if (roll < (core ? .06 : .09)) {        // a park: live oaks and cedars on open grass
+      const n = 20 + (r() * 14 | 0);
       for (let i = 0; i < n; i++) C.trees.push([ix0 + 3 + r() * (ix1 - ix0 - 6), iz0 + 3 + r() * (iz1 - iz0 - 6), .8 + r() * .5, r()]);
       C.lots.push({ k: 'park', x: cx, z: cz, w: ix1 - ix0, d: iz1 - iz0 });
       return;
     }
-    const D = zone === 'down' ? 30 : zone === 'mid' ? 24 : 21;
-    const roadOn = { n: lineOn(0, bz, bx), s: lineOn(0, bz + 1, bx), w: lineOn(1, bx, bz), e: lineOn(1, bx + 1, bz) };
-    // sides: [start, end, fixed coord, outward rotation, side key]
+    const zoneOfSide = k => core ? 'core' : av[k] && roadOn[k] ? 'corridor' : 'home';
+    const depthOf = k => ({ core: 26, corridor: 42, home: 30 })[zoneOfSide(k)];
+    const D = { n: depthOf('n'), s: depthOf('s'), w: depthOf('w'), e: depthOf('e') };
+    // sides: run from a0 to a1 along the side; f = the lot line; out = direction to the street
     const sides = [
-      { k: 'n', a0: ix0, a1: ix1, f: iz0 + D / 2, rot: 0, horiz: true },
-      { k: 's', a0: ix0, a1: ix1, f: iz1 - D / 2, rot: Math.PI, horiz: true },
-      { k: 'w', a0: iz0 + D, a1: iz1 - D, f: ix0 + D / 2, rot: Math.PI / 2, horiz: false },
-      { k: 'e', a0: iz0 + D, a1: iz1 - D, f: ix1 - D / 2, rot: -Math.PI / 2, horiz: false },
+      { k: 'n', a0: ix0, a1: ix1, f: iz0, horiz: true, out: -1 },
+      { k: 's', a0: ix0, a1: ix1, f: iz1, horiz: true, out: 1 },
+      { k: 'w', a0: iz0 + D.n, a1: iz1 - D.s, f: ix0, horiz: false, out: -1 },
+      { k: 'e', a0: iz0 + D.n, a1: iz1 - D.s, f: ix1, horiz: false, out: 1 },
     ];
+    // a rectangle in a side's frame: along a..a+len, from depth d0 to d1 in from the lot line -> world rect
+    const rectIn = (sd, a, len, d0, d1) => {
+      const m = sd.f - sd.out * (d0 + d1) / 2, al = a + len / 2;
+      return sd.horiz ? { x: al, z: m, w: len, d: d1 - d0 } : { x: m, z: al, w: d1 - d0, d: len };
+    };
+    const put = (sd, a, len, d0, d1, kind, h, roof, extra = {}) => {
+      const q = rectIn(sd, a, len, d0, d1); if (q.w < 5 || q.d < 5) return null;
+      if (hitsRoad(q.x, q.z, q.w / 2, q.d / 2, 0)) return null;
+      const floors = Math.max(1, Math.round(h / 3.4)), area = q.w * q.d;
+      let res = 0, jobs = 0;
+      if (kind === 'house') res = 3;
+      else if (kind === 'apt') { res = Math.round(area * floors / 45); jobs = Math.round(area / 400); }
+      else if (kind === 'office') jobs = Math.round(area * floors / 28);
+      else if (kind === 'big') jobs = Math.round(area / 45);
+      else jobs = Math.round(area / 30);
+      const al = a + len / 2, fx = sd.horiz ? al : sd.f + sd.out * back(sd.k), fz = sd.horiz ? sd.f + sd.out * back(sd.k) : al;
+      return addBuilding({ x: +q.x.toFixed(2), z: +q.z.toFixed(2), w: +q.w.toFixed(2), d: +q.d.toFixed(2), h: +h.toFixed(1), kind, res, jobs, roof,
+        face: sd.k, fx: +fx.toFixed(2), fz: +fz.toFixed(2), tone: +r().toFixed(3), chunk: 0, ...extra });
+    };
+    const tree = (sd, a, depth, sc) => { const q = rectIn(sd, a, 0, depth, depth); if (!hitsRoad(q.x, q.z, .5, .5, 0, 5.5)) C.trees.push([+q.x.toFixed(2), +q.z.toFixed(2), sc, r() * .7]); };
+    const lot = (sd, a, len, d0, d1) => { const q = rectIn(sd, a, len, d0, d1); if (q.w > 8 && q.d > 8 && !hitsRoad(q.x, q.z, q.w / 2, q.d / 2, 0)) C.lots.push({ k: 'parking', ...q, fill: .3 + r() * .55, seed: r() }); };
     for (const sd of sides) {
-      if (!roadOn[sd.k]) { // no street here: a row of trees instead
-        for (let a = sd.a0 + 4; a < sd.a1 - 2; a += 9 + r() * 4) C.trees.push(sd.horiz ? [a, sd.f + (r() - .5) * 8, .7 + r() * .4, r()] : [sd.f + (r() - .5) * 8, a, .7 + r() * .4, r()]);
+      const zone = zoneOfSide(sd.k), Dk = D[sd.k];
+      if (!roadOn[sd.k]) {                 // no street here: a tree line along the back fences
+        for (let a = sd.a0 + 4; a < sd.a1 - 2; a += 8 + r() * 5) tree(sd, a, 4 + r() * 8, .7 + r() * .4);
         continue;
       }
       let a = sd.a0;
-      while (a < sd.a1 - 6) {
-        let W = zone === 'down' ? 24 + r() * 18 : zone === 'mid' ? 15 + r() * 10 : 12 + r() * 5;
-        if (sd.a1 - a - W < 10) W = sd.a1 - a;
-        const mid = a + W / 2;
-        const x = sd.horiz ? mid : sd.f, z = sd.horiz ? sd.f : mid;
-        const pad = zone === 'sub' ? 3.2 : zone === 'mid' ? 1.6 : 1.2;
-        const fw = W - pad * 2, fd = D - pad * 2 - (zone === 'sub' ? 3 : 0);
-        if (fw > 5) {
-          const dist = Math.hypot(x, z);
-          let kind, h, res = 0, jobs = 0, roof = 0;
-          if (zone === 'down') { kind = r() < .78 ? 'office' : 'apt'; h = 24 + r() * r() * 95 * Math.max(.35, 1 - dist / 260); }
-          else if (zone === 'mid') { kind = r() < .58 ? 'apt' : r() < .6 ? 'shop' : 'office'; h = kind === 'shop' ? 6 + r() * 4 : 11 + r() * 20; }
-          else { kind = r() < .87 ? 'house' : 'shop'; h = kind === 'house' ? 6 + r() * 2.5 : 5 + r() * 2; roof = kind === 'house' ? 1 : 0; }
-          const floors = Math.max(1, Math.round(h / 3.3)), area = fw * fd;
-          if (kind === 'house') res = 3;
-          else if (kind === 'apt') res = Math.round(area * floors / 55);
-          else if (kind === 'office') jobs = Math.round(area * floors / 30);
-          else jobs = Math.round(area / 25);
-          if (kind === 'apt') jobs = Math.round(area / 60);   // ground floor shops
-          // front of the lot faces the street: offset from the centre toward the street (yard in back for houses)
-          const ox = sd.horiz ? 0 : (sd.k === 'w' ? -1 : 1), oz = sd.horiz ? (sd.k === 'n' ? -1 : 1) : 0;
-          const shift = zone === 'sub' ? -1.5 : 0;
-          const bxp = x + ox * shift, bzp = z + oz * shift;
-          const hw = sd.horiz ? fw / 2 : fd / 2, hd = sd.horiz ? fd / 2 : fw / 2;
-          if (!hitsRoad(bxp, bzp, hw, hd, 0)) {
-            addBuilding({ x: +bxp.toFixed(2), z: +bzp.toFixed(2), w: +(hw * 2).toFixed(2), d: +(hd * 2).toFixed(2), h: +h.toFixed(1), kind, res, jobs, roof,
-              face: sd.k, fx: +(x + ox * (D / 2 + SETBACK)).toFixed(2), fz: +(z + oz * (D / 2 + SETBACK)).toFixed(2), tone: +r().toFixed(3), chunk: 0 });
-            if (zone === 'sub' && r() < .55) C.trees.push([x - ox * (D / 2 - 2) + (r() - .5) * W * .6, z - oz * (D / 2 - 2) + (r() - .5) * W * .6, .6 + r() * .35, r()]);
+      while (a < sd.a1 - 8) {
+        if (zone === 'home') {             // a house: front yard, side yards, back yard (fences drawn later)
+          let W = 15 + r() * 4; if (sd.a1 - a - W < 11) W = sd.a1 - a;
+          const fd = 10 + r() * 4, yard = 5.5 + r() * 2, two = r() < .4;
+          put(sd, a + 2.2, W - 4.4, yard, yard + fd, 'house', two ? 6.6 + r() * .8 : 3.9 + r() * .6, 1, { lw: +W.toFixed(2), ld: Dk });
+          if (r() < .55) tree(sd, a + 3 + r() * (W - 6), 2.5 + r() * 2, .65 + r() * .35);        // front yard oak
+          if (r() < .6) tree(sd, a + 3 + r() * (W - 6), yard + fd + 4 + r() * 5, .7 + r() * .4);  // back yard tree
+          a += W;
+        } else if (zone === 'corridor') {  // along the arterial: buildings at the back, parking in front
+          const left = sd.a1 - a, q = r();
+          if (q < .22 && left > 75) {       // a big store
+            const W = Math.min(left, 70 + r() * 20), fd = 30;
+            lot(sd, a + 2, W - 4, 1, Dk - fd - 1); put(sd, a + 4, W - 8, Dk - fd, Dk, 'big', 8 + r() * 2, 0); a += W;
+          } else if (q < .62) {             // a shopping strip
+            let W = 40 + r() * 30; if (left - W < 20) W = left;
+            const fd = 17 + r() * 4;
+            lot(sd, a + 2, W - 4, 1, Dk - fd - 1); put(sd, a + 2, W - 4, Dk - fd, Dk, 'shop', 5.5 + r() * 1.5, 0); a += W;
+          } else if (q < .8) {              // an office, 2-4 storeys, parking beside it
+            let W = 34 + r() * 16; if (left - W < 20) W = left;
+            const bw = Math.min(W - 4, 20 + r() * 8), fd = 18 + r() * 6;
+            put(sd, a + 2, bw, 5, 5 + fd, 'office', 7.5 + (r() * 3 | 0) * 3.6, 0); lot(sd, a + bw + 4, W - bw - 6, 2, Dk - 2); a += W;
+          } else {                          // garden apartments, 3 storeys, pitched roof
+            let W = 36 + r() * 16; if (left - W < 20) W = left;
+            lot(sd, a + 2, W - 4, 1, 12); put(sd, a + 3, W - 6, 15, 15 + 15 + r() * 3, 'apt', 10 + r() * 1.5, 1); a += W;
           }
+        } else {                           // town centre: up to the sidewalk, shops downstairs
+          let W = 14 + r() * 14; if (sd.a1 - a - W < 10) W = sd.a1 - a;
+          const q = r(), kind = q < .45 ? 'shop' : q < .75 ? 'apt' : 'office';
+          const h = kind === 'shop' ? 5.5 + r() * 3.5 : 7.5 + (r() * 3 | 0) * 3.6;
+          put(sd, a + .6, W - 1.2, .8, Dk - 2 - r() * 4, kind, h, 0);
+          a += W;
         }
-        a += W;
       }
     }
-    // the middle of the block
-    const mx0 = ix0 + D, mx1 = ix1 - D, mz0 = iz0 + D, mz1 = iz1 - D;
+    // the middle of the block: back yards (trees), or shared parking behind the shops
+    const mx0 = ix0 + D.w, mx1 = ix1 - D.e, mz0 = iz0 + D.n, mz1 = iz1 - D.s;
     if (mx1 - mx0 > 8 && mz1 - mz0 > 8) {
-      if (zone !== 'sub' && hash(bx, bz, seed + 9) < .45) {
-        C.lots.push({ k: 'parking', x: (mx0 + mx1) / 2, z: (mz0 + mz1) / 2, w: mx1 - mx0 - 2, d: mz1 - mz0 - 2, fill: .35 + r() * .55, seed: r() });
-      } else {
-        const n = zone === 'sub' ? 3 : 6;
-        for (let i = 0; i < n; i++) C.trees.push([mx0 + 2 + r() * (mx1 - mx0 - 4), mz0 + 2 + r() * (mz1 - mz0 - 4), .6 + r() * .5, r()]);
+      const busy = core || ['n', 's', 'w', 'e'].some(k => zoneOfSide(k) === 'corridor');
+      if (busy && hash(bx, bz, seed + 9) < .5) C.lots.push({ k: 'parking', x: (mx0 + mx1) / 2, z: (mz0 + mz1) / 2, w: mx1 - mx0 - 2, d: mz1 - mz0 - 2, fill: .35 + r() * .55, seed: r() });
+      else {
+        for (let i = 0; i < 5; i++) C.trees.push([mx0 + 2 + r() * (mx1 - mx0 - 4), mz0 + 2 + r() * (mz1 - mz0 - 4), .7 + r() * .5, r()]);
         C.lots.push({ k: 'yard', x: (mx0 + mx1) / 2, z: (mz0 + mz1) / 2, w: mx1 - mx0, d: mz1 - mz0 });
       }
     }
@@ -135,17 +201,21 @@ export function createCity(net, seed = 7) {
     const k0 = i * CHUNK, l0 = j * CHUNK;
     const sx = k => gx(k), avenue = k => ((k % CHUNK) + CHUNK) % CHUNK === 0;
     // horizontal streets (along x) on lines z = l0..l0+CHUNK
-    for (let l = l0; l <= l0 + CHUNK; l++) for (let k = k0; k < k0 + CHUNK; k++) if (lineOn(0, l, k)) net.addRoad([sx(k), sx(l)], [sx(k + 1), sx(l)], null, { kind: avenue(l) ? 'avenue' : 'street' });
-    for (let k = k0; k <= k0 + CHUNK; k++) for (let l = l0; l < l0 + CHUNK; l++) if (lineOn(1, k, l)) net.addRoad([sx(k), sx(l)], [sx(k), sx(l + 1)], null, { kind: avenue(k) ? 'avenue' : 'street' });
+    // arterials: 2 lanes each way with a centre turn lane; neighbourhood streets: one lane each way
+    const ART = { kind: 'avenue', nl: 2, tl: 1 }, ST = { kind: 'street' };
+    for (let l = l0; l <= l0 + CHUNK; l++) for (let k = k0; k < k0 + CHUNK; k++) if (lineOn(0, l, k)) net.addRoad([sx(k), sx(l)], [sx(k + 1), sx(l)], null, avenue(l) ? ART : ST);
+    for (let k = k0; k <= k0 + CHUNK; k++) for (let l = l0; l < l0 + CHUNK; l++) if (lineOn(1, k, l)) net.addRoad([sx(k), sx(l)], [sx(k), sx(l + 1)], null, avenue(k) ? ART : ST);
+    // traffic lights where arterials cross
+    for (const n of net.nodes.values()) { if (n.ring || n.sig || n.edges.size < 3) continue; let a = 0; for (const id of n.edges) if (net.edges.get(id).kind === 'avenue') a++; if (a >= 3) n.sig = { phase: 0, t: 0, st: 'g' }; }
     const nb0 = C.buildings.length;
     for (let bx = k0; bx < k0 + CHUNK; bx++) for (let bz = l0; bz < l0 + CHUNK; bz++) fillBlock(bx, bz);
     for (let n = nb0; n < C.buildings.length; n++) C.buildings[n].chunk = C.unlocked.length;
     // street trees along avenues
     for (let l = l0; l <= l0 + CHUNK; l++) if (avenue(l)) for (let x = sx(k0) + 14; x < sx(k0 + CHUNK) - 10; x += 16) for (const sgn of [-1, 1]) {
-      const p = [x + (hash(x | 0, l, 3) - .5) * 3, sx(l) + sgn * 7.6]; if (!treeNearBuilding(p)) C.trees.push([p[0], p[1], .55 + hash(x | 0, l, sgn + 5) * .25, hash(x | 0, l, 9)]);
+      const p = [x + (hash(x | 0, l, 3) - .5) * 3, sx(l) + sgn * 12.4]; if (!treeNearBuilding(p)) C.trees.push([p[0], p[1], .55 + hash(x | 0, l, sgn + 5) * .25, hash(x | 0, l, 9) * .7]);
     }
     for (let k = k0; k <= k0 + CHUNK; k++) if (avenue(k)) for (let z = sx(l0) + 14; z < sx(l0 + CHUNK) - 10; z += 16) for (const sgn of [-1, 1]) {
-      const p = [sx(k) + sgn * 7.6, z + (hash(k, z | 0, 3) - .5) * 3]; if (!treeNearBuilding(p)) C.trees.push([p[0], p[1], .55 + hash(k, z | 0, sgn + 5) * .25, hash(k, z | 0, 9)]);
+      const p = [sx(k) + sgn * 12.4, z + (hash(k, z | 0, 3) - .5) * 3]; if (!treeNearBuilding(p)) C.trees.push([p[0], p[1], .55 + hash(k, z | 0, sgn + 5) * .25, hash(k, z | 0, 9) * .7]);
     }
     C.ver++;
     return true;
@@ -168,7 +238,7 @@ export function createCity(net, seed = 7) {
       const clumps = 2 + (r() * 4 | 0);
       for (let k = 0; k < clumps; k++) {
         const cx = x0 + 20 + r() * (S - 40), cz = z0 + 20 + r() * (S - 40), rad = 15 + r() * 40, n = (near ? 18 : 10) + (r() * 25 | 0);
-        for (let m = 0; m < n; m++) { const a = r() * 6.28, d = Math.sqrt(r()) * rad; out.push([cx + Math.cos(a) * d, cz + Math.sin(a) * d, .7 + r() * .6, r()]); }
+        for (let m = 0; m < n; m++) { const a = r() * 6.28, d = Math.sqrt(r()) * rad; out.push([cx + Math.cos(a) * d, cz + Math.sin(a) * d, .7 + r() * .6, .25 + r() * .75]); }   // Hill Country woods: lots of cedar
       }
       for (let k = 0; k < 2; k++) if (r() < .5) { const z = z0 + r() * S; for (let x = x0; x < x0 + S; x += 7 + r() * 5) out.push([x, z + (r() - .5) * 3, .6 + r() * .4, r()]); }
     }
@@ -191,10 +261,16 @@ export function createCity(net, seed = 7) {
     if (seenVer === net.ver) return [];
     seenVer = net.ver;
     const gone = [];
-    C.buildings = C.buildings.filter(b => { if (hitsRoad(b.x, b.z, b.w / 2, b.d / 2, 0, ROAD_CLEAR - .8)) { gone.push(b); return false; } return true; });
+    let cut = 0;
+    C.buildings = C.buildings.filter(b => {
+      if (!hitsRoad(b.x, b.z, b.w / 2, b.d / 2, b.rot || 0, ROAD_CLEAR - .8)) return true;
+      if (cutBack(b, ROAD_CLEAR - .5, 6, .35)) { cut++; return true; }   // rebuilt smaller, set back from the road
+      gone.push(b); return false;
+    });
+    C.cutBack = cut;
     const nt = C.trees.length;
     C.trees = C.trees.filter(t => !hitsRoad(t[0], t[1], .5, .5, 0, 5.5));
-    C.lots = C.lots.filter(l => !hitsRoad(l.x, l.z, l.w / 2, l.d / 2, 0, ROAD_CLEAR - .8) || (gone.push({ lot: l }), false));
+    C.lots = C.lots.filter(l => !hitsRoad(l.x, l.z, l.w / 2, l.d / 2, 0, ROAD_CLEAR - .8) || cutBack(l, ROAD_CLEAR - .5, 8, .3) || (gone.push({ lot: l }), false));
     // street for every building: a spatial hash of road samples
     const cell = 25, grid = new Map(), key = (x, z) => (Math.floor(x / cell) + 1000) * 4000 + Math.floor(z / cell) + 1000;
     for (const e of net.edges.values()) { if (e.ring) continue; const seen = new Set(); for (const p of e.pts) { const k = key(p[0], p[1]); if (seen.has(k)) continue; seen.add(k); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(e); } }
@@ -212,6 +288,69 @@ export function createCity(net, seed = 7) {
     return gone;
   };
 
+  // ---- the city grows back: empty land along any street gets new buildings, facing the street ----
+  const inCity = (x, z) => { const S = BLOCK * CHUNK, i = Math.floor((x - g0) / S), j = Math.floor((z - g0) / S); return C.unlocked.some(u => u[0] === i && u[1] === j); };
+  // do two rectangles (centre, half sizes, angle) overlap? (separating axes)
+  function overlap(a, b, m = 0) {
+    const ax = [Math.cos(a.r), Math.sin(a.r)], az = [-ax[1], ax[0]], bx = [Math.cos(b.r), Math.sin(b.r)], bz = [-bx[1], bx[0]], d = [b.x - a.x, b.z - a.z];
+    for (const n of [ax, az, bx, bz]) {
+      const ra = a.hw * Math.abs(ax[0] * n[0] + ax[1] * n[1]) + a.hd * Math.abs(az[0] * n[0] + az[1] * n[1]);
+      const rb = b.hw * Math.abs(bx[0] * n[0] + bx[1] * n[1]) + b.hd * Math.abs(bz[0] * n[0] + bz[1] * n[1]);
+      if (Math.abs(d[0] * n[0] + d[1] * n[1]) > ra + rb + m) return false;
+    }
+    return true;
+  }
+  const rectOf = b => ({ x: b.x, z: b.z, hw: b.w / 2, hd: b.d / 2, r: b.rot || 0 });
+  let regrowT = 0, commitT = 0, fresh = 0, tries = 0;
+  // one try at a new building on a street; returns it or null. Uses Math.random (new growth, not the saved street plan)
+  function tryGrow() {
+    const E = [...net.edges.values()].filter(e => !e.ring && e.len > 30); if (!E.length) return null;
+    const e = E[(Math.random() * E.length) | 0], A = net.nodes.get(e.a), B = net.nodes.get(e.b);
+    const mid = along(e.pts, e.cum, e.len / 2); if (!inCity(mid[0], mid[1])) return null;
+    const sg = Math.random() < .5 ? 1 : -1, zone = zoneOf(mid[0], mid[1]) === 'core' ? 'core' : e.kind === 'avenue' || halfW(e) > 5.5 ? 'corridor' : 'home';
+    const s0 = (A.edges.size > 1 ? net.trimOf(A) : 0) + 4, s1 = e.len - (B.edges.size > 1 ? net.trimOf(B) : 0) - 4;
+    const R = Math.random, q = R();
+    // what to build here (same mix as the street plan's blocks): [kind, frontage, depth, gap from the sidewalk, height, roof]
+    let plan;
+    if (zone === 'home') plan = ['house', 11 + R() * 4, 10 + R() * 4, 5.5 + R() * 2, R() < .4 ? 6.6 + R() * .8 : 3.9 + R() * .6, 1];
+    else if (zone === 'corridor') plan = q < .55 ? ['shop', 36 + R() * 24, 17 + R() * 4, 14, 5.5 + R() * 1.5, 0] : q < .8 ? ['office', 20 + R() * 10, 18 + R() * 6, 8, 7.5 + (R() * 3 | 0) * 3.6, 0] : ['apt', 30 + R() * 16, 15 + R() * 3, 13, 10 + R() * 1.5, 1];
+    else { const k = q < .45 ? 'shop' : q < .75 ? 'apt' : 'office'; plan = [k, 12 + R() * 14, 18 + R() * 6, .8, k === 'shop' ? 5.5 + R() * 3.5 : 7.5 + (R() * 3 | 0) * 3.6, 0]; }
+    let [kind, fw, fd0, gap, h, roof] = plan;
+    if (s1 - s0 < fw + 2) return null;
+    const front = halfW(e) + WALK_W + gap;
+    const sAt = s0 + fw / 2 + 1 + Math.random() * (s1 - s0 - fw - 2), p = along(e.pts, e.cum, sAt), r = [-p[3] * sg, p[2] * sg];
+    const rot = Math.atan2(r[1], r[0]);   // local x points away from the street
+    const near = C.buildings.filter(b => Math.abs(b.x - p[0]) < 90 && Math.abs(b.z - p[1]) < 90).map(rectOf);
+    const lots = C.lots.filter(l => Math.abs(l.x - p[0]) < 120 && Math.abs(l.z - p[1]) < 120).map(l => ({ x: l.x, z: l.z, hw: l.w / 2, hd: l.d / 2, r: 0 }));
+    for (const fd of [fd0, fd0 * .75]) {
+      if (fd < 7) continue;
+      const off = front + fd / 2, x = p[0] + r[0] * off, z = p[1] + r[1] * off;
+      if (!inCity(x, z)) continue;
+      const me = { x, z, hw: fd / 2, hd: fw / 2, r: rot };
+      if (hitsRoad(x, z, fd / 2, fw / 2, rot, ROAD_CLEAR + .3)) continue;
+      if (near.some(o => overlap(me, o, kind === 'house' ? 4.4 : 2)) || lots.some(o => overlap(me, o, .5))) continue;
+      const floors = Math.max(1, Math.round(h / 3.4)), area = fw * fd;
+      let res = 0, jobs = 0;
+      if (kind === 'house') res = 3; else if (kind === 'apt') { res = Math.round(area * floors / 45); jobs = Math.round(area / 400); }
+      else if (kind === 'office') jobs = Math.round(area * floors / 28); else jobs = Math.round(area / 30);
+      const b = addBuilding({ x: +x.toFixed(2), z: +z.toFixed(2), w: +fd.toFixed(2), d: +fw.toFixed(2), h: +h.toFixed(1), kind, res, jobs, roof,
+        face: 'r', fx: +p[0].toFixed(2), fz: +p[1].toFixed(2), tone: +Math.random().toFixed(3), chunk: C.unlocked.length, rot: +rot.toFixed(4), ...(kind === 'house' ? { lw: +(fw + 4.4).toFixed(2), ld: +(gap + fd + 12).toFixed(2) } : {}) });
+      b.e = e;
+      C.trees = C.trees.filter(t => !overlap(me, { x: t[0], z: t[1], hw: .5, hd: .5, r: 0 }, 1));
+      if (kind === 'house' && Math.random() < .6) { const bo = off + fd / 2 + 4; C.trees.push([+(p[0] + r[0] * bo).toFixed(2), +(p[1] + r[1] * bo).toFixed(2), +(.65 + Math.random() * .35).toFixed(2), +(Math.random() * .7).toFixed(2)]); }
+      return b;
+    }
+    return null;
+  }
+  // call every sim step: a few tries a second; new buildings show up together every so often (fewer redraws)
+  C.regrow = function (dt) {
+    regrowT += dt; commitT += dt; let made = 0;
+    while (regrowT >= 1.5) { regrowT -= 1.5; tries++; if (tryGrow()) { fresh++; made++; } }
+    if (fresh && commitT >= 12) { commitT = 0; const n = fresh; fresh = 0; C.ver++; C.changed = true; return n; }
+    if (commitT >= 12) commitT = 0;
+    return 0;
+  };
+
   C.totals = function () { let res = 0, jobs = 0; for (const b of C.buildings) { res += b.res; jobs += b.jobs; } return { res, jobs }; };
 
   // trips: residents leave home in the morning, come back in the evening, run errands in between
@@ -219,7 +358,7 @@ export function createCity(net, seed = 7) {
   const pick = (list, w) => { let t = 0; for (const b of list) t += w(b); let r = Math.random() * t; for (const b of list) { r -= w(b); if (r <= 0) return b; } return list[list.length - 1]; };
   C.demand = function (dt, hour, scale = 1) {
     const { res } = C.totals();
-    const rate = res * .0006 * rushCurve(hour) * scale;
+    const rate = res * TRIPS * rushCurve(hour) * scale;
     acc += rate * dt;
     const homes = C.buildings.filter(b => b.res > 0 && b.e), work = C.buildings.filter(b => b.jobs > 0 && b.e);
     if (!homes.length || !work.length) return;
@@ -254,12 +393,12 @@ export function createCity(net, seed = 7) {
 
   C.serialize = function () {
     return { unlocked: C.unlocked, bid: C.bid, seed: C.seed,
-      b: C.buildings.map(b => [b.id, b.x, b.z, b.w, b.d, b.h, b.kind, b.res, b.jobs, b.roof, b.face, b.fx, b.fz, b.tone, b.chunk]),
+      b: C.buildings.map(b => [b.id, b.x, b.z, b.w, b.d, b.h, b.kind, b.res, b.jobs, b.roof, b.face, b.fx, b.fz, b.tone, b.chunk, b.rot ? +b.rot.toFixed(4) : 0, b.lw || 0, b.ld || 0]),
       t: C.trees.map(t => t.map(v => +v.toFixed(2))), l: C.lots };
   };
   C.load = function (d) {
     C.unlocked = d.unlocked; C.bid = d.bid; C.seed = d.seed;
-    C.buildings = d.b.map(a => ({ id: a[0], x: a[1], z: a[2], w: a[3], d: a[4], h: a[5], kind: a[6], res: a[7], jobs: a[8], roof: a[9], face: a[10], fx: a[11], fz: a[12], tone: a[13], chunk: a[14] }));
+    C.buildings = d.b.map(a => ({ id: a[0], x: a[1], z: a[2], w: a[3], d: a[4], h: a[5], kind: a[6], res: a[7], jobs: a[8], roof: a[9], face: a[10], fx: a[11], fz: a[12], tone: a[13], chunk: a[14], rot: a[15] || 0, lw: a[16] || 0, ld: a[17] || 0 }));
     C.trees = d.t; C.lots = d.l; seenVer = -1; C.ver++;
   };
   return C;

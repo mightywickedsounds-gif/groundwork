@@ -1,6 +1,6 @@
 # Flowtown
 
-A traffic game you play in the browser. A city keeps growing on its own, full of cars, buses, trucks and people heading to work, home and the shops. You fly above it with magic tools and reshape the streets so traffic keeps moving. If the jams get bad enough for long enough, the city locks up.
+A traffic game you play in the browser. A suburban town in the style of the Central Texas Hill Country keeps growing on its own, full of cars, buses, trucks and people heading to work, home and the shops. You fly above it with magic tools and reshape the streets so traffic keeps moving. If the jams get bad enough for long enough, the city locks up.
 
 Play it here (from `main`, once merged): https://mightywickedsounds-gif.github.io/groundwork/
 
@@ -8,6 +8,7 @@ The old digging game still works at https://mightywickedsounds-gif.github.io/gro
 
 ## How it plays
 
+- **The city grows back.** When a new or wider road cuts through, buildings in the way are set back (rebuilt smaller) where enough of them is left, and empty land along any street fills in again with new buildings facing that street, at whatever angle it runs.
 - **The city grows by itself.** It starts with three districts. Every few in-game hours a new district opens at the edge with its own streets, homes, offices, shops, parks and parking lots. More people means more cars.
 - **Everyone has somewhere to be.** People drive from home to work in the morning rush (around 8:00), run errands at midday and drive home in the evening rush (around 17:30). Each driver picks the quickest route and switches to another way when they're stuck.
 - **Wide roads.** Any road can get 2 or 3 lanes each way and turn lanes. Drivers pick their lane early, move over when there's a gap (the car behind lets them in if they're waiting), and follow the arrows painted in each lane: the kerb lane goes straight or right, the inside lane goes straight or left, and turn lanes in the middle hold the cars turning left so the rest keep moving.
@@ -24,9 +25,9 @@ The old digging game still works at https://mightywickedsounds-gif.github.io/gro
 | Lights | 3 | Click a junction to add or remove traffic lights. |
 | Round | 4 | Tap a junction, a bend or any stretch of road to put a roundabout there. It sizes itself to fit and clears the buildings in the way. A road drawn through a roundabout joins it. |
 | One-way | 5 | Click a road: two-way, then one way, then the other way. |
-| Lanes | 6 | Click a road (the stretch between two junctions) to step it through: 1 lane + turn lanes, 2 lanes, 2 lanes + turn lanes, 3 lanes + turn lanes, back to 1 lane. Wider roads clear the buildings in the way. Where wide roads cross, traffic lights go up by themselves (remove them with Lights if you like). |
+| Lanes | 6 | Click a road (the stretch between two junctions) to step it through: 1 lane + turn lanes, 2 lanes, 2 lanes + turn lanes, 3 lanes + turn lanes, back to 1 lane. Wider roads set back or clear the buildings in the way; the street fills back in later. Where wide roads cross, traffic lights go up by themselves (remove them with Lights if you like). |
 | Remove | 7 | Click a road to remove it, or the middle of a roundabout to turn it back into a junction. |
-| Traffic view | T | Colours every lane green (moving) to red (jammed). |
+| Traffic view | T | One band per direction of each road, green (moving) to red (jammed). |
 
 Any road you build through buildings or trees clears them.
 
@@ -115,4 +116,33 @@ The owner's report: once a road was placed, trying to drag the view placed more 
 ### Round 6: phones keep matching files
 
 The owner's report: the Lanes tool wasn't working on the live site. It works on a fresh load, so the likely cause is the phone mixing files: it fetched the new page (with the Lanes button) but kept the old copy of the game code, which doesn't know the tool. The page now asks for each game file with a version number (`?v=6` in `index.html`), so a new version always loads a matching set. If a phone still shows the old game, close the tab and open the site again.
+
+### Round 7: a city that survives wide roads
+
+The owner's screenshots: after widening the whole grid (and building a rotated grid with roundabouts), the city looked empty and basic, and it didn't look real.
+
+- **Why it looked empty:** a 3-lane road with turn lanes and sidewalks is about 30 m wide, and every building it touched was knocked down. Widening every street to 3 lanes + turn lanes cleared all 205 of 205 buildings in a test city, and nothing ever came back.
+- **Buildings are set back instead:** a building in the way of a wider road is rebuilt smaller, away from the road, when at least a third of it and 6 m each way are left (fewer people or jobs to match). In the same test, 77 buildings are set back and 144 cleared, instead of all of them. Parks and parking lots are trimmed the same way.
+- **The city grows back:** empty land along any street inside the city fills in again over time, a few buildings at a time, with the kind of building that part of town has (towers downtown, apartments and shops in the middle, houses with gardens outside). Buildings face their street at whatever angle it runs, so a rotated grid gets rotated buildings. In the test, the cleared city went from 87 to 156 buildings in three days; an untouched city doesn't change (no room), so normal games play the same.
+- **Roundabouts on wide roads:** they now size themselves to fit the roads coming in (up to 30 m) and get two lanes round the ring when a wide road comes in, with a dashed line between the lanes and an edge line by the island. Both lanes can carry on round or leave (the inside lane to the exit's inside lane). In tests, two-lane roundabouts had far fewer drivers giving up (5 or 6 vs 15 to 31 on single-lane ones).
+- **Traffic view:** one band per direction down the middle of that direction's lanes, instead of a stripe on every lane, so the city is still visible underneath.
+- **Junction drawing fixes:** where roads meet at sharp angles, sidewalk could be painted over the whole junction (a big pale blob); the sidewalk now always follows the kerb. A road carrying straight on past a junction gets a straight kerb instead of a bulge. The painted median hatching looks less like a ladder.
+- **Saves:** buildings remember their angle; older saves load as before.
+- **Tests:** new checks in the lanes test (widening sets buildings back, the city regrows within a day, no regrown building overlaps another or a road, saves keep turned buildings), and the growth test now regrows like the game. Traffic (with lights, roundabouts everywhere: same range as before while keeping a third more buildings), growth (left alone, still locks up on day 3), building (0 crossings without a junction) and browser checks all pass.
+
+### Round 8: a Central Texas suburb
+
+The owner's direction: the city should look realistic, styled after a Central Texas Hill Country suburb.
+
+- **Nothing tall any more.** The glass-tower downtown is gone. New cities and new districts are laid out like a suburb:
+  - **Neighbourhoods:** houses on lots about 15 to 19 m wide, one or two storeys, in limestone, tan stucco or brick with hipped shingle roofs, a concrete driveway to the street, a front-yard oak and a wooden privacy fence round the back yard.
+  - **Along the arterials:** shopping strips with parking lots in front and a plain sign band over the shopfronts, the odd big store (mostly blank walls, a glass entrance, a big lot), 2 to 4 storey offices with parking beside them, and 3-storey garden apartments with pitched roofs. Stores have light-coloured flat roofs with air-conditioning units.
+  - **A small town centre** near the middle: 2 to 4 storey buildings up to the sidewalk, shops downstairs.
+- **Arterials** (the roads round every district) now start as 2 lanes each way with a centre two-way left-turn lane (solid yellow outside, dashed yellow inside), with traffic lights where they cross. Neighbourhood streets stay 2-lane.
+- **Trees:** live oaks (short trunk, wide low crown) and cedars (dense, dark, narrow). The woods outside town are mostly cedar. The grass is a drier olive.
+- **Regrowth** builds the same mix: houses on neighbourhood streets, shops, offices and apartments on arterials and wide roads.
+- **Traffic balance:** a suburb has fewer people than the old towers (about 1,200 in the first three districts instead of 5,600), but everyone drives, so each person makes more trips. Left alone, the city starts jamming on day 3 and locks up around day 3.5 to 4 (a little later than before, because it now starts with proper arterials and lights).
+- **Roundabouts on wide roads are a bit bigger,** leaving real ring road between the entrances. Roundabouts everywhere: 470 trips a day with 6 drivers giving up, up from 300 and 70 in this round's first try.
+- Saved cities keep the buildings they already have; their new districts come in the new style. Houses remember their lot size (for fences) in the save.
+- **Tests:** sim (636 trips a day, 6 gave up), lights everywhere (629 and 15; the test now only adds lights instead of flipping them), roundabouts everywhere (470 and 6), growth, build (0 crossings without a junction), lanes and browser checks pass. The phone hold-then-draw check failed once in five browser runs while the machine was busy with other tests. It couldn't be reproduced, and the test now reports the on-screen message if it fails again.
 

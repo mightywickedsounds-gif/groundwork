@@ -46,7 +46,7 @@ new RGBELoader().load('assets/sky.hdr', t => {
 // ground
 const grassTex = new THREE.TextureLoader().load('assets/grass.jpg', t => { t.colorSpace = THREE.SRGBColorSpace; });
 grassTex.wrapS = grassTex.wrapT = THREE.RepeatWrapping; grassTex.anisotropy = 8;
-const groundMat = new THREE.MeshStandardMaterial({ map: grassTex, roughness: 1, color: 0xb4bc96 });
+const groundMat = new THREE.MeshStandardMaterial({ map: grassTex, roughness: 1, color: 0xc4bf94 });   // drier Hill Country grass
 groundMat.onBeforeCompile = sh => {
   sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vGw;').replace('#include <uv_vertex>', '#include <uv_vertex>\n vGw = (modelMatrix * vec4(position, 1.)).xz;');
   sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vGw;\nfloat gn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f); float a = fract(sin(dot(i, vec2(12.9, 78.2)))*43758.5), b = fract(sin(dot(i+vec2(1,0), vec2(12.9, 78.2)))*43758.5), c = fract(sin(dot(i+vec2(0,1), vec2(12.9, 78.2)))*43758.5), d = fract(sin(dot(i+vec2(1,1), vec2(12.9, 78.2)))*43758.5); return mix(mix(a,b,f.x), mix(c,d,f.x), f.y); }')
@@ -158,14 +158,20 @@ function rebuildCity() {
 function buildOverlay() {
   if (overlay) { scene.remove(overlay); overlay.geometry.dispose(); }
   const pos = [], colA = [], idx = [], spans = [];
-  for (const l of net.links) {
-    const start = pos.length / 3, pts = l.pts;
+  // one band per direction of each road, down the middle of that direction's lanes (not one per lane: wide roads stay readable)
+  const groups = new Map();
+  for (const l of net.links) { const k = l.edge.id + ':' + l.dir; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(l); }
+  for (const ls of groups.values()) {
+    const kerb = ls.find(l => !l.li && !l.pk) || ls[0], main = ls.filter(l => !l.pk);
+    const shift = kerb.off - main.reduce((a, l) => a + l.off, 0) / main.length;   // from the kerb lane to the middle of the lanes (leftward)
+    const start = pos.length / 3, pts = kerb.pts, w = main.length > 1 ? 1.5 : 1.15;
     for (let i = 0; i < pts.length; i++) {
       const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)]; let dx = b[0] - a[0], dz = b[1] - a[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
-      const w = 1.25; pos.push(pts[i][0] + dz * w, .25, pts[i][1] - dx * w, pts[i][0] - dz * w, .25, pts[i][1] + dx * w); colA.push(0, 1, 0, 0, 1, 0);
+      const cx = pts[i][0] + dz * shift, cz = pts[i][1] - dx * shift;
+      pos.push(cx + dz * w, .25, cz - dx * w, cx - dz * w, .25, cz + dx * w); colA.push(0, 1, 0, 0, 1, 0);
       if (i) { const k = start + i * 2; idx.push(k - 2, k, k - 1, k - 1, k, k + 1); }
     }
-    spans.push([l, start, pts.length * 2]);
+    spans.push([ls, start, pts.length * 2]);
   }
   const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(colA, 3)); g.setIndex(idx);
   overlay = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: .8, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
@@ -179,8 +185,8 @@ function laneLoad(l) {   // 0 free .. 1 jammed
 function paintOverlay() {
   if (!overlay || !overlay.visible) return;
   const c = overlay.geometry.attributes.color;
-  for (const [l, start, n] of overlay.userData.spans) {
-    const j = laneLoad(l); const r = j < .5 ? .2 + j * 1.6 : 1, g = j < .5 ? .85 : .85 - (j - .5) * 1.6, b = .25 - j * .2;
+  for (const [ls, start, n] of overlay.userData.spans) {
+    let j = 0; for (const l of ls) j = Math.max(j, laneLoad(l)); const r = j < .5 ? .2 + j * 1.6 : 1, g = j < .5 ? .85 : .85 - (j - .5) * 1.6, b = .25 - j * .2;
     for (let k = 0; k < n; k++) c.setXYZ(start + k, r, Math.max(.08, g), Math.max(.05, b));
   }
   c.needsUpdate = true;
@@ -298,8 +304,9 @@ function hoverUpdate() {
     let n = net.nearestNode(m[0], m[1], Math.max(25, R)); if (n && (n.ring || n.edges.size < 2 && net.nearestEdge(m[0], m[1], R))) n = n.ring ? null : n;
     let at, Rr;
     if (n) { at = [n.x, n.z]; Rr = net.ringFit(n); T.hover = Rr ? { n } : { bad: 'Not enough room here' }; }
-    else { const h = net.nearestEdge(m[0], m[1], R); if (!h || h.e.ring) return; const p = along(h.e.pts, h.e.cum, h.s); at = [p[0], p[1]]; Rr = Math.min(RING_R, h.s - 7, h.e.len - h.s - 7); T.hover = Rr >= 8 ? { e: h.e, s: h.s } : { bad: 'Too close to a junction' }; if (Rr < 8) Rr = 8; }
-    ringShape(hoverMesh, at[0], at[1], (Rr || 8) - ONEWAY_W / 2, (Rr || 8) + ONEWAY_W / 2 + WALK_W);
+    else { const h = net.nearestEdge(m[0], m[1], R); if (!h || h.e.ring) return; const p = along(h.e.pts, h.e.cum, h.s); at = [p[0], p[1]]; Rr = Math.min(net.ringWant([h.e, h.e]), h.s - 7, h.e.len - h.s - 7); T.hover = Rr >= 8 ? { e: h.e, s: h.s } : { bad: 'Too close to a junction' }; if (Rr < 8) Rr = 8; }
+    const es = n ? [...n.edges].map(id => net.edges.get(id)) : T.hover.e ? [T.hover.e, T.hover.e] : [], rw = net.ringLanes(es) > 1 ? 3.8 : ONEWAY_W / 2;
+    ringShape(hoverMesh, at[0], at[1], (Rr || 8) - rw, (Rr || 8) + rw + WALK_W);
     if (T.hover.bad) hoverMesh.material.color.setRGB(1, .35, .25);
   }
 }
@@ -307,7 +314,8 @@ function afterEdit(pts, rgb = [.4, .9, 1]) {
   if (pts) burstAlong(pts, rgb);
   const gone = city.sync();
   const nb = gone.filter(g => !g.lot).length;
-  if (nb) toast(`${nb} building${nb > 1 ? 's' : ''} cleared`);
+  const cb = city.cutBack || 0;
+  if (nb || cb) toast([nb ? `${nb} building${nb > 1 ? 's' : ''} cleared` : '', cb ? `${cb} set back` : ''].filter(Boolean).join(', '));
   sound.magic();
   save();
 }
@@ -499,6 +507,8 @@ function simStep(dt) {
     S.growT = 0; const d = city.nextDistrict();
     if (d) { city.unlock(d[0], d[1]); S.districts++; city.sync(); toast('A new district opened'); const x = (d[0] * CHUNK) * BLOCK, z = (d[1] * CHUNK) * BLOCK; burst(x, z, 200, [.5, .95, 1], 120); }
   }
+  // empty land along streets fills back in (new buildings show up together every few seconds)
+  if (city.regrow(dt)) save();
   // gridlock meter
   jamT += dt;
   if (jamT >= .5) {
