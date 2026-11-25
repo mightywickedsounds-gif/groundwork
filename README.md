@@ -162,11 +162,15 @@ The owner's request: find and fix bugs, and make everything look and move more r
 - **Cars:** real car shapes instead of boxes: sedans, hatchbacks, SUVs, pickup trucks with an open bed, delivery vans, box trucks and yellow school buses, with a glass cabin, wheels, mirrors and bumpers.
 - **Driving:** the car body now follows its front and rear wheels, so cars swing smoothly through turns and roundabouts instead of turning in steps. Cars pull out from the kerb when they start a trip and pull in to the kerb when they arrive. They use their turn signals (blinking amber) when changing lanes, turning at the next junction, leaving a roundabout, pulling out and pulling in. Brake lights stay on while a car waits. At night headlights light up the road ahead.
 - **People:** walkers have arms and legs that swing as they walk, different skin tones, hair, shirts and trousers, and some are children. At a corner they now walk across to the next street instead of jumping.
+- **Street details:** traffic lights are now Texas-style mast arms: a pole at the corner with an arm over the road and a signal head (with a yellow-edged backplate) over each lane. Plain junctions have stop signs. Houses have brick mailboxes by the street. Parking lots have tall lights that light the lot at night. Flat-roofed buildings have a cornice. Some of the bigger parks have a pond.
+- **Cloud shadows** drift slowly across the town and the countryside during the day.
+- **Drivers differ:** some keep a little under the limit, some a little over, so traffic no longer moves in lockstep. Trucks and buses pull away more slowly.
+- **Roads can't be built out in the hills** ("Too far out of town"), well beyond the last district.
 - **Bugs fixed:**
   - After starting a new city (from the menu or after a game over), the green traffic-view bands showed on the map even though the Traffic button was off.
   - Red "jam" circles pulsed at ordinary traffic lights where cars were just waiting for green; they now show only where cars have waited longer than a full cycle of lights.
   - House windows flickered with a grainy pattern (a rounding problem in the window drawing).
   - Driveways and patios could disappear under the lawn when seen from a low angle.
 - **Speed:** the city now draws about as many triangles as before on High (0.82 million against 0.87 million in a test city), and about a third more on Medium, despite all the new detail.
-- **Tests:** sim (643 trips a day, 2 gave up), lights everywhere (622 and 15), roundabouts everywhere (464 and 9), growth (left alone, locks up on day 4 as before), build (0 crossings without a junction), lanes and browser checks all pass. A new random-play check (60 random edits with every tool over 8 game days, then save and reload) found no errors.
+- **Tests:** sim (619 to 627 trips a day, 5 to 11 gave up; before this round 601 to 649 and 0 to 8, it varies run to run), lights everywhere (633 and 14), roundabouts everywhere (472 and 10), growth (left alone, the meter reaches 100% just before day 4, as before), build (0 crossings without a junction), lanes and browser checks all pass. A new random-play check (60 random edits with every tool over 8 game days, then save and reload) found no errors.
 

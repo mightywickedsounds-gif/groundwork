@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { Net, RING_R, ONEWAY_W, WALK_W, LANE_W, along, closestOnPoly, laneOff } from './net.js';
 import { createCity, DAY, CHUNK, BLOCK } from './city.js';
-import { makeMaterials, buildRoads, buildCity, vehicleGeos, vehicleMaterial, makeFleet, staticCarGeo, carColor, personGeo, personMaterial, lampGeo, signalGeo, hwOf, beamMaterial } from './draw.js';
+import { makeMaterials, CLOUD, cloudUniforms, buildRoads, buildCity, vehicleGeos, vehicleMaterial, makeFleet, staticCarGeo, carColor, personGeo, personMaterial, lampGeo, signalGeo, buildSignals, hwOf, beamMaterial } from './draw.js';
 import { makeSky } from './sky.js';
 
 const $ = id => document.getElementById(id);
@@ -33,8 +33,8 @@ const sun = new THREE.DirectionalLight(0xfff1dc, 2.6); scene.add(sun); scene.add
 sun.castShadow = Q.shadows > 0;
 if (Q.shadow) { sun.shadow.mapSize.set(Q.shadow, Q.shadow); }
 sun.shadow.bias = -.0004; sun.shadow.normalBias = .6;
-const U = { uNight: { value: 0 }, uTime: { value: 0 } };
-const M = makeMaterials(renderer.capabilities.getMaxAnisotropy());
+const U = { uNight: { value: 0 }, uTime: { value: 0 }, uCloudSh: { value: 0 } };
+const M = makeMaterials(renderer.capabilities.getMaxAnisotropy(), U);
 // the sky: a dome that follows the time of day; it also lights reflections
 const sky = makeSky(renderer); scene.add(sky.mesh);
 
@@ -58,12 +58,14 @@ const groundGeo = new THREE.PlaneGeometry(12000, 12000, 160, 160).rotateX(-Math.
 { const p = groundGeo.attributes.position; for (let i = 0; i < p.count; i++) p.setY(i, hillH(p.getX(i), p.getZ(i))); groundGeo.computeVertexNormals(); }
 const groundMat = new THREE.MeshStandardMaterial({ map: grassTex, roughness: 1, color: 0xc4bf94 });   // drier Hill Country grass
 groundMat.onBeforeCompile = sh => {
-  sh.uniforms.tDry = { value: dryTex };
+  sh.uniforms.tDry = { value: dryTex }; cloudUniforms(sh);
   sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vGw; varying float vGny;').replace('#include <uv_vertex>', '#include <uv_vertex>\n vGw = (modelMatrix * vec4(position, 1.)).xyz; vGny = normal.y;');
   sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
 uniform sampler2D tDry; varying vec3 vGw; varying float vGny;
 float gh(vec2 p) { vec3 q = fract(vec3(p.xyx) * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
-float gn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f); return mix(mix(gh(i), gh(i+vec2(1,0)), f.x), mix(gh(i+vec2(0,1)), gh(i+vec2(1,1)), f.x), f.y); }`)
+float gn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f); return mix(mix(gh(i), gh(i+vec2(1,0)), f.x), mix(gh(i+vec2(0,1)), gh(i+vec2(1,1)), f.x), f.y); }
+#define pn1 gn
+${CLOUD}`)
     .replace('#include <map_fragment>', `vec2 gw = vGw.xz;
       vec4 g1 = texture2D(map, gw / 13.); vec4 g2 = texture2D(map, gw / 47. + .3); vec4 dr = texture2D(tDry, gw / 21.);
       float m = gn(gw / 90.) * .7 + gn(gw / 23.) * .3;
@@ -80,7 +82,7 @@ float gn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f); return mix
         hc = mix(hc, vec3(.62, .6, .55), rock * .6);
         gc = mix(gc, hc, hk);
       }
-      diffuseColor.rgb *= gc;`);
+      diffuseColor.rgb *= gc * (1. - csh(gw) * .45);`);
 };
 const ground = new THREE.Mesh(groundGeo, groundMat);
 ground.receiveShadow = true; scene.add(ground);
@@ -146,7 +148,7 @@ function rebuildRoads() {
   disposeGroup(lampsG); lampsG = new THREE.Group(); const L = roadsG.userData.lamps;
   if (L.length) {
     const pm = new THREE.InstancedMesh(lampGeo(), M.pole, L.length); pm.castShadow = Q.shadows > 1;
-    glowMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(.3, .06, .62), new THREE.MeshBasicMaterial({ color: 0xffd9a0, toneMapped: false }), L.length);
+    glowMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(.3, .06, .62), lampGlowMat, L.length);
     poolMesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), poolMat, L.length);
     L.forEach((l, i) => {
       dummy.position.set(l[0], 0, l[1]); dummy.rotation.set(0, l[2], 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix(); pm.setMatrixAt(i, dummy.matrix);
@@ -157,26 +159,12 @@ function rebuildRoads() {
     lampsG.add(pm, glowMesh, poolMesh);
   }
   scene.add(lampsG);
-  // traffic lights
-  disposeGroup(sigG); sigG = new THREE.Group(); sigLamps = [];
-  const heads = [];
-  for (const n of net.nodes.values()) if (n.sig) for (const L of n.ins) {
-    if (L.li || L.pk) continue;     // one pole per road, at the kerb
-    const p = along(L.pts, L.cum, L.len), h = [p[2], p[3]], r = [-h[1], h[0]], hw = hwOf(L.edge);
-    const off = hw - laneOff(L.edge, 0) + .9;
-    const px = p[0] + r[0] * off + h[0] * .4, pz = p[1] + r[1] * off + h[1] * .4, th = Math.atan2(-h[1], h[0]);
-    heads.push([px, pz, th]);
-    // lamps on the face looking back at drivers: local (-.19, y, -2.9)
-    const lx = -.2, lz = -2.9, c = Math.cos(th), s = Math.sin(th);
-    const wx = px + lx * c + lz * s, wz = pz - lx * s + lz * c;
-    sigLamps.push({ n, L, x: wx, z: wz });
-  }
-  if (heads.length) {
-    const hm = new THREE.InstancedMesh(signalGeo(), M.pole, heads.length); hm.castShadow = true;
-    heads.forEach((q, i) => { dummy.position.set(q[0], 0, q[1]); dummy.rotation.set(0, q[2], 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix(); hm.setMatrixAt(i, dummy.matrix); });
-    lampMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(.15, 8, 6), new THREE.MeshBasicMaterial({ toneMapped: false }), sigLamps.length * 3);
-    sigLamps.forEach((q, i) => { [5.2, 4.85, 4.5].forEach((y, k) => { dummy.position.set(q.x, y, q.z); dummy.rotation.set(0, 0, 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix(); lampMesh.setMatrixAt(i * 3 + k, dummy.matrix); lampMesh.setColorAt(i * 3 + k, col.setRGB(.1, .1, .1)); }); });
-    sigG.add(hm, lampMesh);
+  // traffic lights and stop signs
+  disposeGroup(sigG); const SG = buildSignals(net, M); sigG = SG.group; sigLamps = SG.lamps;
+  if (sigLamps.length) {
+    lampMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(.13, 8, 6), new THREE.MeshBasicMaterial({ toneMapped: false }), sigLamps.length);
+    sigLamps.forEach((q, i) => { dummy.position.set(q.x, q.y, q.z); dummy.rotation.set(0, 0, 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix(); lampMesh.setMatrixAt(i, dummy.matrix); lampMesh.setColorAt(i, col.setRGB(.1, .1, .1)); });
+    sigG.add(lampMesh);
   } else lampMesh = null;
   scene.add(sigG);
   buildOverlay();
@@ -188,8 +176,16 @@ const poolMat = (() => {
   return new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0, toneMapped: false });
 })();
 function rebuildCity() {
-  disposeGroup(cityG); cityG = buildCity(city, M, U, Q, { car: parkedGeo }, { wild: city.wild() }); scene.add(cityG); seenCity = city.ver;
+  disposeGroup(cityG); cityG = buildCity(city, M, U, Q, { car: parkedGeo }, { wild: city.wild() });
+  const LL = cityG.userData.lotLights;   // parking lot lights: a glowing head and a pool of light at night
+  if (LL && LL.length) {
+    const gm = new THREE.InstancedMesh(new THREE.BoxGeometry(.8, .06, .4), lampGlowMat, LL.length), pm = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), poolMat, LL.length);
+    LL.forEach((q, i) => { dummy.rotation.set(0, 0, 0); dummy.position.set(q[0], 8.88, q[1]); dummy.scale.set(1, 1, 1); dummy.updateMatrix(); gm.setMatrixAt(i, dummy.matrix); dummy.position.set(q[0], .2, q[1]); dummy.scale.set(24, 1, 24); dummy.updateMatrix(); pm.setMatrixAt(i, dummy.matrix); });
+    cityG.add(gm, pm);
+  }
+  scene.add(cityG); seenCity = city.ver;
 }
+const lampGlowMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0, toneMapped: false });
 
 // traffic view: a coloured ribbon per lane
 function buildOverlay() {
@@ -636,11 +632,13 @@ function newPed(E) {
 }
 function drawSignals() {
   if (!lampMesh) return;
+  const st = new Map();
   sigLamps.forEach((q, i) => {
-    const st = net.sigState(q.n, q.L);
-    lampMesh.setColorAt(i * 3, st === 'r' ? col.setRGB(1, .12, .06) : col.setRGB(.14, .03, .03));
-    lampMesh.setColorAt(i * 3 + 1, st === 'y' ? col.setRGB(1, .7, .08) : col.setRGB(.13, .1, .02));
-    lampMesh.setColorAt(i * 3 + 2, st === 'g' ? col.setRGB(.15, 1, .45) : col.setRGB(.02, .1, .05));
+    let v = st.get(q.L); if (v === undefined) { v = net.sigState(q.n, q.L); st.set(q.L, v); }
+    const on = (q.k === 0 && v === 'r') || (q.k === 1 && v === 'y') || (q.k === 2 && v === 'g');
+    if (q.k === 0) lampMesh.setColorAt(i, on ? col.setRGB(1, .12, .06) : col.setRGB(.14, .03, .03));
+    else if (q.k === 1) lampMesh.setColorAt(i, on ? col.setRGB(1, .7, .08) : col.setRGB(.13, .1, .02));
+    else lampMesh.setColorAt(i, on ? col.setRGB(.15, 1, .45) : col.setRGB(.02, .1, .05));
   });
   lampMesh.instanceColor.needsUpdate = true;
 }
@@ -686,9 +684,9 @@ function lighting(hour, t = performance.now() / 1000) {
   sky.update(sunDir, moonDir, night, t, camera.position, camera.far);
   sky.horizon(cam.x - camera.position.x, cam.z - camera.position.z, scene.fog.color);
   sky.env(scene);
-  U.uTime.value = t;
+  U.uTime.value = t; U.uCloudSh.value = Math.max(0, 1 - night * 1.6) * Math.min(1, sunUp * 4);
   renderer.toneMappingExposure = 1;
-  if (glowMesh) glowMesh.material.color.setRGB(.25 + night * .9, .22 + night * .75, .18 + night * .5);
+  lampGlowMat.color.setRGB(.25 + night * .9, .22 + night * .75, .18 + night * .5);
   poolMat.opacity = night * .4;
   beamMat.opacity = night * .5;
   for (const m of [M.asphalt, M.walk, M.curb, M.building, M.roof, M.bits, M.leaf, M.trunk, M.lot, M.park, M.lawn, M.shrub, groundMat, pedMat]) if (m) m.envMapIntensity = .8 * (1 - dark * .5);

@@ -76,7 +76,7 @@ export function makeSky(renderer) {
   const floorMat = new THREE.MeshBasicMaterial({ color: 0x3a3a30, side: THREE.DoubleSide });
   const floor = new THREE.Mesh(new THREE.CircleGeometry(100, 24).rotateX(-Math.PI / 2).translate(0, -2, 0), floorMat); envScene.add(floor);
   const pmrem = new THREE.PMREMGenerator(renderer);
-  let envRT = null, lastKey = '';
+  let envRT = null, lastKey = '', lastT = -1e9;
   const tmp = new THREE.Color();
   const sky = {
     mesh, U,
@@ -97,8 +97,8 @@ export function makeSky(renderer) {
     },
     // re-render the environment light when the sky has changed enough
     env(scene, force) {
-      const s = U.uSun.value, key = [s.x, s.y, s.z].map(v => Math.round(v * 12)).join() + ':' + Math.round(U.uNight.value * 10);
-      if (!force && key === lastKey) return; lastKey = key;
+      const s = U.uSun.value, key = [s.x, s.y, s.z].map(v => Math.round(v * 10)).join() + ':' + Math.round(U.uNight.value * 8), now = performance.now();
+      if (!force && (key === lastKey || now - lastT < 2500)) return; lastKey = key; lastT = now;   // at most every few seconds (it costs a few ms)
       floorMat.color.copy(sky.horizon(1, 0, tmp)).multiplyScalar(.35);
       const rt = pmrem.fromScene(envScene, 0, .1, 300);
       scene.environment = rt.texture; if (envRT) envRT.dispose(); envRT = rt;

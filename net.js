@@ -12,6 +12,7 @@ const LIMIT = 13.9;                 // 50 km/h
 const ACC = 1.6, DEC = 2.6, S0 = 2.2, HEAD = 1.15;  // IDM car following
 const GIVE_UP = 120;                // seconds stuck before a driver gives up
 export const MAX_LANES = 3;         // lanes each way
+export const MAP_EDGE = 1600;       // no roads further out (the hills round the town)
 // what the Lanes tool steps through: [lanes each way, turn lanes]
 export const LANE_STEPS = [[1, 0], [1, 1], [2, 0], [2, 1], [3, 1]];
 
@@ -96,8 +97,8 @@ export const TYPES = [            // vehicle kinds: length, width, top speed fac
   { k: 'car', len: 4.5, w: 1.85, share: .74 },
   { k: 'suv', len: 4.9, w: 2.0, share: .14 },
   { k: 'van', len: 5.6, w: 2.05, share: .07 },
-  { k: 'truck', len: 8.5, w: 2.4, share: .03, slow: .85 },
-  { k: 'bus', len: 12, w: 2.5, share: .02, slow: .8 },
+  { k: 'truck', len: 8.5, w: 2.4, share: .03, slow: .85, acc: .7 },
+  { k: 'bus', len: 12, w: 2.5, share: .02, slow: .8, acc: .65 },
 ];
 
 export class Net {
@@ -256,6 +257,7 @@ export class Net {
       if (list[k].ring && list[k].ring === list[k - 1].ring) continue;   // through a roundabout: no road across the island
       if (dist(list[k].pt, list[k - 1].pt) < 5) return { reason: 'Too close to another road' };
     }
+    for (const q of pts) if (Math.max(Math.abs(q[0]), Math.abs(q[1])) > MAP_EDGE) return { reason: 'Too far out of town' };   // the hills start out there
     return { qa, qb, a, b, cc, stops, pts };
   }
   // build a road from p0 to p1 (optional bend control c). Crossings become junctions.
@@ -705,7 +707,9 @@ export class Net {
       if (!best || c < best.c) best = { a, b, r, c };
     }
     if (!best) return 'stranded';
-    const car = { id: this.carId++, lane: best.a.lane, s: best.a.s, v: 0, len: ty.len, w: ty.w, type: ty.k, slow: ty.slow || 1,
+    // drivers differ: some keep a little under the limit, some a little over (from the colour roll, no extra random draw)
+    const temper = .92 + ((colorRoll * 7919) % 1) * .16;
+    const car = { id: this.carId++, lane: best.a.lane, s: best.a.s, v: 0, len: ty.len, w: ty.w, type: ty.k, slow: (ty.slow || 1) * temper, acc: ty.acc || 1,
       dest: best.b.lane, destKey: best.b.lane.key, destS: best.b.s, route: best.r, ri: 0, granted: null, wait: 0, stuck: 0, born: this.time,
       color: colorRoll, arrT: 0, x: 0, z: 0, hx: 1, hz: 0, rerouteT: 0, brake: 0, sig: 1, lat: 1.6, latT: 0, prev: null, side: null };   // pulls out from the kerb
     best.a.lane.cars.push(car); this.cars.push(car); this.stats.spawned++;
@@ -853,8 +857,9 @@ export class Net {
       } else car.holdT = 0;
       // IDM
       const v = car.v, dv = v - lv, ss = S0 + Math.max(0, v * HEAD + v * dv / (2 * Math.sqrt(ACC * DEC)));
-      let a = ACC * (1 - Math.pow(v / Math.max(.5, v0), 4)) - ACC * (ss / Math.max(.1, gap)) ** 2;
-      a = Math.max(-9, Math.min(ACC, a));
+      const A = ACC * (car.acc || 1);   // trucks and buses pull away more slowly
+      let a = A * (1 - Math.pow(v / Math.max(.5, v0), 4)) - A * (ss / Math.max(.1, gap)) ** 2;
+      a = Math.max(-9, Math.min(A, a));
       car.brake = a < -1 || (car.v < .3 && a < .2) ? 1 : 0;
       car.v = Math.max(0, v + a * dt);
       let mv = car.v * dt;
