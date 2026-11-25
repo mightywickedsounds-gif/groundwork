@@ -14,7 +14,7 @@ The old digging game still works at https://mightywickedsounds-gif.github.io/gro
 - **Wide roads.** Any road can get 2 or 3 lanes each way and turn lanes. Drivers pick their lane early, move over when there's a gap (the car behind lets them in if they're waiting), and follow the arrows painted in each lane: the kerb lane goes straight or right, the inside lane goes straight or left, and turn lanes in the middle hold the cars turning left so the rest keep moving.
 - **Real traffic rules.** Cars keep their distance, slow for turns, queue at junctions and don't block a junction they can't get out of. Plain junctions work first come, first served. Traffic lights switch between directions and end a green early when nobody is waiting. At roundabouts, entering cars give way to cars already on the ring.
 - **Gridlock meter (top right).** It rises while lots of drivers are stuck and when drivers give up. It falls again when traffic flows. At 100% the city locks up and the game ends (you can keep fixing it or start a new city). Red pulsing circles show the worst junctions.
-- **Day and night.** The sun moves through the day; at night windows, headlights, tail lights and street lights come on.
+- **Day and night.** The sun rises in the east, crosses the southern sky and sets in the west, with warm sunrises and sunsets, drifting clouds, and stars and a moon at night. At night windows, headlights (lighting the road ahead), tail lights and street lights come on.
 
 ## Your tools
 
@@ -51,7 +51,8 @@ The game saves in your browser every 10 seconds and when you leave. Menu → Gra
 - `net.js`: the road network and the traffic (lanes, junction rules, lights, roundabouts, route finding, car following)
 - `city.js`: the city (street plan, districts, buildings, trips)
 - `draw.js`: everything you see (roads, curbs, sidewalks, markings, buildings with windows, trees, cars, people, lights)
-- `assets/`: grass photo and sky lighting (Poly Haven, CC0); `assets/fonts/` Overpass, a highway-sign style typeface (SIL Open Font License, see `LICENSE.txt`)
+- `sky.js`: the sky (time of day, sunrise and sunset, clouds, stars and moon); it also lights the reflections
+- `assets/`: grass photo; `assets/tex/` photo textures for asphalt, sidewalks, brick, limestone, stucco, roof shingles, gravel roofs and lawns (all from Poly Haven, CC0, shrunk for the web); `assets/fonts/` Overpass, a highway-sign style typeface (SIL Open Font License, see `LICENSE.txt`)
 - `tests/`: automatic checks (see below)
 - `dig/`: the old digging game, unchanged
 
@@ -145,4 +146,27 @@ The owner's direction: the city should look realistic, styled after a Central Te
 - **Roundabouts on wide roads are a bit bigger,** leaving real ring road between the entrances. Roundabouts everywhere: 470 trips a day with 6 drivers giving up, up from 300 and 70 in this round's first try.
 - Saved cities keep the buildings they already have; their new districts come in the new style. Houses remember their lot size (for fences) in the save.
 - **Tests:** sim (636 trips a day, 6 gave up), lights everywhere (629 and 15; the test now only adds lights instead of flipping them), roundabouts everywhere (470 and 6), growth, build (0 crossings without a junction), lanes and browser checks pass. The phone hold-then-draw check failed once in five browser runs while the machine was busy with other tests. It couldn't be reproduced, and the test now reports the on-screen message if it fails again.
+
+### Round 9: a more realistic town
+
+The owner's request: find and fix bugs, and make everything look and move more realistically (graphics, driving, people, buildings, landscaping, trees, grass, sky), using real models from outside if needed.
+
+- **About outside models:** the Sketchfab connection in this workspace refused its key ("Invalid API token"), so nothing could be downloaded from there. Free 3D models from other sources were either millions of triangles (photo scans) or cartoon-style, too heavy or too toy-like for thousands of trees and cars on a phone. So the models are still made in code, but much better, and the surfaces now use **real photo textures** (Poly Haven, free CC0): asphalt with tyre marks, concrete sidewalks with joints, red brick, cream limestone blocks, stucco, roof shingles, gravel roofs and lawn grass. All of them together are under 1 MB.
+- **Sky:** the old fixed sky photo is gone. A new sky follows the clock: blue by day, orange and pink at sunrise and sunset, deep blue at dusk, a moonlit night with twinkling stars and a moon. Clouds drift across. Reflections on cars and windows come from the same sky, so they turn warm at sunset. The camera can now tilt lower (when zoomed in) to see the skyline against the sky.
+- **Sun:** it now rises in the east, passes to the south at noon and sets in the west, like in Texas, so the sides of buildings facing the usual view are lit instead of in shadow.
+- **Hill Country on the horizon:** rolling hills with dark cedar patches and pale limestone ring the town, well beyond the furthest district, fading into the haze.
+- **Buildings:** brick, limestone or stucco walls (photo textures); houses have white-trimmed windows, a garage door on the driveway side, a front door, some have a stone chimney, and shrubs along the front. Flat roofs have a parapet with a coping, gravel or white membrane with seams, smaller air-conditioning units and skylights on big stores. Shops and town-centre buildings have a canopy over the shopfronts.
+- **Yards:** every house has a lawn; back yards have a patio, and about one in five has a swimming pool with a concrete deck. Fences have pickets.
+- **Trees:** new live oaks (a short trunk splitting into long limbs under a wide, soft crown) and cedars (dense, dark, irregular). The leaves have light and shade and ragged edges instead of smooth balls, and they sway a little in the wind. Woods far outside town use simpler trees so phones keep up.
+- **Grass:** straw-coloured dry patches mixed into the green, greener mowed lawns in yards and parks.
+- **Cars:** real car shapes instead of boxes: sedans, hatchbacks, SUVs, pickup trucks with an open bed, delivery vans, box trucks and yellow school buses, with a glass cabin, wheels, mirrors and bumpers.
+- **Driving:** the car body now follows its front and rear wheels, so cars swing smoothly through turns and roundabouts instead of turning in steps. Cars pull out from the kerb when they start a trip and pull in to the kerb when they arrive. They use their turn signals (blinking amber) when changing lanes, turning at the next junction, leaving a roundabout, pulling out and pulling in. Brake lights stay on while a car waits. At night headlights light up the road ahead.
+- **People:** walkers have arms and legs that swing as they walk, different skin tones, hair, shirts and trousers, and some are children. At a corner they now walk across to the next street instead of jumping.
+- **Bugs fixed:**
+  - After starting a new city (from the menu or after a game over), the green traffic-view bands showed on the map even though the Traffic button was off.
+  - Red "jam" circles pulsed at ordinary traffic lights where cars were just waiting for green; they now show only where cars have waited longer than a full cycle of lights.
+  - House windows flickered with a grainy pattern (a rounding problem in the window drawing).
+  - Driveways and patios could disappear under the lawn when seen from a low angle.
+- **Speed:** the city now draws about as many triangles as before on High (0.82 million against 0.87 million in a test city), and about a third more on Medium, despite all the new detail.
+- **Tests:** sim (643 trips a day, 2 gave up), lights everywhere (622 and 15), roundabouts everywhere (464 and 9), growth (left alone, locks up on day 4 as before), build (0 crossings without a junction), lanes and browser checks all pass. A new random-play check (60 random edits with every tool over 8 game days, then save and reload) found no errors.
 

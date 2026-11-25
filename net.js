@@ -620,6 +620,7 @@ export class Net {
       if (!lane && car.lane.conn) { lane = this.lanes.get(car.lane.out.key); if (lane) car.s = 0; }
       if (!lane && !car.lane.conn) { lane = this.lanes.get(car.lane.edge.id + (car.lane.dir > 0 ? 'f' : 'b')); if (lane) car.s = lane.len * Math.max(0, Math.min(1, ((car.lane.Fa + car.s / car.lane.len * (car.lane.Fb - car.lane.Fa)) - lane.Fa) / ((lane.Fb - lane.Fa) || 1))); }   // its lane went: the kerb lane
       if (!lane) continue;
+      car.prev = car.prev && this.lanes.get(car.prev.key) || null; car.side = car.side && this.lanes.get(car.side.key) || null;
       car.lane = lane; car.s = Math.min(car.s, lane.len); car.granted = lane.conn ? lane : null; car.oldRoute = car.route; car.oldRi = car.ri; car.route = null; lane.cars.push(car);
       const d = this.lanes.get(car.destKey); if (!d) continue;
       car.dest = d; car.destS = Math.min(car.destS, d.len - .5);
@@ -706,7 +707,7 @@ export class Net {
     if (!best) return 'stranded';
     const car = { id: this.carId++, lane: best.a.lane, s: best.a.s, v: 0, len: ty.len, w: ty.w, type: ty.k, slow: ty.slow || 1,
       dest: best.b.lane, destKey: best.b.lane.key, destS: best.b.s, route: best.r, ri: 0, granted: null, wait: 0, stuck: 0, born: this.time,
-      color: colorRoll, arrT: 0, x: 0, z: 0, hx: 1, hz: 0, rerouteT: 0, brake: 0 };
+      color: colorRoll, arrT: 0, x: 0, z: 0, hx: 1, hz: 0, rerouteT: 0, brake: 0, sig: 1, lat: 1.6, latT: 0, prev: null, side: null };   // pulls out from the kerb
     best.a.lane.cars.push(car); this.cars.push(car); this.stats.spawned++;
     return car;
   }
@@ -797,7 +798,7 @@ export class Net {
         if (sb >= (B.pk ? .5 : car.len + 1) && sb < B.len - 1 && this.gapOK(car, B, sb)) {
           lane.cars.splice(lane.cars.indexOf(car), 1);
           let j = 0; while (j < B.cars.length && B.cars[j].s > sb) j++; B.cars.splice(j, 0, car);
-          car.lat = (car.lat || 0) + lane.off - B.off; car.lane = lane = B; car.s = sb; car.ri++; car.chgTo = null; car.chgWait = 0;
+          car.lat = (car.lat || 0) + lane.off - B.off; car.side = lane; car.prev = null; car.lane = lane = B; car.s = sb; car.ri++; car.chgTo = null; car.chgWait = 0;
         } else {
           mustBy = Math.min(lane.len, this.mapS(B, B.len, lane)) - 1.5;
           if (B === car.dest) mustBy = Math.min(mustBy, this.mapS(B, car.destS, lane) - 2);
@@ -854,7 +855,7 @@ export class Net {
       const v = car.v, dv = v - lv, ss = S0 + Math.max(0, v * HEAD + v * dv / (2 * Math.sqrt(ACC * DEC)));
       let a = ACC * (1 - Math.pow(v / Math.max(.5, v0), 4)) - ACC * (ss / Math.max(.1, gap)) ** 2;
       a = Math.max(-9, Math.min(ACC, a));
-      car.brake = a < -1 ? 1 : 0;
+      car.brake = a < -1 || (car.v < .3 && a < .2) ? 1 : 0;
       car.v = Math.max(0, v + a * dt);
       let mv = car.v * dt;
       if (gap < 1e4) mv = Math.min(mv, Math.max(0, gap - .2));
@@ -868,7 +869,7 @@ export class Net {
         const was = car.lane;
         car.s -= was.len; was.cars.splice(was.cars.indexOf(car), 1);
         if (was.conn) was.busy = Math.max(0, was.busy - 1);
-        car.ri++; car.lane = nx; nx.cars.push(car);
+        car.ri++; car.lane = nx; nx.cars.push(car); car.prev = was; car.side = null;
         if (!nx.conn) car.granted = null;
       }
       if (car.lane === car.dest && car.s >= car.destS - .5) done.push(car);
@@ -885,15 +886,39 @@ export class Net {
     for (const car of done) this.remove(car);
     // empty lanes drift back to free flow
     for (const l of this.lanes.values()) if (!l.cars.length) l.spd += (l.vmax - l.spd) * Math.min(1, dt * .05);
-    // world positions for drawing
+    // world positions for drawing: the body sits between its front and rear wheels (so it swings through turns)
     for (const car of this.cars) {
-      const p = along(car.lane.pts, car.lane.cum, car.s - car.len / 2); car.x = p[0]; car.z = p[1]; car.hx = p[2]; car.hz = p[3];
-      if (car.lat) {   // drifting across after a lane change
-        const r = Math.sign(car.lat) * Math.min(Math.abs(car.lat), dt * 1.5); car.lat -= r; if (Math.abs(car.lat) < .01) car.lat = 0;
-        car.x += -p[3] * car.lat; car.z += p[2] * car.lat;
-        const k = Math.max(-.3, Math.min(.3, -(r / dt) / Math.max(3, car.v))); let hx = p[2] - p[3] * k, hz = p[3] + p[2] * k; const L = Math.hypot(hx, hz) || 1; car.hx = hx / L; car.hz = hz / L;
+      const f = this.posAt(car, car.s - car.len * .2), r = this.posAt(car, car.s - car.len * .8);
+      let hx = f[0] - r[0], hz = f[1] - r[1]; const L = Math.hypot(hx, hz);
+      if (L > .3) { hx /= L; hz /= L; } else { hx = f[2]; hz = f[3]; }
+      car.x = (f[0] + r[0]) / 2; car.z = (f[1] + r[1]) / 2; car.hx = hx; car.hz = hz;
+      // pulling in at the end of a trip
+      if (car.lane === car.dest && car.destS - car.s < 14 && !car.lane.conn) car.latT = 1.5;
+      const want = car.latT || 0;
+      if (car.lat || want) {   // drifting across: after a lane change, pulling out, pulling in
+        const d = car.lat - want, r2 = Math.sign(d) * Math.min(Math.abs(d), dt * (want ? .9 : 1.5)); car.lat -= r2; if (Math.abs(car.lat) < .01) car.lat = 0;
+        car.x += -hz * car.lat; car.z += hx * car.lat;
+        const k = Math.max(-.3, Math.min(.3, -(r2 / dt) / Math.max(3, car.v))); let qx = hx - hz * k, qz = hz + hx * k; const Q = Math.hypot(qx, qz) || 1; car.hx = qx / Q; car.hz = qz / Q;
       }
+      // blinkers: moving over, turning at the junction ahead, pulling out (left) or in (right)
+      let sg = 0;
+      if (car.latT) sg = 2;
+      else if (car.lat > .3 && car.born > this.time - 6 && car.s < 20) sg = 1;
+      else if (car.chgTo) sg = car.chgTo.off > car.lane.off ? 2 : 1;
+      else {
+        const nx = car.lane.conn ? car.lane : car.route[car.ri + 1];
+        if (nx && nx.conn && !nx.in.edge.ring && (car.lane.conn || car.lane.len - car.s < 45)) sg = nx.turn === 1 ? 2 : nx.turn === 2 ? 1 : 0;
+        if (nx && nx.conn && nx.out.edge.ring === 0 && nx.in.edge.ring) sg = 2;   // leaving a roundabout
+      }
+      car.sig = sg;
     }
+  }
+  // a point (and heading) s metres along the car's path, reaching back onto the lane it came from
+  posAt(car, s) {
+    const l = car.lane;
+    if (s >= 0 || (!car.prev && !car.side)) return along(l.pts, l.cum, s);
+    if (car.side) return along(car.side.pts, car.side.cum, this.mapS(l, s, car.side));
+    const p = car.prev; return along(p.pts, p.cum, p.len + s);
   }
   // is there room to move into lane B at sb (cars ahead and behind far enough)?
   gapOK(car, B, sb) {
