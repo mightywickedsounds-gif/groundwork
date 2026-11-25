@@ -278,6 +278,7 @@ const HINT = touch
 const T = { tool: '', pts: [], pend: null, bend: null, draw: null, hover: null, mouse: null, plan: null };
 function setTool(t) {
   T.tool = T.tool === t ? '' : t; T.pts = []; T.pend = null; T.bend = null; T.draw = null; previewMesh.visible = false; hoverMesh.visible = false; pin.visible = false;
+  if (!T.tool) { cursor.visible = false; T.hover = null; }   // (the cursor ring used to stay on the map after dropping a tool)
   for (const b of document.querySelectorAll('#tools button[data-tool]')) b.classList.toggle('on', b.dataset.tool === T.tool);
   hint();
 }

@@ -118,7 +118,7 @@ export function makeMaterials(maxAniso = 8, U = null) {
 // ---------- roads + junctions + markings ----------
 export function buildRoads(net, M, opt = {}) {
   const A = new Geo(), W = new Geo(), K = new Geo(), MK = new Geo(), MY = new Geo(), IS = new Geo();
-  const nodes = net.nodes, ringCenters = new Map();
+  const nodes = net.nodes, ringCenters = new Map(), deco = [];
   for (const n of nodes.values()) if (n.ring && !ringCenters.has(n.ring)) ringCenters.set(n.ring, net.ringCenter(n.ring));
   const lamps = [];
   // one stretch of road along centreline c: asphalt, sidewalks, curbs, markings, lights
@@ -293,9 +293,24 @@ export function buildRoads(net, M, opt = {}) {
     const outer = pts.map(p => [p[0], p[1]]), inner = pts.map(p => [C[0] + (p[0] - C[0]) * .9, C[1] + (p[1] - C[1]) * .9]);
     W.strip([...outer, outer[0]], [...inner, inner[0]], Y_WALK + .03);
     for (let k = 0; k < 40; k++) K.wall(pts[k], pts[(k + 1) % 40], Y_ROAD - .02, Y_WALK + .03);
-    void rid;
+    // landscaping: a ring of shrubs and a few limestone boulders on the island
+    const ri = R * .9 - 1.2;
+    if (ri > 2) {
+      const n = Math.max(5, Math.round(ri * 1.2));
+      for (let k = 0; k < n; k++) { const a = k / n * Math.PI * 2 + rid, d = ri * (.55 + .35 * ((k * 7) % 3) / 2); deco.push([C[0] + Math.cos(a) * d, C[1] + Math.sin(a) * d, k % 3 === 0 ? 1 : 0, .7 + ((k * 13) % 5) / 10]); }
+      deco.push([C[0], C[1], 0, Math.min(2, ri * .35)]);
+    }
   }
   const g = new THREE.Group();
+  if (deco.length) {
+    const shrub = new THREE.IcosahedronGeometry(1, 1).scale(1, .65, 1).translate(0, .45, 0), rock = new THREE.IcosahedronGeometry(1, 0).scale(1, .55, .8).translate(0, .2, 0);
+    for (const [kind, geo, mat] of [[0, shrub, M.islandShrub || (M.islandShrub = new THREE.MeshStandardMaterial({ color: 0x3c5a2a, roughness: .9 }))], [1, rock, M.boulder || (M.boulder = new THREE.MeshStandardMaterial({ color: 0xbdb3a0, roughness: .95 }))]]) {
+      const L = deco.filter(q => q[2] === kind); if (!L.length) continue;
+      const im = new THREE.InstancedMesh(geo, mat, L.length), d = new THREE.Object3D();
+      L.forEach((q, i) => { d.position.set(q[0], Y_WALK, q[1]); d.rotation.set(0, i * 1.7, 0); d.scale.setScalar(q[3]); d.updateMatrix(); im.setMatrixAt(i, d.matrix); });
+      im.castShadow = true; im.receiveShadow = true; g.add(im);
+    }
+  }
   const add = (geo, mat, shadow = true) => { const m = new THREE.Mesh(geo.build(), mat); m.receiveShadow = shadow; g.add(m); return m; };
   add(A, M.asphalt); add(W, M.walk); add(K, M.curb); add(MK, M.mark); add(MY, M.markY); add(IS, M.island);
   g.userData.lamps = lamps;
@@ -529,7 +544,7 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
   const rm = new THREE.InstancedMesh(roofGeo(), M.roof || (M.roof = roofMaterial(T)), Math.max(1, houses.length * 2));
   let bi = B.length;   // next free building instance (garage wings)
   rm.castShadow = rm.receiveShadow = true;
-  const bits = [], awn = [], signs = [], doors = [], chim = [], shrubs = [], par = new Geo(true);
+  const bits = [], awn = [], signs = [], doors = [], chim = [], shrubs = [], mulchBeds = [], mulch = new Geo(), par = new Geo(true);
   let ri = 0;
   const AWN = [[.24, .2, .17], [.12, .25, .2], [.36, .12, .1], [.12, .16, .26], [.55, .45, .3], [.2, .2, .2]];
   B.forEach((b, i) => {
@@ -561,6 +576,11 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
         doors.push([b.x + F.n[0] * (F.hf + .04) + F.t[0] * fo, b.z + F.n[1] * (F.hf + .04) + F.t[1] * fo, 1.05, 2.15, Math.atan2(-F.t[1], F.t[0]), 1]);
         if (hr(1) < .35) { const ex = (along ? b.w : b.d) / 2 - .5, p = along ? at(ex * (hr(2) < .5 ? 1 : -1), 0) : at(0, ex * (hr(2) < .5 ? 1 : -1)); chim.push([p[0], p[1], 1.3, b.h + rh * .75 + .9, 1.1, ry, hr(3)]); }
         // foundation shrubs along the front
+        { const a0 = -F.hw + .6, a1 = F.hw - .6, gs0 = go - (wing ? 3.9 : 2.8), gs1 = go + (wing ? 3.9 : 2.8);   // a mulch bed, broken by the garage
+          for (const [u0, u1] of F.hw > 3.2 ? [[a0, Math.min(a1, gs0)], [Math.max(a0, gs1), a1]] : [[a0, a1]]) if (u1 - u0 > 1.2) {
+            const P = (t, u) => [b.x + F.n[0] * t + F.t[0] * u, b.z + F.n[1] * t + F.t[1] * u];
+            mulchBeds.push([P(F.hf, u0), P(F.hf, u1), P(F.hf + 1.7, u1), P(F.hf + 1.7, u0)]);
+          } }
         const nsh = 3 + Math.floor(hr(4) * 4);
         for (let k = 0; k < nsh; k++) { const a = -F.hw + 1 + (k + .5) / nsh * (F.hw * 2 - 2); if (Math.abs(a - go) < (wing ? 3.9 : 2.8) && F.hw > 3.2) continue; shrubs.push([b.x + F.n[0] * (F.hf + .9) + F.t[0] * a, b.z + F.n[1] * (F.hf + .9) + F.t[1] * a, .8 + hr(k + 5) * .5]); }
       }
@@ -656,13 +676,9 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
   if (lotG.p.length) { const m = new THREE.Mesh(lotG.build(), M.lot); m.receiveShadow = true; g.add(m); }
   if (lines.p.length) g.add(new THREE.Mesh(lines.build(), M.mark));
   if (parks.p.length) { const m = new THREE.Mesh(parks.build(), M.park || (M.park = patchy(new THREE.MeshStandardMaterial({ map: T.lawn, color: 0x9cb46a, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1 }), .35, 8))); m.receiveShadow = true; g.add(m); }
-  if (parked.length) {
-    const pm = new THREE.InstancedMesh(carGeos.car, M.car, parked.length); pm.castShadow = Q.shadows > 1; pm.receiveShadow = true;
-    parked.forEach((p, i) => { dummy.position.set(p[0], 0, p[1]); dummy.rotation.set(0, p[2], 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix(); pm.setMatrixAt(i, dummy.matrix); pm.setColorAt(i, carColor(p[3], col)); });
-    g.add(pm);
-  }
   // houses: a lawn, a concrete driveway to the street, a wooden privacy fence round the back yard, sometimes a pool
   const drive = new Geo(), lawn = new Geo(), pool = new Geo(), deck = new Geo(), fence = [], boxes = [];
+  for (const m of mulchBeds) mulch.flat(m[0], m[1], m[2], m[3], .045);
   for (const b of B) {
     if (b.kind !== 'house') continue;
     let fxv = b.fx - b.x, fzv = b.fz - b.z; const L = Math.hypot(fxv, fzv); if (L < 4) continue; fxv /= L; fzv /= L;
@@ -674,6 +690,11 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
     if (len > 1.5) {
       const side = b.tone < .5 ? -1 : 1, o = side * Math.max(0, hp - 2.9), w = 2.6;
       drive.flat(q(hf, -w, o), q(hf, w, o), q(hf + len, w, o), q(hf + len, -w, o), .055);
+      const hc = ((b.id * 2654435761) >>> 0) / 4294967296;   // some households have a car (or two) at home
+      if (len > 6.5 && hc < (Q.shadows > 1 ? .7 : .45)) {
+        const two = hc < .2 && len > 6.5, yaw = Math.atan2(-fzv, fxv) + (hc < .35 ? Math.PI : 0);
+        for (const sd of two ? [-1.3, 1.3] : [0]) { const p = q(hf + 1.2 + 2.35, sd, o); parked.push([p[0], p[1], yaw + (hc * 40 % 1 - .5) * .08, (hc * 977 + sd) % 1]); }
+      }
       const mb = q(hf + len - .7, (w + .8) * -side, o); boxes.push([mb[0], mb[1], .45, 1.15, .45, Math.atan2(-pz, px), 0]);   // a brick mailbox by the street
     }
     if (b.lw > 0) {   // fence: along the back lot line and down both sides to the house
@@ -688,6 +709,12 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
       else if (rear > 6) deck.flat(q(-hf, -Math.min(hp, 3.5)), q(-hf, Math.min(hp, 3.5)), q(-hf - 3.2, Math.min(hp, 3.5)), q(-hf - 3.2, -Math.min(hp, 3.5)), .05);
     }
   }
+  if (parked.length) {   // in parking lots and on driveways
+    const pm = new THREE.InstancedMesh(carGeos.car, M.car, parked.length); pm.castShadow = Q.shadows > 1; pm.receiveShadow = true;
+    parked.forEach((p, i) => { dummy.position.set(p[0], 0, p[1]); dummy.rotation.set(0, p[2], 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix(); pm.setMatrixAt(i, dummy.matrix); pm.setColorAt(i, carColor(p[3], col)); });
+    g.add(pm);
+  }
+  if (mulch.p.length) { const m = new THREE.Mesh(mulch.build(), M.mulch || (M.mulch = patchy(new THREE.MeshStandardMaterial({ color: 0x4a3626, roughness: 1 }), .5, 1.5))); m.receiveShadow = true; g.add(m); }
   if (lawn.p.length) { const m = new THREE.Mesh(lawn.build(), M.lawn || (M.lawn = patchy(new THREE.MeshStandardMaterial({ map: T.lawn, color: 0xa6bd72, roughness: 1 }), .3, 7))); m.receiveShadow = true; g.add(m); }
   if (drive.p.length) { const m = new THREE.Mesh(drive.build(), M.walk); m.receiveShadow = true; g.add(m); }
   if (deck.p.length) { const m = new THREE.Mesh(deck.build(), M.walk); m.receiveShadow = true; g.add(m); }
