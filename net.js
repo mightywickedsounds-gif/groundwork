@@ -268,7 +268,7 @@ export class Net {
     if (plan.reason) { made.reason = plan.reason; return made; }
     const snap = this.serialize(), eid0 = this.eid;
     const A = this.realize(plan.qa), B = this.realize(plan.qb);
-    if (A === B) { made.reason = 'Too short'; return made; }
+    if (A === B) { this.restore(snap); made.reason = 'Too short'; return made; }   // (realize may have split a road: undo it, else cars kept driving on lanes of a road that was gone)
     const a = [A.x, A.z], b = [B.x, B.z], cc = c ? plan.cc : lerp2(a, b, .5);
     const stops = [{ t: 0, n: A }];
     for (const st of plan.stops) {
@@ -724,7 +724,7 @@ export class Net {
     if (n.sig || n.ring || n.edges.size < 3) return false;
     const major = f => f.kind === 'avenue' || (f.nl || 1) >= 2;
     if (!major(e)) return true;
-    for (const id of n.edges) if (!major(this.edges.get(id))) return false;
+    for (const id of n.edges) { const f = this.edges.get(id); if (f && !major(f)) return false; }   // (a junction left over from an undone edit may list a road that's gone)
     return true;
   }
   room(car, conn) {

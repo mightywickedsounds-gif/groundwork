@@ -693,7 +693,7 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
       const hc = ((b.id * 2654435761) >>> 0) / 4294967296;   // some households have a car (or two) at home
       if (len > 6.5 && hc < (Q.shadows > 1 ? .7 : .45)) {
         const two = hc < .2 && len > 6.5, yaw = Math.atan2(-fzv, fxv) + (hc < .35 ? Math.PI : 0);
-        for (const sd of two ? [-1.3, 1.3] : [0]) { const p = q(hf + 1.2 + 2.35, sd, o); parked.push([p[0], p[1], yaw + (hc * 40 % 1 - .5) * .08, (hc * 977 + sd) % 1]); }
+        for (const sd of two ? [-1.3, 1.3] : [0]) { const p = q(hf + 1.2 + 2.35, sd, o); parked.push([p[0], p[1], yaw + (hc * 40 % 1 - .5) * .08, (hc * 977 + sd + 2) % 1]); }
       }
       const mb = q(hf + len - .7, (w + .8) * -side, o); boxes.push([mb[0], mb[1], .45, 1.15, .45, Math.atan2(-pz, px), 0]);   // a brick mailbox by the street
     }
@@ -795,7 +795,7 @@ function fenceMaterial() {
 // Bodies are side profiles extruded across the width with rounded edges; glass is a slightly larger cabin profile.
 // Vertex colours: white body (tinted per car), dark trim and glass. aLight: 1 head, 2 tail, 3 left blinker, 4 right blinker.
 const PAINT = [[.92, .92, .9], [.06, .06, .07], [.62, .63, .65], [.35, .36, .38], [.92, .92, .9], [.06, .06, .07], [.62, .63, .65], [.1, .16, .32], [.55, .06, .06], [.16, .2, .26], [.8, .78, .7], [.2, .28, .22], [.74, .48, .12], [.4, .1, .12]];
-export function carColor(r, col) { const c = PAINT[Math.floor(r * PAINT.length) % PAINT.length]; return col.setRGB(c[0], c[1], c[2], THREE.SRGBColorSpace); }
+export function carColor(r, col) { const n = PAINT.length, c = PAINT[((Math.floor(r * n) % n) + n) % n]; return col.setRGB(c[0], c[1], c[2], THREE.SRGBColorSpace); }   // (any number in, never out of range)
 const GLASS = [.04, .05, .06], BODY = [1, 1, 1], DARK = [.07, .07, .075], HEAD = [1, 1, .95], TAIL = [.5, .05, .04], AMBER = [.9, .45, .05], CHROME = [.55, .56, .58];
 function paint(g, rgb, light = 0) {
   if (g.index) g = g.toNonIndexed();
