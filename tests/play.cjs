@@ -52,7 +52,7 @@ const TYPES = { js: 'text/javascript', mjs: 'text/javascript', jpg: 'image/jpeg'
     return [n.x, n.z, n.id, es.map(e => [e.nl, e.tl])];
   });
   check('lanes tool widens roads', av && av[3].every(([nl, tl]) => nl === 2 && tl === 1), JSON.stringify(av));
-  check('lights added where wide roads cross', await p.evaluate(id => !!FT.net.nodes.get(id).sig, av[2]));
+  check('lights added where wide roads cross', await p.evaluate(id => !!FT.net.nodes.get(id).sig, av[2]), await p.evaluate(id => { const n = FT.net.nodes.get(id); return n ? JSON.stringify({ deg: n.edges.size, ring: n.ring, legs: [...n.edges].map(e => { const f = FT.net.edges.get(e); return [f.kind, f.nl, f.tl]; }) }) : 'node gone'; }, av[2]));
   await p.evaluate(() => FT.step(90));
   check('cars use the extra lanes', await p.evaluate(() => FT.net.cars.some(c => c.lane.li > 0 || c.lane.pk)));
   await shot('lanes', { x: av[0] + 10, z: av[1] + 25, dist: 95, yaw: .5, pitch: .78 }, 10);

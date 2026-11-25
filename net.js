@@ -11,6 +11,7 @@ export const RING_R = 15;           // roundabout centre-line radius
 const LIMIT = 13.9;                 // 50 km/h
 const ACC = 1.6, DEC = 2.6, S0 = 2.2, HEAD = 1.15;  // IDM car following
 const GIVE_UP = 120;                // seconds stuck before a driver gives up
+const STOP_V = 3;                   // speed at a stop sign's line (a careful rolling stop)
 export const MAX_LANES = 3;         // lanes each way
 export const MAP_EDGE = 1600;       // no roads further out (the hills round the town)
 // what the Lanes tool steps through: [lanes each way, turn lanes]
@@ -717,6 +718,15 @@ export class Net {
   }
 
   // ---------------- junction rules ----------------
+  // does a road have a stop sign where it meets this junction? Every road at a plain junction, except
+  // an avenue or wide road where it crosses smaller streets (those streets stop, the main road doesn't)
+  stopAt(n, e) {
+    if (n.sig || n.ring || n.edges.size < 3) return false;
+    const major = f => f.kind === 'avenue' || (f.nl || 1) >= 2;
+    if (!major(e)) return true;
+    for (const id of n.edges) if (!major(this.edges.get(id))) return false;
+    return true;
+  }
   room(car, conn) {
     const out = conn.out; let tail = out.len;
     for (const o of out.cars) tail = Math.min(tail, o.s - o.len);
@@ -840,7 +850,9 @@ export class Net {
             break;
           }
           // turn speed
-          v0 = Math.min(v0, Math.sqrt(nx.vmax * nx.vmax + 2 * 1.8 * Math.max(0, d - 2)));
+          // a stop sign (a plain junction of 3 or more roads): slow right down at the line before going on
+          const vIn = nx.conn && k === car.ri + 1 && !nx.in.prio && this.stopAt(nx.node, nx.in.edge) ? Math.min(nx.vmax, STOP_V) : nx.vmax;
+          v0 = Math.min(v0, Math.sqrt(vIn * vIn + 2 * 1.8 * Math.max(0, d - 2)));
           if (idx === 0 || k > car.ri + 1) {
             let tail = null; for (const o of nx.cars) if (!tail || o.s < tail.s) tail = o;
             if (tail) { const g = d + tail.s - tail.len; if (g < gap) { gap = g; lv = tail.v; car.gw = 'tail'; car.gwId = tail.id; } break; }

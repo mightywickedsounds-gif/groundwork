@@ -984,7 +984,7 @@ export function buildSignals(net, M) {
       const p = along(kerb.pts, kerb.cum, kerb.len), h = [p[2], p[3]], r = [-h[1], h[0]], th = Math.atan2(-h[1], h[0]);
       const off = hw - laneOff(e, 0) + .9;
       const px = p[0] + r[0] * off + h[0] * .4, pz = p[1] + r[1] * off + h[1] * .4;
-      if (!n.sig) { stops.push([p[0] + r[0] * (off - .2) - h[0] * .6, p[1] + r[1] * (off - .2) - h[1] * .6, th]); continue; }
+      if (!n.sig) { if (net.stopAt(n, e)) stops.push([p[0] + r[0] * (off - .2) - h[0] * .6, p[1] + r[1] * (off - .2) - h[1] * .6, th]); continue; }
       // one head over each lane of this approach
       const ds = ls.map(l => { const q = along(l.pts, l.cum, l.len); return [(px - q[0]) * r[0] + (pz - q[1]) * r[1], l]; });
       const reach = Math.max(2.5, ...ds.map(d => d[0])) + .6;
