@@ -482,6 +482,8 @@ canvas.addEventListener('wheel', e => {
 const keys = new Set();
 addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
+  // while the start screen, the menu or the game-over sign is up, keys don't reach the game behind it
+  if (document.querySelector('.screen.show')) { if (e.code === 'Escape' && $('menu').classList.contains('show')) showMenu(false); if (e.code === 'Space') e.preventDefault(); return; }
   keys.add(e.code);
   const n = '1234567'.indexOf(e.key); if (n >= 0) setTool(TOOLS[n]);
   if (e.code === 'Escape') { if (T.pend) T.pend = null; else if (T.pts.length) T.pts = []; else setTool(''); previewMesh.visible = false; hint(); hoverUpdate(); }

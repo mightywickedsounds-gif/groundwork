@@ -103,8 +103,8 @@ export function makeMaterials(maxAniso = 8, U = null) {
     asphalt: patchy(new THREE.MeshStandardMaterial({ map: asphaltMap, roughness: .9, metalness: 0, color: 0x9a9a9a }), .35, 22),
     walk: patchy(new THREE.MeshStandardMaterial({ map: walkMap, roughness: .95, color: 0xffffff }), .25, 9),
     curb: new THREE.MeshStandardMaterial({ color: 0xb4b1a8, roughness: .9 }),
-    mark: new THREE.MeshStandardMaterial({ color: 0xe6e5df, roughness: .65, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
-    markY: new THREE.MeshStandardMaterial({ color: 0xe2b53a, roughness: .65, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
+    mark: patchy(new THREE.MeshStandardMaterial({ color: 0xe6e5df, roughness: .65, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), .3, 2.5),   // paint a little worn
+    markY: patchy(new THREE.MeshStandardMaterial({ color: 0xe2b53a, roughness: .65, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), .3, 2.5),
     lot: patchy(new THREE.MeshStandardMaterial({ map: lotMap, roughness: .9, color: 0xb4b2ae }), .3, 16),
     island: new THREE.MeshStandardMaterial({ color: 0x5d7a3a, roughness: 1 }),
     pole: new THREE.MeshStandardMaterial({ color: 0x3b3e42, roughness: .5, metalness: .6 }),
@@ -370,7 +370,8 @@ function buildingMaterial(U, T) {
           else if (st < 3.5) { win = step(.5, y) * step(y, 3.1) * step(.05, fract(u / 6.)) * step(fract(u / 6.), .95);   // shopfronts
                                band = step(3.6, y) * step(y, H - .4) * step(.08, fract(u / 12.)) * step(fract(u / 12.), .7); } // sign band
           else win = step(.4, y) * step(y, 4.2) * step(.44, fract(u / 46.)) * step(fract(u / 46.), .56);                // a big store's entrance
-          if (vI.w > .5 && st < 1.5 && y < 4.2) { win = step(.6, y) * step(.04, fract(u / 4.5)) * step(fract(u / 4.5), .96) * step(y, 3.5); trim = 0.; }   // town centre: shops downstairs
+          if (vI.w > 1.5) { win = 0.; trim = 0.; }   // a garage wing
+          else if (vI.w > .5 && st < 1.5 && y < 4.2) { win = step(.6, y) * step(.04, fract(u / 4.5)) * step(fract(u / 4.5), .96) * step(y, 3.5); trim = 0.; }   // town centre: shops downstairs
           win *= (1. - fRoof) * step(y, H - .9); band *= 1. - fRoof; trim = max(trim, 0.) * (1. - fRoof) * step(y, H - .7);
           float slab = (1. - fRoof) * step(st, .5) * (1. - step(.06, abs(fract((y - .9) / fh + .02) - .02)));
           fWin = win;
@@ -379,7 +380,8 @@ function buildingMaterial(U, T) {
           vec3 glass = st < .5 ? mix(vec3(.08, .12, .15), vec3(.13, .16, .15), step(.25, vI.z)) : vec3(.07, .08, .09) + vec3(.05, .045, .04) * step(.55, h21(id * 1.7 + vI.z));
           diffuseColor.rgb = mix(diffuseColor.rgb, glass, win);
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.86, .85, .82), trim * .9);
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.42, .4, .37) * (.8 + .4 * h21(vec2(floor(u / 12.), vI.z))), band);
+          { float sh = h21(vec2(floor(u / 12.), vI.z * 7.)); vec3 sc = sh < .2 ? vec3(.45, .08, .06) : sh < .4 ? vec3(.08, .14, .3) : sh < .55 ? vec3(.1, .26, .16) : sh < .7 ? vec3(.33, .24, .16) : sh < .85 ? vec3(.88, .86, .8) : vec3(.12, .12, .12);
+            diffuseColor.rgb = mix(diffuseColor.rgb, sc, band); }   // each tenant's sign panel
           diffuseColor.rgb *= 1. - slab * .25;
           // flat roofs: white membrane with seams on stores, gravel elsewhere (pitched roofs sit on top as their own mesh)
           vec3 roofC = st > 2.5 ? vec3(.78, .78, .76) * (.92 + .08 * texture2D(tStucco, vWp.xz / 5.).r / .28) * (1. - .12 * step(fract(vWp.x / 3.05), .025))
@@ -518,14 +520,16 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
   };
   // buildings
   const box = new THREE.BoxGeometry(1, 1, 1).translate(0, .5, 0);
-  const info = new Float32Array(B.length * 4), wallA = new Float32Array(B.length);
-  const bm = new THREE.InstancedMesh(box, M.building || (M.building = buildingMaterial(U, T)), Math.max(1, B.length));
+  const NB = B.length + B.filter(b => b.kind === 'house').length;   // houses may get a garage wing
+  const info = new Float32Array(NB * 4), wallA = new Float32Array(NB);
+  const bm = new THREE.InstancedMesh(box, M.building || (M.building = buildingMaterial(U, T)), Math.max(1, NB));
   bm.geometry = box.clone(); bm.geometry.setAttribute('aInfo', new THREE.InstancedBufferAttribute(info, 4)); bm.geometry.setAttribute('aWall', new THREE.InstancedBufferAttribute(wallA, 1));
   bm.castShadow = bm.receiveShadow = true;
   const houses = B.filter(b => b.roof);
-  const rm = new THREE.InstancedMesh(roofGeo(), M.roof || (M.roof = roofMaterial(T)), Math.max(1, houses.length));
+  const rm = new THREE.InstancedMesh(roofGeo(), M.roof || (M.roof = roofMaterial(T)), Math.max(1, houses.length * 2));
+  let bi = B.length;   // next free building instance (garage wings)
   rm.castShadow = rm.receiveShadow = true;
-  const bits = [], awn = [], doors = [], chim = [], shrubs = [], par = new Geo(true);
+  const bits = [], awn = [], signs = [], doors = [], chim = [], shrubs = [], par = new Geo(true);
   let ri = 0;
   const AWN = [[.24, .2, .17], [.12, .25, .2], [.36, .12, .1], [.12, .16, .26], [.55, .45, .3], [.2, .2, .2]];
   B.forEach((b, i) => {
@@ -543,13 +547,22 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
       if (b.kind === 'house') {
         // garage door on the driveway side, front door on the other; a chimney on some
         const side = b.tone < .5 ? -1 : 1, o = side * Math.max(0, F.hw - 2.9), go = Math.max(-F.hw + 2.6, Math.min(F.hw - 2.6, o));
-        if (F.hw > 3.2) doors.push([b.x + F.n[0] * (F.hf + .04) + F.t[0] * go, b.z + F.n[1] * (F.hf + .04) + F.t[1] * go, 4.8, 2.25, Math.atan2(-F.t[1], F.t[0]), 0]);
+        // wider houses: a lower garage wing standing a little forward on the driveway side, with its own roof
+        const wing = F.hw > 6.2 && F.hf > 3.5 && hr(9) < .7, wf = wing ? 1.2 : 0;
+        if (wing) {
+          const gw = 6.4, gd = Math.min(7, F.hf * 2 - .5), gx = go, gz = F.hf + wf - gd / 2, gh = 2.9;
+          const cxw = b.x + F.n[0] * gz + F.t[0] * gx, czw = b.z + F.n[1] * gz + F.t[1] * gx, yaw = Math.atan2(-F.n[1], F.n[0]);
+          dummy.position.set(cxw, 0, czw); dummy.rotation.set(0, yaw, 0); dummy.scale.set(gd, gh, gw); dummy.updateMatrix(); bm.setMatrixAt(bi, dummy.matrix); bm.setColorAt(bi, col.setRGB(c[0], c[1], c[2], THREE.SRGBColorSpace)); wallA[bi] = c[3];
+          info.set([2, gh, b.tone, 2], bi * 4); bi++;
+          dummy.position.set(cxw, gh, czw); dummy.rotation.set(0, yaw + Math.PI / 2, 0); dummy.scale.set(gw + .8, 1.5, gd + .8); dummy.updateMatrix(); rm.setMatrixAt(ri, dummy.matrix); rm.setColorAt(ri++, col.setRGB(rc[0], rc[1], rc[2], THREE.SRGBColorSpace));
+        }
+        if (F.hw > 3.2) doors.push([b.x + F.n[0] * (F.hf + wf + .04) + F.t[0] * go, b.z + F.n[1] * (F.hf + wf + .04) + F.t[1] * go, 4.8, 2.25, Math.atan2(-F.t[1], F.t[0]), 0]);
         const fo = -side * Math.min(F.hw - 1, Math.max(1.5, F.hw * .35));
         doors.push([b.x + F.n[0] * (F.hf + .04) + F.t[0] * fo, b.z + F.n[1] * (F.hf + .04) + F.t[1] * fo, 1.05, 2.15, Math.atan2(-F.t[1], F.t[0]), 1]);
         if (hr(1) < .35) { const ex = (along ? b.w : b.d) / 2 - .5, p = along ? at(ex * (hr(2) < .5 ? 1 : -1), 0) : at(0, ex * (hr(2) < .5 ? 1 : -1)); chim.push([p[0], p[1], 1.3, b.h + rh * .75 + .9, 1.1, ry, hr(3)]); }
         // foundation shrubs along the front
         const nsh = 3 + Math.floor(hr(4) * 4);
-        for (let k = 0; k < nsh; k++) { const a = -F.hw + 1 + (k + .5) / nsh * (F.hw * 2 - 2); if (Math.abs(a - go) < 2.8 && F.hw > 3.2) continue; shrubs.push([b.x + F.n[0] * (F.hf + .9) + F.t[0] * a, b.z + F.n[1] * (F.hf + .9) + F.t[1] * a, .8 + hr(k + 5) * .5]); }
+        for (let k = 0; k < nsh; k++) { const a = -F.hw + 1 + (k + .5) / nsh * (F.hw * 2 - 2); if (Math.abs(a - go) < (wing ? 3.9 : 2.8) && F.hw > 3.2) continue; shrubs.push([b.x + F.n[0] * (F.hf + .9) + F.t[0] * a, b.z + F.n[1] * (F.hf + .9) + F.t[1] * a, .8 + hr(k + 5) * .5]); }
       }
     } else {
       // parapet round a flat roof, the wall colour, with a lighter coping on top
@@ -577,10 +590,11 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
         const dep = b.kind === 'big' ? 3.5 : 2.4, len = b.kind === 'big' ? Math.min(24, F.hw) : F.hw * 2 - 1.5, y = b.kind === 'big' ? 4.4 : 3.25;
         const a = AWN[Math.floor(b.tone * 53) % AWN.length];
         awn.push([b.x + F.n[0] * (F.hf + dep / 2), b.z + F.n[1] * (F.hf + dep / 2), len, dep, y, Math.atan2(-F.t[1], F.t[0]), a]);
+        if (b.kind === 'big' && b.h > 7) { const SC = [[.7, .08, .06], [.06, .2, .5], [.85, .45, .05], [.1, .35, .2]][Math.floor(b.tone * 31) % 4]; signs.push([b.x + F.n[0] * (F.hf + .2), b.z + F.n[1] * (F.hf + .2), Math.min(16, F.hw), 2.2, b.h - 2.2, Math.atan2(-F.t[1], F.t[0]), SC]); }
       }
     }
   });
-  bm.count = B.length; rm.count = ri;
+  bm.count = bi; rm.count = ri;
   if (bm.instanceColor) bm.instanceColor.needsUpdate = true; if (rm.instanceColor) rm.instanceColor.needsUpdate = true;
   g.add(bm); if (ri) g.add(rm);
   if (par.p.length) { const m = new THREE.Mesh(par.build(), M.parapet || (M.parapet = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .9 }))); m.castShadow = m.receiveShadow = true; g.add(m); }
@@ -593,6 +607,11 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
     const am = new THREE.InstancedMesh(new THREE.BoxGeometry(1, .35, 1), M.awning || (M.awning = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: .7 })), awn.length);
     awn.forEach((q, i) => { dummy.position.set(q[0], q[4], q[1]); dummy.rotation.set(0, q[5], 0); dummy.scale.set(q[2], 1, q[3]); dummy.updateMatrix(); am.setMatrixAt(i, dummy.matrix); am.setColorAt(i, col.setRGB(q[6][0], q[6][1], q[6][2], THREE.SRGBColorSpace)); });
     am.castShadow = true; am.receiveShadow = true; g.add(am);
+  }
+  if (signs.length) {
+    const sm = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, .3), M.storeSign || (M.storeSign = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: .5, emissive: 0x000000 })), signs.length);
+    signs.forEach((q, i) => { dummy.position.set(q[0], q[4], q[1]); dummy.rotation.set(0, q[5], 0); dummy.scale.set(q[2], q[3], 1); dummy.updateMatrix(); sm.setMatrixAt(i, dummy.matrix); sm.setColorAt(i, col.setRGB(q[6][0], q[6][1], q[6][2], THREE.SRGBColorSpace)); });
+    sm.castShadow = true; g.add(sm);
   }
   if (doors.length) {
     const dm = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, .08).translate(0, .5, 0), M.door || (M.door = doorMaterial()), doors.length);
