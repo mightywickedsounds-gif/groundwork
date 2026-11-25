@@ -33,7 +33,7 @@ const sun = new THREE.DirectionalLight(0xfff1dc, 2.6); scene.add(sun); scene.add
 sun.castShadow = Q.shadows > 0;
 if (Q.shadow) { sun.shadow.mapSize.set(Q.shadow, Q.shadow); }
 sun.shadow.bias = -.0004; sun.shadow.normalBias = .6;
-const U = { uNight: { value: 0 }, uTime: { value: 0 }, uCloudSh: { value: 0 } };
+const U = { uNight: { value: 0 }, uTime: { value: 0 }, uCloudSh: { value: 0 }, uCover: { value: .5 } };
 const M = makeMaterials(renderer.capabilities.getMaxAnisotropy(), U);
 // the sky: a dome that follows the time of day; it also lights reflections
 const sky = makeSky(renderer); scene.add(sky.mesh);
@@ -674,7 +674,11 @@ function lighting(hour, t = performance.now() / 1000) {
   sunDir.set(hx / hl * Math.cos(el), Math.sin(el), hz / hl * Math.cos(el));
   moonDir.set(-sunDir.x * .7, Math.max(.42, -sunDir.y), -sunDir.z * .7 - .25).normalize();
   const sunUp = Math.max(0, e);
-  sun.intensity = 3.6 * Math.pow(sunUp, .4) * (1 - night) + .9 * night;
+  // the weather changes from day to day: clear, a few clouds, partly cloudy (it blends across the day)
+  const dayF = S ? S.time / DAY : 0, wh = d => { const v = Math.sin(Math.floor(d) * 12.9898 + ((S && S.seed) || 0) * .0137) * 43758.5453; return v - Math.floor(v); };
+  const f = dayF - Math.floor(dayF), cover = .12 + .72 * (wh(dayF) * (1 - f) + wh(dayF + 1) * f);
+  U.uCover.value = cover; sky.U.uCloud.value = cover;
+  sun.intensity = (3.6 * Math.pow(sunUp, .4) * (1 - night)) * (1 - .3 * cover * cover) + .9 * night;
   const warm = 1 - Math.min(1, sunUp * 2.2);
   sun.color.setRGB(1, .92 - warm * .26, .82 - warm * .48).lerp(MOON, night);
   // shadows: never from a sun lower than ~10 degrees (endless shadows); the moon at night
@@ -683,11 +687,11 @@ function lighting(hour, t = performance.now() / 1000) {
   sun.target.position.set(cam.x, 0, cam.z);
   const S2 = Math.max(160, Math.min(900, cam.dist * 1.1)), sc = sun.shadow.camera;
   if (sc.right !== S2) { sc.left = -S2; sc.right = S2; sc.top = S2; sc.bottom = -S2; sc.near = 10; sc.far = 2400; sc.updateProjectionMatrix(); }
-  hemi.intensity = .3 * (1 - night) + .5 * night; hemi.color.setRGB(.87, .91, 1).lerp(HEMI_NIGHT, night);
+  hemi.intensity = (.3 + .12 * cover) * (1 - night) + .5 * night; hemi.color.setRGB(.87, .91, 1).lerp(HEMI_NIGHT, night);
   sky.update(sunDir, moonDir, night, t, camera.position, camera.far);
   sky.horizon(cam.x - camera.position.x, cam.z - camera.position.z, scene.fog.color);
   sky.env(scene);
-  U.uTime.value = t; U.uCloudSh.value = Math.max(0, 1 - night * 1.6) * Math.min(1, sunUp * 4);
+  U.uTime.value = t; U.uCloudSh.value = Math.max(0, 1 - night * 1.6) * Math.min(1, sunUp * 4) * Math.min(1, .45 + .8 * cover);
   renderer.toneMappingExposure = 1;
   lampGlowMat.color.setRGB(.25 + night * .9, .22 + night * .75, .18 + night * .5);
   poolMat.opacity = night * .4;

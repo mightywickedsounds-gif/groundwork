@@ -52,7 +52,7 @@ void main() {
   if (d.y > .0) {
     vec2 p = d.xz / (d.y + .08) * 1.6 + vec2(uTime * .006, uTime * .002);
     float n = fbm(p) * .65 + fbm(p * 2.7 + 4.) * .35;
-    float cov = smoothstep(.62 - uCloud * .25, .9 - uCloud * .2, n) * smoothstep(.02, .22, d.y);
+    float cov = smoothstep(.62 - uCloud * .25, .9 - uCloud * .2, n) * smoothstep(.0, .1, d.y);
     vec3 lit = mix(vec3(.08, .1, .16), vec3(1., .98, .95), day);
     lit = mix(lit, vec3(1., .6, .38), low);
     float shade = smoothstep(.55, .95, n);

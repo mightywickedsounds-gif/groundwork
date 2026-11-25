@@ -78,11 +78,11 @@ function photo(f, aniso, srgb = true) {
 const PATCHY = `float ph1(vec2 p) { vec3 q = fract(vec3(p.xyx) * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
 float pn1(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f); return mix(mix(ph1(i), ph1(i + vec2(1, 0)), f.x), mix(ph1(i + vec2(0, 1)), ph1(i + vec2(1, 1)), f.x), f.y); }`;
 // shadows of the drifting clouds on the ground, roofs and trees (they cross the town at a few metres a second)
-export const CLOUD = `uniform float uTime; uniform float uCloudSh;
+export const CLOUD = `uniform float uTime; uniform float uCloudSh; uniform float uCover;
 float csh(vec2 p) { vec2 q = p / 480. + vec2(uTime * .0085, uTime * .003);
-  float n = pn1(q) * .6 + pn1(q * 2.3 + 3.1) * .3 + pn1(q * 5.3 + 7.) * .1; return smoothstep(.56, .74, n) * uCloudSh; }`;
+  float n = pn1(q) * .6 + pn1(q * 2.3 + 3.1) * .3 + pn1(q * 5.3 + 7.) * .1; return smoothstep(.64 - uCover * .2, .8 - uCover * .14, n) * uCloudSh; }`;
 let CU = null;   // the shared uniforms (time, cloud shadow strength)
-export function cloudUniforms(sh) { if (CU) { sh.uniforms.uTime = CU.uTime; sh.uniforms.uCloudSh = CU.uCloudSh; } }
+export function cloudUniforms(sh) { if (CU) { sh.uniforms.uTime = CU.uTime; sh.uniforms.uCloudSh = CU.uCloudSh; sh.uniforms.uCover = CU.uCover; } }
 function patchy(m, amt, scale = 14, tint = '') {
   m.onBeforeCompile = sh => {
     cloudUniforms(sh);
