@@ -108,7 +108,8 @@ const TYPES = { js: 'text/javascript', mjs: 'text/javascript', jpg: 'image/jpeg'
     const ph1 = await q.evaluate(() => ({ e: FT.net.edges.size, x: FT.cam.x, z: FT.cam.z }));
     check('phone: quick drag moves the map, builds nothing', ph1.e === ph0.e && Math.hypot(ph1.x - ph0.x, ph1.z - ph0.z) > 5, JSON.stringify([ph0, ph1]));
     // hold, then drag: a road from a street out into a block
-    const sp = await q.evaluate(() => { const e = [...FT.net.edges.values()].find(e => !e.ring && e.len > 60 && Math.hypot(e.cx - FT.cam.x, e.cz - FT.cam.z) < 60) || [...FT.net.edges.values()][0]; const p = FT.along(e.pts, e.cum, e.len / 2); const r = [-p[3], p[2]]; return [FT.toScreen(p[0] + r[0] * 12.5, p[1] + r[1] * 12.5), FT.toScreen(p[0] + r[0] * 45, p[1] + r[1] * 45)]; });
+    // (the camera leans over when zoomed in, so centre it on the spot first: both ends on screen)
+    const sp = await q.evaluate(() => { const e = [...FT.net.edges.values()].filter(e => !e.ring && e.len > 60).sort((a, b) => Math.hypot(a.cx - FT.cam.x, a.cz - FT.cam.z) - Math.hypot(b.cx - FT.cam.x, b.cz - FT.cam.z))[0]; const p = FT.along(e.pts, e.cum, e.len / 2); const r = [-p[3], p[2]]; FT.cam.x = p[0] + r[0] * 28; FT.cam.z = p[1] + r[1] * 28; FT.placeCamera(); FT.render(); return [FT.toScreen(p[0] + r[0] * 12.5, p[1] + r[1] * 12.5), FT.toScreen(p[0] + r[0] * 45, p[1] + r[1] * 45)]; });
     await touch(line(sp[1][0], sp[1][1], sp[0][0], sp[0][1]), 450);
     const ph2 = await q.evaluate(() => ({ e: FT.net.edges.size, pin: FT.T.pts.length, toast: document.getElementById('toast').textContent, hint: document.getElementById('hint').textContent }));
     check('phone: hold then drag draws a road', ph2.e > ph1.e, JSON.stringify(ph2));
