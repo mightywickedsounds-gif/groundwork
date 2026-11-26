@@ -136,7 +136,7 @@ export function buildScenery(net, city, life, Q) {
     const pos = [];
     for (const [x0, z0, x1, z1] of wires) { let px = x0, pz = z0, py = 9.06; for (let i = 1; i <= 6; i++) { const t = i / 6, x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t, y = 9.06 - Math.sin(t * Math.PI) * .7; pos.push(px, py, pz, x, y, z); px = x; py = y; pz = z; } }
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    const wl = new THREE.LineSegments(g, MAT.wire || (MAT.wire = new THREE.LineBasicMaterial({ color: 0x2a2a2a }))); G.add(wl); G.userData.wires = wl;   // (hidden from far away: a hairline at any distance)
+    const wl = new THREE.LineSegments(g, MAT.wire || (MAT.wire = new THREE.LineBasicMaterial({ color: 0x4a4a48 }))); G.add(wl); G.userData.wires = wl;   // (hidden from far away: a hairline at any distance)
   }
   // shop signs
   const sl = B.filter(b => b.biz && b.e).slice(0, 256);
@@ -157,7 +157,7 @@ export function buildScenery(net, city, life, Q) {
     m.userData.signs = true; G.add(m); G.userData.signMat = m.material;
   }
   // grass clumps and wildflowers on open ground (not on roads, lots or yards)
-  const nT = Q.shadows > 1 ? 26000 : Q.shadows > 0 ? 12000 : 0;
+  const nT = 0;   // (grass cards looked like cardboard up close: the ground shader does the grass now)
   if (nT && typeof document !== 'undefined') {
     const bb = city.bounds(), cx = (bb.x0 + bb.x1) / 2, cz = (bb.z0 + bb.z1) / 2, R = Math.max(bb.x1 - bb.x0, bb.z1 - bb.z0) / 2 + 260;
     const roadNear = (x, z) => { const h = net.nearestEdge(x, z, 30); return h && Math.hypot(...(() => { const q = along(h.e.pts, h.e.cum, h.s); return [q[0] - x, q[1] - z]; })()) < halfW(h.e) + WALK_W + 1.2; };
