@@ -191,7 +191,7 @@ function disposeGroup(g) { if (!g) return; scene.remove(g); g.traverse(o => { if
 let sigLamps = [], lampMesh = null, glowMesh = null, poolMesh = null;
 function rebuildRoads() {
   if (net.built !== net.ver) net.rebuild();
-  disposeGroup(roadsG); roadsG = buildRoads(net, M, { lights: true, coreR: city ? city.coreR : 0 }); scene.add(roadsG);
+  disposeGroup(roadsG); roadsG = buildRoads(net, M, { lights: true, coreR: city ? city.coreR : 0, rural: e => city && !city.inCity(e.cx, e.cz) && !city.inCity(e.pts[0][0], e.pts[0][1]) && !city.inCity(e.pts[e.pts.length - 1][0], e.pts[e.pts.length - 1][1]) }); scene.add(roadsG);
   // street lights
   buildLamps();
   // traffic lights and stop signs

@@ -126,7 +126,7 @@ export function makeMaterials(maxAniso = 8, U = null) {
 
 // ---------- roads + junctions + markings ----------
 export function buildRoads(net, M, opt = {}) {
-  const A = new Geo(), W = new Geo(), K = new Geo(), MK = new Geo(), MY = new Geo(), IS = new Geo(), GU = new Geo(), CT = new Geo(), TP = new Geo();
+  const A = new Geo(), W = new Geo(), K = new Geo(), MK = new Geo(), MY = new Geo(), IS = new Geo(), GU = new Geo(), CT = new Geo(), TP = new Geo(), SH = new Geo(), GR = new Geo(), inlets = [], holes = [];
   const GW = .55, CW = .2;   // concrete gutter along every curb, and the curb's own top
   const PKW = 1.45, PW = new Geo(), parkway = e => e.kind === 'street' && (e.nl || 1) === 1 && !e.tl && !e.ring && !e.oneway && Math.hypot(e.cx, e.cz) > (opt.coreR || 0);
   const nodes = net.nodes, ringCenters = new Map(), deco = [];
@@ -152,8 +152,13 @@ export function buildRoads(net, M, opt = {}) {
     const nr = normals(c);
     if (ends) for (const [i, t] of [[0, ends[0]], [c.length - 1, ends[1]]]) { const L = Math.hypot(t[0], t[1]); if (L > 1e-6) nr[i] = [-t[1] / L, t[0] / L]; }   // exact ends: no slivers where pieces meet
     A.strip(off(c, nr, -hw), off(c, nr, hw), Y_ROAD);
+    const rural = opt.rural && opt.rural(e);   // out of town: a country road (gravel shoulders, no curb, no sidewalk)
+    if (rural) for (const sg of [-1, 1]) {
+      SH.strip(off(c, nr, sg * hw), off(c, nr, sg * (hw + 1.8)), Y_ROAD - .012);
+      GR.strip(off(c, nr, sg * (hw + 1.8)), off(c, nr, sg * (hw + 3.2)), Y_ROAD - .018);
+    }
     for (const sg of [-1, 1]) {
-      if (sg === inner) continue;
+      if (sg === inner || rural) continue;
       const i0 = off(c, nr, sg * hw), i1 = off(c, nr, sg * (hw + WALK_W));
       if (parkway(e)) {   // a house street: a grass strip (parkway) between the curb and the sidewalk
         const g1 = off(c, nr, sg * (hw + PKW));
@@ -192,7 +197,13 @@ export function buildRoads(net, M, opt = {}) {
       if (e.kind !== 'street' || nl > 1 || e.oneway || e.ring) { line(MK, off(m, mn, -(hw - GW - .25)), .13, Y_MARK); line(MK, off(m, mn, hw - GW - .25), .13, Y_MARK); }   // edge lines on the bigger roads only
       if (e.oneway && !e.ring) { const dir = e.oneway; for (let s = 12; s < Lm - 22; s += 26) { const p = along(m, cm, s); for (let i = 0; i < nl; i++) { const o = dir * laneOff(e, i); arrow(MK, p[0] - p[3] * o, p[1] + p[2] * o, p[2] * dir, p[3] * dir); } } }
     }
-    if (lights) { const L = cl.at(-1); for (let s = 10, k = 0; s < L - 6; s += 34, k++) { const p = along(c, cl, s), sg = k % 2 ? 1 : -1; const lo = parkway(e) ? hw + .85 : hw + WALK_W - .7; lamps.push([p[0] - p[3] * sg * lo, p[1] + p[2] * sg * lo, Math.atan2(p[3] * sg, -p[2] * sg)]); } }
+    // storm drain grates in the gutter near each end, manhole covers down the lanes now and then
+    if (!e.ring && !rural && cl.at(-1) > 24) {
+      const Lc = cl.at(-1), hsh = (k) => { const v = Math.sin(e.id * 12.9898 + k * 78.233) * 43758.5453; return v - Math.floor(v); };
+      for (const sg of [-1, 1]) { if (sg === inner) continue; for (const s of [3.2, Lc - 3.2]) { const p = along(c, cl, s); inlets.push([p[0] - p[3] * sg * (hw - .32), p[1] + p[2] * sg * (hw - .32), Math.atan2(-p[3], p[2])]); } }
+      for (let s = 14 + hsh(1) * 20; s < Lc - 10; s += 48 + hsh(s) * 30) { const p = along(c, cl, s), o = (hsh(s + 3) < .5 ? -1 : 1) * (e.oneway ? 0 : laneOff(e, 0)); holes.push([p[0] - p[3] * o, p[1] + p[2] * o, hsh(s + 5) * 6.28]); }
+    }
+    if (lights && !rural) { const L = cl.at(-1); for (let s = 10, k = 0; s < L - 6; s += 34, k++) { const p = along(c, cl, s), sg = k % 2 ? 1 : -1; const lo = parkway(e) ? hw + .85 : hw + WALK_W - .7; lamps.push([p[0] - p[3] * sg * lo, p[1] + p[2] * sg * lo, Math.atan2(p[3] * sg, -p[2] * sg)]); } }
   }
   for (const e of net.edges.values()) {
     const a = nodes.get(e.a), b = nodes.get(e.b), hw = hwOf(e);
@@ -219,7 +230,7 @@ export function buildRoads(net, M, opt = {}) {
     if (x && x[0] > 0 && x[1] > 0 && x[0] < lim && x[1] < lim) ctl = [P1[0] + d1[0] * x[0], P1[1] + d1[1] * x[0]];
     else if (!x || d1[0] * d2[0] + d1[1] * d2[1] < -.98) ctl = [(P1[0] + P2[0]) / 2, (P1[1] + P2[1]) / 2];   // straight on
     const into = (e1.oneway === 1 && e1.b === n.id) || (e1.oneway === -1 && e1.a === n.id);
-    piece(quad(P1, ctl, P2, Math.max(6, Math.ceil(n.trim * 1.6))), { oneway: e1.oneway ? (into ? 1 : -1) : 0, kind: e1.kind, nl: e1.nl, tl: e1.tl }, hwOf(e1), 0, false, [0, 0], [d1, [-d2[0], -d2[1]]]);
+    piece(quad(P1, ctl, P2, Math.max(6, Math.ceil(n.trim * 1.6))), { oneway: e1.oneway ? (into ? 1 : -1) : 0, kind: e1.kind, nl: e1.nl, tl: e1.tl, cx: e1.cx, cz: e1.cz, pts: e1.pts, id: e1.id }, hwOf(e1), 0, false, [0, 0], [d1, [-d2[0], -d2[1]]]);
     elbow.add(n.id);
   }
   // junction patches
@@ -238,6 +249,7 @@ export function buildRoads(net, M, opt = {}) {
     if (legs.length === 1) {       // dead end: round cap
       const L = legs[0], cap = [], outer = [];
       for (let k = 0; k <= 12; k++) { const f = -Math.PI / 2 + Math.PI * k / 12, dx = -L.d[0] * Math.cos(f) + L.r[0] * Math.sin(f), dz = -L.d[1] * Math.cos(f) + L.r[1] * Math.sin(f); cap.push([L.P[0] + dx * L.hw, L.P[1] + dz * L.hw]); outer.push([L.P[0] + dx * (L.hw + WALK_W), L.P[1] + dz * (L.hw + WALK_W)]); }
+      if (opt.rural && opt.rural(L.e)) { A.fan(L.P, cap, Y_ROAD); continue; }
       A.fan(L.P, cap, Y_ROAD); W.strip(cap, outer, Y_WALK); for (let k = 0; k + 1 < cap.length; k++) K.wall(cap[k + 1], cap[k], Y_ROAD - .02, Y_WALK);
       const tw = (p, f) => [L.P[0] + (p[0] - L.P[0]) * f, L.P[1] + (p[1] - L.P[1]) * f];
       GU.strip(cap.map(p => tw(p, (L.hw - GW) / L.hw)), cap, Y_ROAD + .006); CT.strip(cap, cap.map(p => tw(p, (L.hw + CW) / L.hw)), Y_WALK + .004);
@@ -343,6 +355,8 @@ export function buildRoads(net, M, opt = {}) {
   const add = (geo, mat, shadow = true) => { const m = new THREE.Mesh(geo.build(), mat); m.receiveShadow = shadow; g.add(m); return m; };
   add(A, M.asphalt); add(W, M.walk); add(K, M.curb); add(MK, M.mark); add(MY, M.markY); add(IS, M.island);
   add(PW, M.parkway || (M.parkway = patchy(new THREE.MeshStandardMaterial({ map: M.tex.lawn, color: 0x95ab62, roughness: 1 }), .35, 5)));
+  if (SH.p.length) add(SH, M.shoulder || (M.shoulder = patchy(new THREE.MeshStandardMaterial({ map: M.asphalt.map, color: 0x8a8884, roughness: .95 }), .5, 6)));
+  if (GR.p.length) add(GR, M.gravelEdge || (M.gravelEdge = patchy(new THREE.MeshStandardMaterial({ map: M.tex.gravel, color: 0xb8ae98, roughness: 1 }), .5, 3)));
   if (TP.p.length) add(TP, M.tactile || (M.tactile = (() => {   // truncated domes: a grid of little bumps on yellow
     const S = 64, cv2 = document.createElement('canvas'); cv2.width = cv2.height = S; const g2 = cv2.getContext('2d'); g2.fillStyle = '#d9a514'; g2.fillRect(0, 0, S, S);
     for (let y = 4; y < S; y += 8) for (let x = 4; x < S; x += 8) { g2.fillStyle = '#f0c232'; g2.beginPath(); g2.arc(x, y, 2.4, 0, 7); g2.fill(); g2.fillStyle = 'rgba(0,0,0,.25)'; g2.beginPath(); g2.arc(x + .8, y + .8, 2.4, 0, 7); g2.fill(); g2.fillStyle = '#f2c436'; g2.beginPath(); g2.arc(x - .3, y - .3, 2.1, 0, 7); g2.fill(); }
@@ -350,6 +364,16 @@ export function buildRoads(net, M, opt = {}) {
     return new THREE.MeshStandardMaterial({ map: t, roughness: .8, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }); })()));
   add(GU, M.gutter || (M.gutter = patchy(new THREE.MeshStandardMaterial({ map: M.walk.map, color: 0xa39f96, roughness: .95, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }), .45, 4)));
   add(CT, M.curbTop || (M.curbTop = patchy(new THREE.MeshStandardMaterial({ map: M.walk.map, color: 0xe4e0d6, roughness: .85, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }), .25, 3)));
+  // the grates and covers: small textured plates just above the road
+  const plate = (list, w, dd, key, draw) => {
+    if (!list.length) return;
+    if (!M[key]) { const S = 64, cv = document.createElement('canvas'); cv.width = cv.height = S; draw(cv.getContext('2d'), S); const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; M[key] = new THREE.MeshStandardMaterial({ map: t, roughness: .55, metalness: .5, transparent: true, alphaTest: .4, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }); }
+    const im = new THREE.InstancedMesh(new THREE.PlaneGeometry(w, dd).rotateX(-Math.PI / 2), M[key], list.length), dm = new THREE.Object3D();
+    list.forEach((q, i) => { dm.position.set(q[0], Y_ROAD + .012, q[1]); dm.rotation.set(0, q[2], 0); dm.updateMatrix(); im.setMatrixAt(i, dm.matrix); });
+    im.receiveShadow = true; g.add(im);
+  };
+  plate(inlets, 1.05, .55, 'grateMat', (g2, S) => { g2.fillStyle = '#3d3b38'; g2.fillRect(0, 0, S, S); g2.fillStyle = '#121212'; for (let x = 6; x < S - 4; x += 7) g2.fillRect(x, 8, 3.5, S - 16); g2.strokeStyle = '#5a5751'; g2.lineWidth = 3; g2.strokeRect(2, 2, S - 4, S - 4); });
+  plate(holes, 1.3, 1.3, 'holeMat', (g2, S) => { g2.clearRect(0, 0, S, S); g2.fillStyle = '#4a4742'; g2.beginPath(); g2.arc(S / 2, S / 2, S / 2 - 1, 0, 7); g2.fill(); g2.strokeStyle = '#2e2c29'; g2.lineWidth = 2; for (let r2 = 8; r2 < S / 2 - 3; r2 += 6) { g2.beginPath(); g2.arc(S / 2, S / 2, r2, 0, 7); g2.stroke(); } for (let a = 0; a < 8; a++) { g2.beginPath(); g2.moveTo(S / 2, S / 2); g2.lineTo(S / 2 + Math.cos(a * .785) * (S / 2 - 3), S / 2 + Math.sin(a * .785) * (S / 2 - 3)); g2.stroke(); } });
   g.userData.lamps = lamps;
   return g;
 }

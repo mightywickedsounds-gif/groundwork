@@ -108,10 +108,10 @@ export function buildScenery(net, city, life, Q) {
     }
     // power poles down one side, wires between them
     if (inTown || e.kind === 'avenue') {
-      let last = null; const side = big ? -1 : 1;
+      let last = null; const rur = !inTown; const side = big ? -1 : 1;
       for (let s = 6 + hash(e.id, 31) * 10; s < e.len - 4; s += 38) {
         if (nearNode(e, s, 3)) { last = null; continue; }
-        const [x, z, yaw, q] = spot(e, s, side, WALK_W + .7); if (blocked(x, z, -1)) { last = null; continue; }
+        const [x, z, yaw, q] = spot(e, s, side, rur ? 4.2 : WALK_W + .7); if (blocked(x, z, -1)) { last = null; continue; }
         P.pole.push([x, z, Math.atan2(-q[3], q[2]) + Math.PI / 2]);
         if (last) for (const o of [-1.05, -.35, .35, 1.05]) wires.push([last[0] - q[3] * o * side, last[1] + q[2] * o * side, x - q[3] * o * side, z + q[2] * o * side]);
         last = [x, z]; void yaw;
