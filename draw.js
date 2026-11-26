@@ -738,9 +738,10 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
   }
   // trees (plus woods on land the city hasn't reached yet) and shrubs
   const leaf = M.leaf || (M.leaf = leafMaterial(U, Q.treeDetail > 1)), wood = M.trunk || (M.trunk = new THREE.MeshStandardMaterial({ color: 0x4a3d31, roughness: .95 }));
-  for (const [Tr, shadow] of [[city.trees, true], [opt.wild || [], Q.shadows > 1]]) if (Tr.length) {
+  const ownTrees = opt.more && opt.more.length ? city.trees.concat(opt.more) : city.trees;
+  for (const [Tr, shadow] of [[ownTrees, true], [opt.wild || [], Q.shadows > 1]]) if (Tr.length) {
     // the woods round the town are mostly seen from afar: simpler crowns there
-    const kinds = Tr === city.trees ? (M.treeGeos || (M.treeGeos = [oakGeo(11), oakGeo(23), oakGeo(37), cedarGeo(5), cedarGeo(9)])) : (M.treeLite || (M.treeLite = [oakGeo(11, true), oakGeo(23, true), oakGeo(37, true), cedarGeo(5, true), cedarGeo(9, true)]));
+    const kinds = Tr === ownTrees ? (M.treeGeos || (M.treeGeos = [oakGeo(11), oakGeo(23), oakGeo(37), cedarGeo(5), cedarGeo(9)])) : (M.treeLite || (M.treeLite = [oakGeo(11, true), oakGeo(23, true), oakGeo(37, true), cedarGeo(5, true), cedarGeo(9, true)]));
     const pick = t => t[3] < .7 ? Math.floor(t[3] * 4.29) % 3 : 3 + (Math.floor(t[3] * 97) % 2);
     const cnt = kinds.map(() => 0); for (const t of Tr) cnt[pick(t)]++;
     const cm = kinds.map((k, v) => new THREE.InstancedMesh(k.crown, leaf, Math.max(1, cnt[v]))), wm = kinds.map((k, v) => new THREE.InstancedMesh(k.wood, wood, Math.max(1, cnt[v])));
@@ -806,11 +807,31 @@ function paint(g, rgb, light = 0) {
   g.clearGroups(); return g;
 }
 function part(geos, w, h, d, x, y, z, rgb, light = 0) { geos.push(paint(new THREE.BoxGeometry(w, h, d).translate(x, y, z), rgb, light)); }
+// cars aren't boxes: seen from above the nose and tail round off, and the cabin narrows towards the roof.
+// WARP (set while a car is built) bends every body and glass part that way
+let WARP = null;
+function carWarp(L, belt, roof) {
+  const h = L / 2;
+  return (x, y, z) => {
+    const t = Math.min(1, Math.abs(x) / h), e = Math.max(0, (t - .7) / .3);
+    let k = Math.sqrt(Math.max(0, 1 - e * e * .42));                           // round the corners in plan
+    k *= 1 - .13 * Math.max(0, Math.min(1, (y - belt) / Math.max(.2, roof - belt)));   // tumblehome
+    k *= 1 - .035 * Math.max(0, Math.min(1, (belt - y) / belt * 2.2));          // tuck in at the sills
+    return z * k;
+  };
+}
+// round off a profile's corners (Chaikin): a smoother silhouette
+function smoothP(pts, n = 2) {
+  for (let it = 0; it < n; it++) { const o = []; for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; o.push([a[0] * .75 + b[0] * .25, a[1] * .75 + b[1] * .25], [a[0] * .25 + b[0] * .75, a[1] * .25 + b[1] * .75]); } pts = o; }
+  return pts;
+}
 // extrude a side profile [[x, y], ...] (x forward) to width W, rounded edges
 function slab(pts, W, rgb, bevel = .08) {
   const sh = new THREE.Shape(pts.map(p => new THREE.Vector2(p[0], p[1])));
-  const g = new THREE.ExtrudeGeometry(sh, { depth: Math.max(.05, W - 2 * bevel), bevelEnabled: bevel > 0, bevelThickness: bevel, bevelSize: bevel * .7, bevelSegments: 1, curveSegments: 1 });
-  g.translate(0, 0, -(W - 2 * bevel) / 2); g.computeVertexNormals();
+  const g = new THREE.ExtrudeGeometry(sh, { depth: Math.max(.05, W - 2 * bevel), bevelEnabled: bevel > 0, bevelThickness: bevel, bevelSize: bevel * .7, bevelSegments: WARP ? 3 : 1, curveSegments: 1 });
+  g.translate(0, 0, -(W - 2 * bevel) / 2);
+  if (WARP) { const p = g.attributes.position; for (let i = 0; i < p.count; i++) p.setZ(i, WARP(p.getX(i), p.getY(i), p.getZ(i))); }
+  g.computeVertexNormals();
   return paint(g, rgb);
 }
 // glass that sits proud of a body (vans, trucks): the window outline grown a little, a touch wider than the body
@@ -825,7 +846,7 @@ function cabin(gs, pts, W, roofY) {
   gs.push(slab([[x1 + .03, roofY - .04], [x1 - .02, roofY + .04], [x0 + .02, roofY + .04], [x0 - .03, roofY - .04]], W - .22, BODY, .06));
 }
 function wheels(geos, xs, w, r = .34) {
-  const tire = new THREE.CylinderGeometry(r, r, .24, 8, 1, true).rotateX(Math.PI / 2), hub = new THREE.CircleGeometry(r * .6, 6);
+  const tire = new THREE.CylinderGeometry(r, r, .24, 14, 1, true).rotateX(Math.PI / 2), hub = new THREE.CircleGeometry(r * .62, 10);
   for (const x of xs) for (const s of [-1, 1]) { geos.push(paint(tire.clone().translate(x, r, s * (w / 2 - .16)), DARK)); geos.push(paint(hub.clone().rotateY(s < 0 ? Math.PI : 0).translate(x, r, s * (w / 2 - .04)), CHROME)); }
 }
 function lamps(geos, L, W, yh, yt, rear = -L / 2, front = L / 2) {
@@ -841,31 +862,31 @@ export function vehicleGeos() {
   const make = fn => { const geos = []; fn(geos); const g = mergeGeometries(geos); g.computeBoundingSphere(); return g; };
   return {
     car: make(gs => {   // sedan
-      const L = 4.6, W = 1.82, h = L / 2;
-      gs.push(slab([[-h, .34], [h - .08, .34], [h, .5], [h - .05, .74], [h - .9, .86], [1.05, .98], [-1.35, 1.0], [-h + .1, .94], [-h, .7]], W, BODY));
-      cabin(gs, [[1.05, .96], [.32, 1.4], [-.78, 1.4], [-1.35, .98]], W, 1.4);
+      const L = 4.6, W = 1.82, h = L / 2; WARP = carWarp(L, .95, 1.42);
+      gs.push(slab(smoothP([[-h, .34], [h - .08, .34], [h, .5], [h - .05, .74], [h - .9, .86], [1.05, .98], [-1.35, 1.0], [-h + .1, .94], [-h, .7]], 1), W, BODY, .12));
+      cabin(gs, smoothP([[1.12, .95], [.32, 1.41], [-.78, 1.41], [-1.42, .97]], 1), W, 1.4); WARP = null;
       part(gs, .16, .2, W * .96, h - .03, .45, 0, DARK); part(gs, .16, .2, W * .96, -h + .03, .45, 0, DARK);
       lamps(gs, L, W, .7, .82); mirrors(gs, .9, 1.05, W - .1); wheels(gs, [1.38, -1.4], W);
     }),
     hatch: make(gs => {
-      const L = 4.2, W = 1.78, h = L / 2;
-      gs.push(slab([[-h, .34], [h - .08, .34], [h, .5], [h - .05, .74], [h - .75, .86], [.9, .98], [-h + .1, 1.0], [-h, .7]], W, BODY));
-      cabin(gs, [[.9, .96], [.2, 1.43], [-1.55, 1.42], [-h + .15, .98]], W, 1.42);
+      const L = 4.2, W = 1.78, h = L / 2; WARP = carWarp(L, .95, 1.43);
+      gs.push(slab(smoothP([[-h, .34], [h - .08, .34], [h, .5], [h - .05, .74], [h - .75, .86], [.9, .98], [-h + .1, 1.0], [-h, .7]], 1), W, BODY, .12));
+      cabin(gs, smoothP([[.97, .95], [.2, 1.44], [-1.55, 1.43], [-h + .12, .97]], 1), W, 1.42); WARP = null;
       part(gs, .16, .2, W * .96, h - .03, .45, 0, DARK); part(gs, .16, .2, W * .96, -h + .03, .45, 0, DARK);
       lamps(gs, L, W, .7, .92); mirrors(gs, .75, 1.05, W - .1); wheels(gs, [1.28, -1.3], W, .32);
     }),
     suv: make(gs => {
-      const L = 4.85, W = 1.96, h = L / 2;
-      gs.push(slab([[-h, .42], [h - .1, .42], [h, .6], [h - .04, .95], [h - .85, 1.08], [1.1, 1.18], [-h, 1.2], [-h, .7]], W, BODY));
-      cabin(gs, [[1.1, 1.16], [.55, 1.72], [-h + .2, 1.72], [-h + .08, 1.18]], W, 1.72);
+      const L = 4.85, W = 1.96, h = L / 2; WARP = carWarp(L, 1.15, 1.74);
+      gs.push(slab(smoothP([[-h, .42], [h - .1, .42], [h, .6], [h - .04, .95], [h - .85, 1.08], [1.1, 1.18], [-h, 1.2], [-h, .7]], 1), W, BODY, .13));
+      cabin(gs, smoothP([[1.16, 1.15], [.55, 1.73], [-h + .2, 1.73], [-h + .06, 1.17]], 1), W, 1.72); WARP = null;
       part(gs, .18, .26, W * .97, h - .04, .55, 0, DARK); part(gs, .18, .26, W * .97, -h + .04, .55, 0, DARK);
       part(gs, L * .55, .05, W * .7, -.3, 1.77, 0, DARK);   // roof rails
       lamps(gs, L, W, .92, 1.05); mirrors(gs, .95, 1.25, W - .1); wheels(gs, [1.45, -1.5], W, .39);
     }),
     pickup: make(gs => {   // full-size pickup: cab and an open bed
-      const L = 5.3, W = 2.0, h = L / 2;
-      gs.push(slab([[-.55, .45], [h - .1, .45], [h, .65], [h - .02, 1.12], [h - 1.0, 1.2], [1.05, 1.25], [-.55, 1.25]], W, BODY));
-      cabin(gs, [[1.05, 1.23], [.55, 1.84], [-.45, 1.84], [-.55, 1.23]], W, 1.84);
+      const L = 5.3, W = 2.0, h = L / 2; WARP = carWarp(L, 1.22, 1.85);
+      gs.push(slab(smoothP([[-.55, .45], [h - .1, .45], [h, .65], [h - .02, 1.12], [h - 1.0, 1.2], [1.05, 1.25], [-.55, 1.25]], 1), W, BODY, .12));
+      cabin(gs, smoothP([[1.1, 1.22], [.55, 1.85], [-.45, 1.85], [-.55, 1.22]], 1), W, 1.84); WARP = null;
       gs.push(slab([[-h, .5], [-.55, .5], [-.55, 1.18], [-h, 1.18]], W, BODY, .05));
       part(gs, h - .65, .04, W - .24, -(h + .55) / 2 - .02, 1.19, 0, [.12, .12, .12]);   // bed floor seen from above
       part(gs, .2, .32, W * .97, h - .05, .62, 0, CHROME); part(gs, .2, .26, W * .97, -h + .05, .58, 0, DARK);
@@ -887,10 +908,10 @@ export function vehicleGeos() {
       lamps(gs, L, W, .95, 1.0); mirrors(gs, h - .8, 2.2, W - .1); wheels(gs, [3.0, -2.2, -3.4], W, .5);
     }),
     police: make(gs => {   // a police utility vehicle: black and white, light bar on the roof, push bar
-      const L = 4.95, W = 2.0, h = L / 2, K = [.04, .045, .05], Wt = [.95, .95, .95];
-      gs.push(slab([[-h, .42], [h - .1, .42], [h, .6], [h - .04, .95], [h - .85, 1.08], [1.1, 1.18], [-h, 1.2], [-h, .7]], W, K));
-      part(gs, 2.3, .52, W + .02, -.15, .86, 0, Wt);                                 // white doors
-      cabin(gs, [[1.1, 1.16], [.55, 1.72], [-h + .2, 1.72], [-h + .08, 1.18]], W, 1.72);
+      const L = 4.95, W = 2.0, h = L / 2, K = [.04, .045, .05], Wt = [.95, .95, .95]; WARP = carWarp(L, 1.15, 1.74);
+      gs.push(slab(smoothP([[-h, .42], [h - .1, .42], [h, .6], [h - .04, .95], [h - .85, 1.08], [1.1, 1.18], [-h, 1.2], [-h, .7]], 1), W, K, .13));
+      gs.push(slab([[-1.3, .62], [1.0, .62], [1.0, 1.12], [-1.3, 1.12]], W + .03, Wt, .02));   // white doors
+      cabin(gs, smoothP([[1.16, 1.15], [.55, 1.73], [-h + .2, 1.73], [-h + .06, 1.17]], 1), W, 1.72); WARP = null;
       part(gs, 2.2, .05, W - .26, -.4, 1.765, 0, Wt);                                // white roof
       part(gs, .3, .14, W * .75, -.05, 1.84, 0, [.12, .12, .14]);                    // light bar
       for (const sd of [-1, 1]) part(gs, .26, .12, W * .34, -.05, 1.86, sd * W * .2, sd < 0 ? [1, .1, .08] : [.15, .3, 1], sd < 0 ? 5 : 6);
@@ -932,8 +953,8 @@ export function vehicleGeos() {
     }),
   };
 }
-export function vehicleMaterial(U) {
-  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .3, metalness: .4 });
+export function vehicleMaterial(U, fine = true) {
+  const m = fine ? new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: .32, metalness: .35, clearcoat: .9, clearcoatRoughness: .12 }) : new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .3, metalness: .4 });
   m.onBeforeCompile = sh => {
     sh.uniforms.uNight = U.uNight; sh.uniforms.uTime = U.uTime;
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float aLight; attribute float aBrake; varying float vLight; varying float vBrake;')

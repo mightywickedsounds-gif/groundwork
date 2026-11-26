@@ -20,17 +20,35 @@ const TYPES = { js: 'text/javascript', mjs: 'text/javascript', jpg: 'image/jpeg'
   });
   await p.goto('http://game.test/');
   await p.waitForFunction(() => window.FT && FT.net, null, { timeout: 240000 });
+  await p.waitForSelector('#title.show');
+  check('title screen shows after loading', await p.evaluate(() => document.getElementById('boot').classList.contains('gone')));
   await p.click('#playBtn');
-  await p.evaluate(() => FT.setSpeed(0));
+  await p.evaluate(() => { FT.setSpeed(0); FT.life.coins = 1e6; });
   const st = () => p.evaluate(() => ({ cars: FT.net.cars.length, nodes: FT.net.nodes.size, edges: FT.net.edges.size, b: FT.city.buildings.length, arrived: FT.net.stats.arrived, gave: FT.net.stats.gaveUp, meter: FT.S.meter }));
-  check('city starts with streets and buildings', (await st()).edges > 20 && (await st()).b > 50, JSON.stringify(await st()));
+  check('the town starts small (5-10 roads, under 20 buildings)', (await st()).edges >= 5 && (await st()).edges <= 10 && (await st()).b < 20 && (await st()).b >= 10, JSON.stringify(await st()));
   await p.evaluate(() => FT.step(120));
-  const s1 = await st(); check('traffic runs', s1.cars > 20 && s1.arrived > 0, JSON.stringify(s1));
+  const s1 = await st(); check('traffic runs', s1.cars > 5 && s1.arrived > 0, JSON.stringify(s1));
+  // the economy, people and the law
+  const eco = await p.evaluate(() => {
+    const L = FT.life, e = [...FT.net.edges.values()].filter(e => e.len > 60 && Math.hypot(e.cx, e.cz) < 220);
+    let pd = null; for (const ed of e) for (const sg of [1, -1]) if (!pd) pd = L.place('police', ed, ed.len * .5, sg);
+    const b = FT.city.buildings.find(b => b.biz && b.biz.t === 'diner'), lv = b.biz.lvl; L.upgrade(b);
+    const car = FT.net.cars.find(c => c.pid > 0) || FT.net.cars.find(c => c.pid); let card = '';
+    if (car) { FT.select({ k: 'p', id: car.pid }); card = document.getElementById('card').textContent; }
+    FT.select({ k: 'b', id: b.id }); const bcard = document.getElementById('card').textContent; FT.select(null);
+    return { police: !!pd, up: b.biz.lvl === lv + 1, card: card.slice(0, 80), bcard: bcard.slice(0, 60), walkers: L.walkers.length };
+  });
+  check('a police station can be built', eco.police);
+  check('a business can be upgraded', eco.up);
+  check('tapping a driver shows who they are', /Reports to|Visitor|Lives at/.test(eco.card), eco.card);
+  check('a business card shows its name and level', /Level/.test(eco.bcard), eco.bcard);
+  await p.evaluate(() => FT.step(60));
+  check('police head out to watch the roads', await p.evaluate(() => FT.law.units.some(u => u.state !== 'base')), await p.evaluate(() => FT.law.units.map(u => u.state).join()));
   const shot = async (name, cam, hour) => { await p.evaluate(([c, h]) => { if (h != null) FT.setHour(h); Object.assign(FT.cam, c); FT.placeCamera(); FT.render(); FT.render(); }, [cam, hour]); await p.waitForTimeout(400); await p.screenshot({ path: path.join(OUT, name + '.png') }); };
-  await shot('overview', { x: 0, z: 30, dist: 520, yaw: .35, pitch: .9 }, 9.5);
-  await shot('street', { x: 0, z: -150, dist: 120, yaw: .6, pitch: .62 }, 9.5);
+  await shot('overview', { x: 0, z: -20, dist: 330, yaw: .9, pitch: .62 }, 9.5);
+  await shot('street', { x: 10, z: -50, dist: 75, yaw: .5, pitch: .42 }, 10);
   // tools
-  const j = await p.evaluate(() => { const n = [...FT.net.nodes.values()].find(n => n.edges.size === 4 && Math.hypot(n.x, n.z) < 200); return n && [n.x, n.z, n.id]; });
+  const j = await p.evaluate(() => { const n = [...FT.net.nodes.values()].find(n => n.edges.size === 4 && Math.hypot(n.x, n.z) < 200 && n.x < 0); return n && [n.x, n.z, n.id]; });
   check('found a 4-way junction', !!j);
   await p.evaluate(([x, z]) => { FT.setTool('ring'); FT.click(x, z); }, j);
   const rings = await p.evaluate(() => [...FT.net.nodes.values()].filter(n => n.ring).length);
@@ -74,7 +92,7 @@ const TYPES = { js: 'text/javascript', mjs: 'text/javascript', jpg: 'image/jpeg'
       r.fulfill({ status: 200, contentType: TYPES[f.split('.').pop()] || 'text/plain', body: fs.readFileSync(fp) });
     });
     await q.goto('http://game.test/'); await q.waitForFunction(() => window.FT && FT.net, null, { timeout: 240000 });
-    await q.click('#playBtn'); await q.evaluate(() => { FT.setSpeed(0); Object.assign(FT.cam, { x: 0, z: 0, dist: 160, yaw: 0, pitch: 1.3 }); FT.placeCamera(); FT.setTool('road'); });
+    await q.waitForSelector('#title.show'); await q.click('#playBtn'); await q.evaluate(() => { FT.life.coins = 1e6; FT.setSpeed(0); Object.assign(FT.cam, { x: 0, z: 0, dist: 160, yaw: 0, pitch: 1.3 }); FT.placeCamera(); FT.setTool('road'); });
     const cdp = await ph.newCDPSession(q);
     // touches carry the time they happened (like a real phone), even when this slow test browser handles them late
     const touch = async (pts, holdMs = 0) => {

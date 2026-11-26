@@ -239,7 +239,7 @@ export function createCity(net, seed = 7) {
       if (C.unlocked.some(u => u[0] === i && u[1] === j && !u[2])) continue;
       const r = rng((i * 7919 + j * 104729 + C.seed * 13) >>> 0), x0 = gx(i * CHUNK), z0 = gx(j * CHUNK);
       const near = C.unlocked.some(u => Math.abs(u[0] - i) <= 1 && Math.abs(u[1] - j) <= 1);
-      const clumps = 2 + (r() * 4 | 0);
+      const clumps = 4 + (r() * 6 | 0);
       for (let k = 0; k < clumps; k++) {
         const cx = x0 + 20 + r() * (S - 40), cz = z0 + 20 + r() * (S - 40), rad = 15 + r() * 40, n = (near ? 18 : 10) + (r() * 25 | 0);
         for (let m = 0; m < n; m++) { const a = r() * 6.28, d = Math.sqrt(r()) * rad; out.push([cx + Math.cos(a) * d, cz + Math.sin(a) * d, .7 + r() * .6, .25 + r() * .75]); }   // Hill Country woods: lots of cedar
@@ -253,7 +253,7 @@ export function createCity(net, seed = 7) {
     for (const b of C.buildings) { const k = key(b.x, b.z); if (!grid.has(k)) grid.set(k, []); grid.get(k).push([b.x, b.z, Math.hypot(b.w, b.d) / 2 + (b.kind === 'house' ? 12 : 6)]); }
     for (const l of C.lots) { const k = key(l.x, l.z); if (!grid.has(k)) grid.set(k, []); grid.get(k).push([l.x, l.z, Math.hypot(l.w, l.d) / 2 + 2]); }
     const kept = out.filter(clear);
-    return kept.length > 3800 ? kept.filter((_, k) => k % Math.ceil(kept.length / 3800) === 0) : kept;
+    return kept.length > 6000 ? kept.filter((_, k) => k % Math.ceil(kept.length / 6000) === 0) : kept;
   };
   C.bounds = function () {
     let a = 1e9, b = -1e9, c = 1e9, d = -1e9;

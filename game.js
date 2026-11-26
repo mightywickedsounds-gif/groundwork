@@ -6,6 +6,7 @@ import { createLife, BIZ, BUILD_ORDER, MAX_LVL, COST, lvlMul, upCost } from './l
 import { createLaw, aCar } from './police.js';
 import { makeMaterials, CLOUD, cloudUniforms, buildRoads, buildCity, vehicleGeos, vehicleMaterial, makeFleet, staticCarGeo, carColor, personGeo, personMaterial, lampGeo, signalGeo, buildSignals, hwOf, beamMaterial } from './draw.js';
 import { makeSky } from './sky.js';
+import { buildScenery } from './scenery.js';
 
 const $ = id => document.getElementById(id);
 let titleUp = true;   // the title screen is up (the camera circles the town)
@@ -93,7 +94,7 @@ ground.receiveShadow = true; scene.add(ground);
 // ---------------- world ----------------
 let net, city, S;          // S = game state
 let roadsG = null, cityG = null, sigG = null, lampsG = null, overlay = null;
-const VG = vehicleGeos(), carMat = vehicleMaterial(U); M.car = carMat;
+const VG = vehicleGeos(), carMat = vehicleMaterial(U, qName !== 'low'); M.car = carMat;
 const parkedGeo = staticCarGeo();
 let fleet = makeFleet(VG, carMat, Q.maxCars + 50); for (const m of Object.values(fleet)) scene.add(m);
 const pedMat = personMaterial(U), beamMat = beamMaterial();
@@ -218,8 +219,12 @@ const poolMat = (() => {
   gr.addColorStop(0, 'rgba(255,200,130,1)'); gr.addColorStop(1, 'rgba(255,200,130,0)'); g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
   return new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0, toneMapped: false });
 })();
+let sceneryG = null;
 function rebuildCity() {
-  disposeGroup(cityG); cityG = buildCity(city, M, U, Q, { car: parkedGeo }, { wild: city.wild() });
+  if (life) life.sync();
+  if (sceneryG && sceneryG.userData.signMat) { sceneryG.userData.signMat.map.dispose(); sceneryG.userData.signMat.dispose(); }
+  disposeGroup(sceneryG); sceneryG = buildScenery(net, city, life, Q); scene.add(sceneryG);
+  disposeGroup(cityG); cityG = buildCity(city, M, U, Q, { car: parkedGeo }, { wild: city.wild(), more: sceneryG.userData.trees });
   const LL = cityG.userData.lotLights;   // parking lot lights: a glowing head and a pool of light at night
   if (LL && LL.length) {
     const gm = new THREE.InstancedMesh(new THREE.BoxGeometry(.8, .06, .4), lampGlowMat, LL.length), pm = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), poolMat, LL.length);
@@ -973,6 +978,8 @@ function lighting(hour, t = performance.now() / 1000) {
   renderer.toneMappingExposure = 1;
   lampGlowMat.color.setRGB(.25 + night * .9, .22 + night * .75, .18 + night * .5);
   poolMat.opacity = night * .4;
+  if (sceneryG && sceneryG.userData.signMat) sceneryG.userData.signMat.emissiveIntensity = night * .5;
+  if (sceneryG && sceneryG.userData.wires) sceneryG.userData.wires.visible = cam.dist < 190;
   beamMat.opacity = night * .5;
   for (const m of [M.asphalt, M.walk, M.curb, M.building, M.roof, M.bits, M.leaf, M.trunk, M.lot, M.park, M.lawn, M.shrub, groundMat, pedMat]) if (m) m.envMapIntensity = .8 * (1 - dark * .5);
   if (M.car) M.car.envMapIntensity = 1.2 - dark * .5;
@@ -1042,8 +1049,10 @@ function scanPush(f) {
   row.innerHTML = `<b>${esc(f.code)}</b><span>${esc(f.txt)}</span>`;
   row.onclick = () => { flyTo({ x: f.x, z: f.z, dist: Math.min(cam.dist, 130) }, 1); if (f.pid && life.person(f.pid)) { select({ k: 'p', id: f.pid }); } else if (f.bid) select({ k: 'b', id: f.bid }); };
   L.prepend(row); while (L.children.length > 5) L.lastChild.remove();
-  $('scan').classList.add('show'); $('scan').classList.remove('ping'); void $('scan').offsetWidth; $('scan').classList.add('ping');
+  $('scan').classList.add('show', 'fresh'); $('scan').classList.remove('ping'); void $('scan').offsetWidth; $('scan').classList.add('ping');
+  clearTimeout(scanPush.h); scanPush.h = setTimeout(() => $('scan').classList.remove('fresh'), 9000);   // (on a phone it folds away to its header after a while)
 }
+$('scan').querySelector('.sh').onclick = () => $('scan').classList.toggle('fresh');
 // what an officer, firefighter or paramedic is doing right now
 function unitDoing(pid) {
   for (const u of law.units) {
