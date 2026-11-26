@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Net, RING_R, ONEWAY_W, WALK_W, LANE_W, along, closestOnPoly, laneOff } from './net.js';
 import { createCity, DAY, CHUNK, BLOCK } from './city.js';
 import { createLife, BIZ, BUILD_ORDER, MAX_LVL, COST, lvlMul, upCost } from './life.js';
+import { createLaw, aCar } from './police.js';
 import { makeMaterials, CLOUD, cloudUniforms, buildRoads, buildCity, vehicleGeos, vehicleMaterial, makeFleet, staticCarGeo, carColor, personGeo, personMaterial, lampGeo, signalGeo, buildSignals, hwOf, beamMaterial } from './draw.js';
 import { makeSky } from './sky.js';
 
@@ -105,6 +106,7 @@ function fresh(seed = (Math.random() * 1e6) | 0) {
   net = new Net(); city = createCity(net, seed); city.coreR = 0;
   life = createLife(net, city, seed); net.onDone = c => life.carDone(c);
   S = { time: DAY * 7 / 24, meter: 0, speed: 1, over: false, flow: 1, cam: null, seed, view: false };
+  law = createLaw(net, city, life); life.onCarOut = c => law.carOut(c);
   life.T = S.time; life.startTown(); city.sync(); life.sync(); lifeVer = city.ver;
   if (typeof document !== 'undefined' && $('viewBtn')) $('viewBtn').classList.remove('on');
 }
@@ -114,6 +116,7 @@ function load() {
     net = new Net(); net.load(d.net); city = createCity(net, d.city.seed); city.load(d.city); city.sync();
     S = Object.assign({ speed: 1, over: false, flow: 1 }, d.s); S.over = false;
     life = createLife(net, city, d.city.seed); net.onDone = c => life.carDone(c); life.T = S.time; life.load(d.life); lifeVer = city.ver;
+    law = createLaw(net, city, life); life.onCarOut = c => law.carOut(c);
     coreGrow(); return true;
   } catch (e) { console.warn('save unreadable', e); return false; }
 }
@@ -121,7 +124,7 @@ function save() {
   if (!net || S.over) return; if (!titleUp) S.cam = [cam.x, cam.z, cam.dist, cam.yaw, cam.pitch];
   try { localStorage.setItem(SAVE, JSON.stringify({ v: 2, net: net.serialize(), city: city.serialize(), life: life.serialize(), s: { time: S.time, meter: S.meter, seed: S.seed, speed: S.speed, cam: S.cam } })); } catch (e) { /* storage full: keep playing */ }
 }
-let life, lifeVer = -1;
+let life, law, lifeVer = -1;
 // the town centre: none while it's a village; it grows (and gets taller) as people move in
 function coreGrow() { const p = life.people.size; city.coreR = p < 160 ? 0 : Math.min(175, 50 + (p - 160) * .5); }
 
@@ -519,6 +522,7 @@ function walkPos(w) {
 // where a person is right now: [x, z] (in a car, on foot, or inside a building)
 function personPos(p) {
   if (p.car && net.cars.includes(p.car)) return [p.car.x, p.car.z];
+  for (const u of law.units) { if (u.car && u.car.pid === p.id && net.cars.includes(u.car)) return [u.car.x, u.car.z]; if (u.state === 'hide' && u.pid === p.id && u.spot) return [u.spot.x, u.spot.z]; }
   if (p.walk) { const q = walkPos(p.walk); return [q[0], q[1]]; }
   const b = life.bmap.get(p.at); return b ? [b.x, b.z] : null;
 }
@@ -549,6 +553,7 @@ function onTapWorld(x, z, sx, sy) {
   const r = Math.max(3.2, snapR() * .55); let best = null, bd = r;
   for (const w of life.walkers) { if (w.ghost) continue; const q = walkPos(w), d = Math.hypot(q[0] - x, q[1] - z); if (d < bd) { bd = d; best = w.pid; } }
   for (const c of net.cars) { if (!c.pid) continue; const d = Math.max(0, Math.hypot(c.x - x, c.z - z) - c.len * .35); if (d < bd) { bd = d; best = c.pid; } }
+  for (const u of law.units) if (u.state === 'hide' && u.spot && u.pid) { const d = Math.hypot(u.spot.x - x, u.spot.z - z) - 1.5; if (d < bd) { bd = d; best = u.pid; } }
   if (best != null && life.person(best)) { select({ k: 'p', id: best }); return; }
   const b = hitBuilding(sx, sy); if (b) { select({ k: 'b', id: b.id }); return; }
   select(null);
@@ -573,9 +578,10 @@ function drawCard() {
     if (w) { const sh = life.shift(p); if (sh) rows += `<span>Hours</span><b>${hhmm(sh[0])} to ${hhmm(sh[1])}</b>`; }
     if (home) rows += `<span>Lives at</span><b class="link" data-b="${home.id}">${esc(life.address(home))}</b>`;
     else if (p.guest) rows += `<span>From</span><b>Out of town</b>`;
-    if (!p.kid) rows += `<span>Car</span><b>${p.ins ? 'Insured' : 'No insurance'}, ${p.reg ? 'tags current' : 'tags expired'}</b>`;
+    if (!p.kid) rows += `<span>Car</span><b>${p.car && net.cars.includes(p.car) ? esc(aCar(p.car)) + ', ' : ''}${p.ins ? 'insured' : 'no insurance'}, ${p.reg ? 'tags current' : 'tags expired'}</b>`;
+    if (p.temper > .955 && !p.kid) rows += `<span>Driving</span><b>Reckless</b>`; else if (p.temper > .7 && !p.kid) rows += `<span>Driving</span><b>Heavy right foot</b>`;
     C.innerHTML = `<div class="ch"><div><h4>${esc(p.fn + ' ' + p.ln)}</h4><div class="sub">${p.age} · ${esc(role)}</div></div><button class="x" data-act="close">${X_ICON}</button></div>
-      <div class="doing">${esc(life.doing(p))}</div><div class="rows">${rows}</div>
+      <div class="doing">${esc(unitDoing(p.id) || (p.wanted && p.car ? 'Running from the police' : life.doing(p)))}</div><div class="rows">${rows}</div>
       <div class="cb"><button data-act="follow" class="${follow === p.id ? 'y' : ''}">${follow === p.id ? 'Following' : 'Follow'}</button>${w ? `<button data-b="${w.id}">Workplace</button>` : ''}${home ? `<button data-b="${home.id}">Home</button>` : ''}</div>`;
     return;
   }
@@ -829,6 +835,11 @@ function simStep(dt) {
   city.release(dt, Q.maxCars);
   net.step(dt);
   life.step(dt);
+  law.step(dt);
+  for (const ev of law.events.splice(0)) {
+    if (ev.k === 'horn') sound.honk(ev.x, ev.z);
+    if (ev.k === 'feed' && !titleUp) { scanPush(ev.f); if (['10-50', '10-80', '10-31', '10-52', '10-57'].includes(ev.f.code)) sound.siren(ev.f.x, ev.f.z); }
+  }
   // people move in when there's work: new homes go up along the streets (together every few seconds)
   if (city.regrow(dt, life.wantHomes())) save();
   if (city.ver !== lifeVer) { life.sync(); lifeVer = city.ver; coreGrow(); }
@@ -862,17 +873,25 @@ $('dsGo').onclick = () => { show('daySum', false); setSpeed(S.daySpeed || 1); };
 // ---------------- per frame drawing ----------------
 const kinds = Object.keys(fleet);
 const LOOK = c => c.type === 'car' ? (c.id % 3 === 0 ? 'hatch' : 'car') : c.type === 'suv' ? (c.id % 2 ? 'pickup' : 'suv') : c.type;
+const flashes = [];   // emergency lights: [x, z, phase]
 const beams = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), beamMat, Q.maxCars + 50); beams.count = 0; beams.frustumCulled = false; beams.renderOrder = 1; scene.add(beams);
 function drawCars() {
   const cnt = {}; for (const k of kinds) cnt[k] = 0;
   const lit = beamMat.opacity > .02; let nb = 0;
+  flashes.length = 0;
   for (const c of net.cars) {
     const look = LOOK(c), m = fleet[look], i = cnt[look]++; if (i >= m.instanceMatrix.count) continue;
-    const yaw = Math.atan2(-c.hz, c.hx);
-    dummy.position.set(c.x, 0, c.z); dummy.rotation.set(0, yaw, 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix();
-    m.setMatrixAt(i, dummy.matrix); m.setColorAt(i, c.type === 'bus' ? col.setRGB(.96, .6, .03, THREE.SRGBColorSpace) : c.type === 'truck' ? carColor((c.color * 3) % 1, col) : carColor(c.color, col));
-    m.geometry.attributes.aBrake.array[i] = c.brake + 2 * (c.sig || 0);
+    const yaw = Math.atan2(-c.hz, c.hx) + (c.spin || 0);
+    dummy.position.set(c.x, 0, c.z); dummy.rotation.set(0, yaw, c.crashed ? .02 : 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix();
+    if (c.siren || c.lights) flashes.push([c.x, c.z, c.id]);
+    m.setMatrixAt(i, dummy.matrix); m.setColorAt(i, c.type === 'bus' ? col.setRGB(.96, .6, .03, THREE.SRGBColorSpace) : c.type === 'police' || c.type === 'ems' || c.type === 'fire' ? col.setRGB(1, 1, 1) : c.type === 'truck' ? carColor((c.color * 3) % 1, col) : carColor(c.color, col));
+    m.geometry.attributes.aBrake.array[i] = c.brake + 2 * (c.sig || 0) + (c.siren || c.lights ? 8 : 0);
     if (lit) { const f = c.len / 2 + 6.5; dummy.position.set(c.x + c.hx * f, .1, c.z + c.hz * f); dummy.scale.set(13, 1, 7.5); dummy.updateMatrix(); beams.setMatrixAt(nb++, dummy.matrix); }
+  }
+  // police parked out of sight at their spots, watching the traffic
+  for (const u of law.units) {
+    if (u.state !== 'hide' || !u.spot) continue; const m = fleet.police, i = cnt.police++; if (i >= m.instanceMatrix.count) continue;
+    dummy.position.set(u.spot.x, 0, u.spot.z); dummy.rotation.set(0, u.spot.yaw, 0); dummy.updateMatrix(); m.setMatrixAt(i, dummy.matrix); m.setColorAt(i, col.setRGB(1, 1, 1)); m.geometry.attributes.aBrake.array[i] = 0;
   }
   for (const k of kinds) { const m = fleet[k]; m.count = cnt[k]; m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; m.geometry.attributes.aBrake.needsUpdate = true; }
   beams.count = nb; beams.visible = lit; if (nb) beams.instanceMatrix.needsUpdate = true;
@@ -962,6 +981,84 @@ function lighting(hour, t = performance.now() / 1000) {
 // the clock runs three times faster late at night (little traffic, nothing to wait for)
 const clockRate = h => (h >= 21.5 || h < 5) ? 3 : 1;
 
+// ---------------- emergencies on screen: flashing lights on the road, smoke and fire at wrecks, tempers ----------------
+const flashMesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: poolMat.map, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }), 64);
+flashMesh.count = 0; flashMesh.frustumCulled = false; flashMesh.renderOrder = 2; scene.add(flashMesh); flashMesh.setColorAt(0, new THREE.Color());
+// smoke: soft grey puffs rising (normal blending); flames: additive orange
+const PUFFS = 400, puffPos = new Float32Array(PUFFS * 3), puffVel = new Float32Array(PUFFS * 3), puffLife = new Float32Array(PUFFS), puffCol = new Float32Array(PUFFS * 3);
+const puffGeo = new THREE.BufferGeometry(); puffGeo.setAttribute('position', new THREE.BufferAttribute(puffPos, 3)); puffGeo.setAttribute('color', new THREE.BufferAttribute(puffCol, 3));
+const puffs = new THREE.Points(puffGeo, new THREE.PointsMaterial({ size: 4, map: dotTex, vertexColors: true, transparent: true, opacity: .55, depthWrite: false }));
+puffs.frustumCulled = false; scene.add(puffs);
+let puffI = 0;
+function puff(x, y, z, grey, up = 2.2, spread = .8) {
+  const k = puffI++ % PUFFS; puffPos.set([x + (Math.random() - .5) * spread, y, z + (Math.random() - .5) * spread], k * 3);
+  puffVel.set([(Math.random() - .5) * .8 + .5, up + Math.random() * 1.5, (Math.random() - .5) * .8 + .2], k * 3); puffLife[k] = 3 + Math.random() * 2; puffCol.set([grey, grey, grey * 1.02], k * 3);
+}
+let puffT = 0;
+function updateFx(dt, t) {
+  // red and blue light washing over the road round each emergency vehicle
+  let n = 0;
+  for (const [x, z, id] of flashes) {
+    if (n >= 62) break; const ph = (t * 2.7 + id * .37) % 1 < .5;
+    dummy.position.set(x, .22, z); dummy.rotation.set(0, 0, 0); dummy.scale.set(16, 1, 16); dummy.updateMatrix(); flashMesh.setMatrixAt(n, dummy.matrix);
+    flashMesh.setColorAt(n, ph ? col.setRGB(.9, .08, .05) : col.setRGB(.1, .25, 1)); n++;
+  }
+  flashMesh.count = n; flashMesh.instanceMatrix.needsUpdate = true; if (flashMesh.instanceColor) flashMesh.instanceColor.needsUpdate = true;
+  flashMesh.material.opacity = .35 + U.uNight.value * .5;
+  // wrecks steam, fires burn
+  puffT += dt;
+  if (puffT > .08) {
+    puffT = 0;
+    for (const inc of law.inc) for (const c of inc.cars) if (c.crashed && Math.random() < .5) puff(c.x + c.hx * c.len * .4, 1, c.z + c.hz * c.len * .4, .78, 1.2, .5);
+    for (const f of law.fires) { puff(f.x, 1.5, f.z, .16, 3.4, 1.2); puff(f.x, 1.5, f.z, .22, 3.0, 1.6); burst(f.x, f.z, 2, [1, .45, .08], 1.2); }
+  }
+  for (let k = 0; k < PUFFS; k++) {
+    if (puffLife[k] <= 0) { puffPos[k * 3 + 1] = -100; continue; }
+    puffLife[k] -= dt; for (let j = 0; j < 3; j++) puffPos[k * 3 + j] += puffVel[k * 3 + j] * dt; puffVel[k * 3 + 1] *= .995;
+  }
+  puffGeo.attributes.position.needsUpdate = true; puffGeo.attributes.color.needsUpdate = true;
+  puffs.material.size = Math.max(3, Math.min(14, cam.dist / 40));
+  // tempers: a sign over the car of the driver who lost it
+  let r = 0;
+  for (const q of law.rage) {
+    if (r >= 16) break; const c = q.car, sc = Math.max(2.4, Math.min(9, cam.dist * .02)), y = 3.2 + sc * .5 + Math.sin(t * 9) * .15;
+    dummy.position.set(c.x, y, c.z); dummy.quaternion.copy(camera.quaternion); dummy.scale.set(sc, sc, sc); dummy.updateMatrix(); rageMesh.setMatrixAt(r++, dummy.matrix);
+  }
+  dummy.quaternion.identity(); rageMesh.count = r; rageMesh.instanceMatrix.needsUpdate = true;
+}
+// a red sign with a raised hand
+const rageTex = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d');
+  g.fillStyle = '#f6f6f1'; g.beginPath(); g.arc(64, 64, 62, 0, 7); g.fill(); g.fillStyle = '#c9221b'; g.beginPath(); g.arc(64, 64, 55, 0, 7); g.fill();
+  g.fillStyle = '#f6f6f1'; const rr = (x, y, w, h, r) => { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.fill(); };
+  rr(38, 62, 52, 38, 10); rr(57, 22, 15, 50, 7); rr(42, 54, 13, 20, 6); rr(73, 54, 13, 20, 6); rr(84, 58, 12, 18, 6); rr(30, 70, 14, 14, 6);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+})();
+const rageMesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: rageTex, transparent: true, alphaTest: .5, toneMapped: false }), 16);
+rageMesh.count = 0; rageMesh.frustumCulled = false; rageMesh.renderOrder = 7; scene.add(rageMesh);
+// the police scanner: the latest calls, tap one to go there
+function scanPush(f) {
+  const L = $('scanList'), row = document.createElement('div'); row.className = 'srow c' + f.code.replace(/[^A-Z0-9]/g, '');
+  row.innerHTML = `<b>${esc(f.code)}</b><span>${esc(f.txt)}</span>`;
+  row.onclick = () => { flyTo({ x: f.x, z: f.z, dist: Math.min(cam.dist, 130) }, 1); if (f.pid && life.person(f.pid)) { select({ k: 'p', id: f.pid }); } else if (f.bid) select({ k: 'b', id: f.bid }); };
+  L.prepend(row); while (L.children.length > 5) L.lastChild.remove();
+  $('scan').classList.add('show'); $('scan').classList.remove('ping'); void $('scan').offsetWidth; $('scan').classList.add('ping');
+}
+// what an officer, firefighter or paramedic is doing right now
+function unitDoing(pid) {
+  for (const u of law.units) {
+    const on = (u.car && u.car.pid === pid && net.cars.includes(u.car)) || (u.state === 'hide' && u.pid === pid);
+    if (!on) continue;
+    const T = u.task;
+    if (u.state === 'hide') return 'Running radar on ' + life.streetName(u.spot.e);
+    if (T && T.k === 'chase') return u.state === 'stop' ? 'Traffic stop: writing a ticket' : T.target && T.target.flee ? 'In pursuit: ' + T.target.flee : 'Pulling a car over';
+    if (T && T.k === 'scene') return u.state === 'scene' ? (u.kind === 'fire' ? 'Putting out a car fire' : u.kind === 'ems' ? 'Treating the injured' : 'Working a crash') : 'Responding, lights and siren';
+    if (T && T.k === 'hide') return 'Heading out on patrol';
+    return 'Heading back to the station';
+  }
+  return null;
+}
+
 // ---------------- sound (made in code) ----------------
 const sound = (() => {
   let ctx = null, on = localStorage.getItem('flowtown.sound') !== '0', rumble = null, hornT = 0;
@@ -995,8 +1092,17 @@ const sound = (() => {
     if (!ctx || !on) return; const t = ctx.currentTime;
     [1318, 1976].forEach((fr, i) => { const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'triangle'; o.frequency.value = fr; g.gain.setValueAtTime(0, t + i * .07); g.gain.linearRampToValueAtTime(.06, t + i * .07 + .01); g.gain.exponentialRampToValueAtTime(.0001, t + i * .07 + .35); o.connect(g).connect(ctx.destination); o.start(t + i * .07); o.stop(t + i * .07 + .4); });
   }
+  // a siren wail (fainter further away) and a car horn
+  function siren(x, z) {
+    if (!ctx || !on) return; const d = Math.hypot(x - cam.x, z - cam.z), v = Math.min(1, 200 / (cam.dist + d)) * .045; if (v < .004) return;
+    const t = ctx.currentTime, o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 2200;
+    o.type = 'sawtooth'; for (let i = 0; i < 4; i++) { o.frequency.setValueAtTime(620, t + i * .9); o.frequency.linearRampToValueAtTime(1250, t + i * .9 + .45); o.frequency.linearRampToValueAtTime(620, t + i * .9 + .9); }
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(v, t + .2); g.gain.setValueAtTime(v, t + 3.2); g.gain.linearRampToValueAtTime(0, t + 3.6);
+    o.connect(f).connect(g).connect(ctx.destination); o.start(t); o.stop(t + 3.7);
+  }
+  function honk(x, z) { if (!ctx || !on) return; const d = Math.hypot(x - cam.x, z - cam.z), v = Math.min(1, 160 / (cam.dist + d)); if (v > .25) horn(v * 1.4); }
   function toggle() { on = !on; localStorage.setItem('flowtown.sound', on ? '1' : '0'); if (on) start(); return on; }
-  return { start, tick, magic, coin, toggle, get on() { return on; } };
+  return { start, tick, magic, coin, siren, honk, toggle, get on() { return on; } };
 })();
 
 // ---------------- menus ----------------
@@ -1083,7 +1189,7 @@ function frame(now) {
   const spd = titleUp ? 1 : S.speed;   // the town lives on behind the title
   if (spd && !S.over) { let left = rdt * spd; while (left > 1e-4) { const d = Math.min(.1, left); simStep(d); left -= d; } }
   const hour = (S.time / DAY * 24) % 24, night = lighting(hour);
-  drawCars(); updatePeds(rdt * (spd ? Math.min(2, spd) : 0)); drawSignals(); updateSparks(rdt); selTick(rdt); drawCoins(now / 1000);
+  drawCars(); updatePeds(rdt * (spd ? Math.min(2, spd) : 0)); drawSignals(); updateSparks(rdt); selTick(rdt); drawCoins(now / 1000); updateFx(rdt * (spd ? 1 : 0), now / 1000);
   ovT += rdt; if (ovT > .5) { ovT = 0; paintOverlay(); }
   drawJams(now / 1000);
   hudT += rdt; if (hudT > .25) { hudT = 0; hud(); }
@@ -1096,11 +1202,11 @@ requestAnimationFrame(frame);
 // test hooks
 window.FT = {
   dbg() { return { tris: renderer.info.render.triangles, calls: renderer.info.render.calls, shadowOn: renderer.shadowMap.enabled, sunCast: sun.castShadow, map: !!sun.shadow.map, ms: sun.shadow.mapSize.x, bg: scene.background && scene.background.isTexture, env: !!scene.environment, cam: sun.shadow.camera.right, sunPos: sun.position.toArray().map(Math.round), q: qName, prog: renderer.info.programs.length }; },
-  get net() { return net; }, get scene() { return scene; }, along, toScreen(x, z) { const v = new THREE.Vector3(x, 0, z).project(camera), r = canvas.getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; }, hover(x, z) { T.mouse = [x, z]; hoverUpdate(); }, get T() { return T; }, get city() { return city; }, get S() { return S; }, cam, placeCamera, setTool, click, setSpeed, toggleView,
+  get net() { return net; }, get scene() { return scene; }, along, toScreen(x, z) { const v = new THREE.Vector3(x, 0, z).project(camera), r = canvas.getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; }, hover(x, z) { T.mouse = [x, z]; hoverUpdate(); }, get T() { return T; }, get city() { return city; }, get S() { return S; }, cam, placeCamera() { fly = zoomTo = coast = null; placeCamera(); }, setTool, click, setSpeed, toggleView,
   step(sec) { for (let t = 0; t < sec; t += .1) simStep(.1); },
   render() { if (net.ver !== seenNet) rebuildRoads(); if (city.ver !== seenCity) rebuildCity(); lighting((S.time / DAY * 24) % 24); drawCars(); updatePeds(.05); drawCoins(1); drawSignals(); paintOverlay(); drawJams(1); renderer.render(scene, camera); },
   setHour(h) { S.time = Math.floor(S.time / DAY) * DAY + h / 24 * DAY; },
   newCity(seed) { newCity(seed); setSpeed(0); },
-  pedPos(i) { const w = life.walkers[i]; if (!w) return null; const q = walkPos(w); return [q[0], q[1]]; }, get life() { return life; }, select, onTapWorld, buyLand, doBuild, openPicker, money,
+  pedPos(i) { const w = life.walkers[i]; if (!w) return null; const q = walkPos(w); return [q[0], q[1]]; }, get life() { return life; }, get law() { return law; }, select, onTapWorld, buyLand, doBuild, openPicker, money,
   carPos(i) { const c = net.cars[i]; return c ? [c.x, c.z, c.type] : null; },
 };

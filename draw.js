@@ -886,6 +886,41 @@ export function vehicleGeos() {
       part(gs, L, .3, W * .85, 0, .65, 0, DARK);
       lamps(gs, L, W, .95, 1.0); mirrors(gs, h - .8, 2.2, W - .1); wheels(gs, [3.0, -2.2, -3.4], W, .5);
     }),
+    police: make(gs => {   // a police utility vehicle: black and white, light bar on the roof, push bar
+      const L = 4.95, W = 2.0, h = L / 2, K = [.04, .045, .05], Wt = [.95, .95, .95];
+      gs.push(slab([[-h, .42], [h - .1, .42], [h, .6], [h - .04, .95], [h - .85, 1.08], [1.1, 1.18], [-h, 1.2], [-h, .7]], W, K));
+      part(gs, 2.3, .52, W + .02, -.15, .86, 0, Wt);                                 // white doors
+      cabin(gs, [[1.1, 1.16], [.55, 1.72], [-h + .2, 1.72], [-h + .08, 1.18]], W, 1.72);
+      part(gs, 2.2, .05, W - .26, -.4, 1.765, 0, Wt);                                // white roof
+      part(gs, .3, .14, W * .75, -.05, 1.84, 0, [.12, .12, .14]);                    // light bar
+      for (const sd of [-1, 1]) part(gs, .26, .12, W * .34, -.05, 1.86, sd * W * .2, sd < 0 ? [1, .1, .08] : [.15, .3, 1], sd < 0 ? 5 : 6);
+      part(gs, .2, .44, W * .7, h + .08, .72, 0, K);                                  // push bar
+      part(gs, .18, .26, W * .97, -h + .04, .55, 0, K);
+      lamps(gs, L, W, .92, 1.05); mirrors(gs, .95, 1.25, W - .1); wheels(gs, [1.45, -1.5], W, .39);
+    }),
+    ems: make(gs => {   // ambulance: cab and a white box with a red band and lights on the corners
+      const L = 6.4, W = 2.2, h = L / 2, Rd = [.75, .06, .05], Wt = [.96, .96, .95];
+      gs.push(slab([[h - 2.0, .5], [h - .1, .5], [h, .7], [h - .05, 1.2], [h - .5, 1.35], [h - .9, 2.1], [h - 2.0, 2.1]], W - .1, Wt));
+      gs.push(glass([[h - .5, 1.35], [h - .9, 2.0], [h - 1.5, 2.0], [h - 1.5, 1.35]], W - .2, 1.99));
+      part(gs, 4.3, 2.35, W, -h + 2.15, 1.75, 0, Wt);
+      part(gs, 4.32, .32, W + .02, -h + 2.15, 1.45, 0, Rd);
+      for (const sd of [-1, 1]) { part(gs, .22, .16, .3, h - 2.0, 2.96, sd * (W / 2 - .2), sd < 0 ? [1, .1, .08] : [1, .1, .08], 5); part(gs, .22, .16, .3, -h + .1, 2.96, sd * (W / 2 - .2), [1, .1, .08], 6); }
+      part(gs, L, .3, W * .85, 0, .55, 0, DARK);
+      lamps(gs, L, W, .95, 1.2); mirrors(gs, h - .9, 1.7, W - .1); wheels(gs, [h - 1.0, -h + 1.3], W, .42);
+    }),
+    fire: make(gs => {   // fire engine: red, chrome, a ladder on top
+      const L = 10, W = 2.5, h = L / 2, Rd = [.62, .04, .03], Ch = [.7, .7, .72];
+      gs.push(slab([[h - 2.4, .7], [h - .05, .7], [h, .95], [h - .05, 2.0], [h - .3, 2.9], [h - 2.4, 2.9]], W, Rd, .1));
+      gs.push(glass([[h - .1, 1.95], [h - .3, 2.75], [h - 1.0, 2.75], [h - 1.0, 1.95]], W - .1, 2.74));
+      part(gs, L - 2.5, 2.3, W, -1.2, 1.85, 0, Rd);
+      part(gs, L - 2.6, .1, W + .04, -1.2, 1.3, 0, Ch); part(gs, L - 2.6, .1, W + .04, -1.2, 2.4, 0, Ch);
+      for (const sd of [-1, 1]) part(gs, L - 1.0, .1, .08, -.6, 3.25, sd * .42, Ch);                       // ladder rails
+      for (let x = -h + .7; x < h - 1.2; x += .7) part(gs, .06, .06, .84, x, 3.25, 0, Ch);                 // rungs
+      part(gs, .3, .16, W * .8, h - 1.4, 3.0, 0, [.12, .12, .14]);
+      for (const sd of [-1, 1]) part(gs, .26, .14, W * .32, h - 1.4, 3.06, sd * W * .2, [1, .1, .08], sd < 0 ? 5 : 6);
+      part(gs, .25, .4, W * .9, h + .05, .9, 0, Ch);
+      lamps(gs, L, W, 1.1, 1.1); mirrors(gs, h - .5, 2.3, W); wheels(gs, [h - 1.6, -h + 2.6, -h + 1.4], W, .52);
+    }),
     bus: make(gs => {   // yellow school bus with a hood
       const L = 12, W = 2.5, h = L / 2;
       gs.push(slab([[-h, .55], [h - .05, .55], [h, .8], [h - .05, 1.35], [h - 1.3, 1.45], [h - 1.45, 2.95], [-h, 2.95], [-h, .6]], W, BODY, .1));
@@ -905,11 +940,15 @@ export function vehicleMaterial(U) {
       .replace('#include <begin_vertex>', '#include <begin_vertex>\n vLight = aLight; vBrake = aBrake;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uNight; uniform float uTime; varying float vLight; varying float vBrake;')
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-        float lk = floor(vLight + .5), fl = floor(vBrake + .5), bk = mod(fl, 2.), sg = floor(fl / 2. + .01);
+        float lk = floor(vLight + .5), fl = floor(vBrake + .5), lt = step(7.5, fl); fl -= 8. * lt;
+        float bk = mod(fl, 2.), sg = floor(fl / 2. + .01);
         float hd = 1. - step(.5, abs(lk - 1.)), tl = 1. - step(.5, abs(lk - 2.));
-        float bl = (1. - step(.5, abs(lk - 3.))) * (1. - step(.5, abs(sg - 1.))) + (1. - step(.5, abs(lk - 4.))) * (1. - step(.5, abs(sg - 2.)));
-        float on = step(.5, fract(uTime * 1.4));
-        totalEmissiveRadiance += vec3(1., .93, .78) * hd * (uNight * 3. + .12) + vec3(1., .04, .02) * tl * (uNight * 1.2 + bk * 2.5 + .05) + vec3(1., .5, .05) * bl * on * 3.;`);
+        float haz = 1. - step(.5, abs(sg - 3.));
+        float bl = (1. - step(.5, abs(lk - 3.))) * max(1. - step(.5, abs(sg - 1.)), haz) + (1. - step(.5, abs(lk - 4.))) * max(1. - step(.5, abs(sg - 2.)), haz);
+        float on = step(.5, fract(uTime * 1.4)), fa = step(.5, fract(uTime * 2.7 + floor(uTime * 1.35) * .5));
+        float b5 = 1. - step(.5, abs(lk - 5.)), b6 = 1. - step(.5, abs(lk - 6.));
+        totalEmissiveRadiance += vec3(1., .93, .78) * hd * (uNight * 3. + .12) + vec3(1., .04, .02) * tl * (uNight * 1.2 + bk * 2.5 + .05) + vec3(1., .5, .05) * bl * on * 3.
+          + (vec3(1., .06, .03) * b5 * fa + vec3(.12, .3, 1.) * b6 * (1. - fa)) * lt * 9. + (b5 + b6) * .08;`);
   };
   return m;
 }

@@ -101,6 +101,7 @@ export const TYPES = [            // vehicle kinds: length, width, top speed fac
   { k: 'truck', len: 8.5, w: 2.4, share: .03, slow: .85, acc: .7 },
   { k: 'bus', len: 12, w: 2.5, share: .02, slow: .8, acc: .65 },
 ];
+export const SVC_TYPES = { police: { k: 'police', len: 4.9, w: 1.9 }, ems: { k: 'ems', len: 6.4, w: 2.2, acc: .85 }, fire: { k: 'fire', len: 10, w: 2.5, acc: .7 } };
 
 export class Net {
   constructor() {
@@ -695,9 +696,10 @@ export class Net {
     return out;
   }
   // try to start a trip. from/to: {e, x, z}. Returns car or a failure string.
-  spawn(from, to, kindRoll = Math.random(), colorRoll = Math.random()) {
+  spawn(from, to, kindRoll = Math.random(), colorRoll = Math.random(), force = null) {
     if (this.built !== this.ver) this.rebuild();
     let acc = 0, ty = TYPES[0]; for (const t of TYPES) { acc += t.share; if (kindRoll < acc) { ty = t; break; } }
+    if (force) ty = SVC_TYPES[force];
     const A = this.spotOn(from.e, from.x, from.z).filter(a => !a.lane.cars.some(o => Math.abs(o.s - a.s) < ty.len + 6)), B = this.spotOn(to.e, to.x, to.z);
     if (!A.length) return 'busy';
     if (!B.length) return 'stranded';
@@ -729,7 +731,7 @@ export class Net {
   }
   room(car, conn) {
     const out = conn.out; let tail = out.len;
-    for (const o of out.cars) tail = Math.min(tail, o.s - o.len);
+    for (const o of out.cars) if (!o.aside) tail = Math.min(tail, o.s - o.len);
     const need = Math.min(car.len + 1.5, out.len * .6) + out.inc;
     return tail >= need;
   }
@@ -741,6 +743,9 @@ export class Net {
   canEnter(car, conn, distLeft) {
     const n = conn.node;
     if (!this.room(car, conn)) { car.why = 'room'; return false; }
+    if (car.siren || car.flee) return true;   // lights and sirens (or running from them): through
+    if (car.reckless && n.sig && this.sigState(n, conn.in) !== 'g' && car.runRoll === undefined) car.runRoll = Math.random();
+    if (car.reckless && n.sig && this.sigState(n, conn.in) !== 'g' && car.runRoll < .35) { car.ranRed = this.time; return true; }
     if (n.deg <= 2 && !n.ring && !conn.conflicts.length) return true;   // (two lanes merging into one still take turns)
     if (conn.out.prio && !conn.in.prio) {    // entering a roundabout: never fill the ring
       const r = this.ringOcc.get(conn.out.edge.ring);
@@ -803,8 +808,15 @@ export class Net {
     for (const car of this.cars) if (car.granted && !car.lane.conn) car.granted.out.inc += car.len + 2;
     for (const l of this.lanes.values()) if (l.conn) for (const c of l.cars) l.out.inc += c.len + 2;
 
+    // a siren behind you: pull over to the right and let it by
+    for (const car of this.cars) if (car.siren) for (const o of car.lane.cars) if (o !== car && o.s > car.s && o.s - car.s < 50 && !o.siren && !o.flee && !o.keep) o.yieldT = 2.5;
     const done = [];
     for (const car of this.cars) {
+      if (car.hold) {   // stopped where it is: a wreck, a car pulled over, a unit on scene
+        car.v = Math.max(0, car.v - 12 * dt); car.s = Math.min(car.lane.len, car.s + car.v * dt); car.brake = 1; car.stuck = 0; car.chgTo = null;
+        continue;
+      }
+      if (car.yieldT > 0) { car.yieldT -= dt; car.aside = car.yieldT > 0; } else if (car.aside && !car.hold) car.aside = false;
       let lane = car.lane, mustBy = 1e4;
       const B = car.chgTo;
       if (B) {   // moving over to the lane beside: when there's a gap, else slow down and wait near the end
@@ -820,8 +832,10 @@ export class Net {
         }
       }
       const idx = lane.cars.indexOf(car);
-      let gap = 1e4, lv = 0, ahead = lane.len - car.s, v0 = lane.vmax * car.slow;
-      if (idx > 0) { const L = lane.cars[idx - 1]; gap = L.s - L.len - car.s; lv = L.v; car.gw = 'leader'; } else car.gw = 'free';
+      let gap = 1e4, lv = 0, ahead = lane.len - car.s, v0 = lane.vmax * car.slow * (car.siren || car.flee || car.chase ? 1.45 : car.reckless ? 1.22 : 1);
+      if (car.aside) v0 = Math.min(v0, 2.5);
+      let li = idx - 1; while (li >= 0 && lane.cars[li].aside && !car.aside) li--;   // a car pulled over to the side: drive on past it
+      if (li >= 0) { const L = lane.cars[li]; gap = L.s - L.len - car.s; lv = L.v; car.gw = 'leader'; car.ldr = L; } else { car.gw = 'free'; car.ldr = null; }
       if (lane.mq) for (const q of lane.mq) {   // let a waiting driver in from the next lane
         if (q.id === car.id) continue;
         const g = q.s - q.len - car.s; if (g > .5 && g < 30 && g < gap) { gap = g; lv = 0; car.gw = 'let'; }
@@ -854,7 +868,7 @@ export class Net {
           const vIn = nx.conn && k === car.ri + 1 && !nx.in.prio && this.stopAt(nx.node, nx.in.edge) ? Math.min(nx.vmax, STOP_V) : nx.vmax;
           v0 = Math.min(v0, Math.sqrt(vIn * vIn + 2 * 1.8 * Math.max(0, d - 2)));
           if (idx === 0 || k > car.ri + 1) {
-            let tail = null; for (const o of nx.cars) if (!tail || o.s < tail.s) tail = o;
+            let tail = null; for (const o of nx.cars) if (!o.aside && (!tail || o.s < tail.s)) tail = o;
             if (tail) { const g = d + tail.s - tail.len; if (g < gap) { gap = g; lv = tail.v; car.gw = 'tail'; car.gwId = tail.id; } break; }
           }
           if (nx === car.dest) { const g = d + car.destS; if (g < gap) { gap = g + 3; lv = 0; car.gw = 'dest2'; } break; }
@@ -868,7 +882,7 @@ export class Net {
         if (car.holdT > 2) { car.granted.busy = Math.max(0, car.granted.busy - 1); car.granted = null; car.holdT = 0; car.arrT = this.time - 5; }
       } else car.holdT = 0;
       // IDM
-      const v = car.v, dv = v - lv, ss = S0 + Math.max(0, v * HEAD + v * dv / (2 * Math.sqrt(ACC * DEC)));
+      const v = car.v, dv = v - lv, ss = (car.reckless ? S0 * .6 : S0) + Math.max(0, v * HEAD * (car.reckless ? .5 : 1) + v * dv / (2 * Math.sqrt(ACC * DEC)));
       const A = ACC * (car.acc || 1);   // trucks and buses pull away more slowly
       let a = A * (1 - Math.pow(v / Math.max(.5, v0), 4)) - A * (ss / Math.max(.1, gap)) ** 2;
       a = Math.max(-9, Math.min(A, a));
@@ -889,14 +903,14 @@ export class Net {
         car.ri++; car.lane = nx; nx.cars.push(car); car.prev = was; car.side = null;
         if (!nx.conn) car.granted = null;
       }
-      if (car.lane === car.dest && car.s >= car.destS - .5) done.push(car);
+      if (car.lane === car.dest && car.s >= car.destS - .5) { if (car.keep) { car.v = 0; car.there = true; } else done.push(car); } else car.there = false;
       // waiting
       if (car.v < .6) { car.stuck += dt; } else if (car.v > 2.5) car.stuck = 0;
       if (car.v < 3) car.wait += dt;
       // a car stuck at a junction tries another way now and then
       car.rerouteT += dt;
       if (car.stuck > 12 && car.rerouteT > 10 && !car.lane.conn && !car.granted) { car.rerouteT = 0; this.reroute(car, car.chgWait > 6); car.chgWait = 0; }
-      if (car.stuck > GIVE_UP) { car.gave = true; done.push(car); }
+      if (car.stuck > GIVE_UP && !car.keep && !car.flee) { car.gave = true; done.push(car); }
       // lane speed estimate for routing (slow EMA)
       car.lane.spd += (car.v - car.lane.spd) * Math.min(1, dt * .08);
     }
@@ -910,16 +924,17 @@ export class Net {
       if (L > .3) { hx /= L; hz /= L; } else { hx = f[2]; hz = f[3]; }
       car.x = (f[0] + r[0]) / 2; car.z = (f[1] + r[1]) / 2; car.hx = hx; car.hz = hz;
       // pulling in at the end of a trip
-      if (car.lane === car.dest && car.destS - car.s < 14 && !car.lane.conn) car.latT = 1.5;
-      const want = car.latT || 0;
+      if (car.lane === car.dest && car.destS - car.s < 14 && !car.lane.conn && !car.keep) car.latT = 1.5;
+      const want = car.aside ? (car.lane.conn ? .6 : 2.1) : (car.latT || 0);
       if (car.lat || want) {   // drifting across: after a lane change, pulling out, pulling in
-        const d = car.lat - want, r2 = Math.sign(d) * Math.min(Math.abs(d), dt * (want ? .9 : 1.5)); car.lat -= r2; if (Math.abs(car.lat) < .01) car.lat = 0;
+        const d = car.lat - want, r2 = Math.sign(d) * Math.min(Math.abs(d), dt * (car.aside ? 1.6 : want ? .9 : 1.5)); car.lat -= r2; if (Math.abs(car.lat) < .01) car.lat = 0;
         car.x += -hz * car.lat; car.z += hx * car.lat;
         const k = Math.max(-.3, Math.min(.3, -(r2 / dt) / Math.max(3, car.v))); let qx = hx - hz * k, qz = hz + hx * k; const Q = Math.hypot(qx, qz) || 1; car.hx = qx / Q; car.hz = qz / Q;
       }
       // blinkers: moving over, turning at the junction ahead, pulling out (left) or in (right)
       let sg = 0;
-      if (car.latT) sg = 2;
+      if (car.hold && car.crashed) sg = 3;   // hazard lights
+      else if (car.latT || car.aside) sg = 2;
       else if (car.lat > .3 && car.born > this.time - 6 && car.s < 20) sg = 1;
       else if (car.chgTo) sg = car.chgTo.off > car.lane.off ? 2 : 1;
       else {

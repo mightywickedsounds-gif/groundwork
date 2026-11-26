@@ -189,6 +189,27 @@
     #coins b { font-size:24px; }
     #goal { font-size:11px; }
   }
+
+  /* police scanner: the latest calls under the gridlock sign */
+  #scan { --bg:var(--asphalt); --line:#3a3d42; position:fixed; right:max(14px, env(safe-area-inset-right)); top:calc(max(12px, env(safe-area-inset-top)) + 96px); width:300px; padding:10px 12px 8px; display:none; }
+  #scan.show { display:block; }
+  #scan .sh { font-weight:900; font-size:12px; color:var(--yellow); display:flex; align-items:center; gap:7px; margin-bottom:4px; }
+  #scan .sh i { width:8px; height:8px; border-radius:50%; background:var(--red); }
+  #scan.ping .sh i { animation:ping 1s ease 3; }
+  @keyframes ping { 50% { background:#4a8cff; } }
+  #scanList .srow { display:flex; gap:8px; align-items:flex-start; padding:5px 0; border-top:1px solid #2e3136; cursor:pointer; font-size:12.5px; line-height:1.25; }
+  #scanList .srow:first-child { border-top:0; }
+  #scanList .srow b { flex:none; background:var(--white); color:var(--ink); font-size:10.5px; font-weight:900; padding:2px 5px 0; border-radius:3px; min-width:44px; text-align:center; }
+  #scanList .srow.c1050 b, #scanList .srow.c1080 b, #scanList .srow.c1031 b, #scanList .srow.c1052 b, #scanList .srow.c1057 b { background:var(--red); color:var(--white); }
+  #scanList .srow.cTICKET b, #scanList .srow.cSTOP b { background:var(--yellow); }
+  #scanList .srow.cCLEAR b { background:var(--green); color:var(--white); }
+  #scanList .srow:hover span { text-decoration:underline; }
+  body.titleUp #scan { display:none; }
+  @media (max-width:760px) {
+    #scan { top:auto; bottom:calc(max(12px, env(safe-area-inset-bottom)) + 124px); right:8px; left:auto; width:min(300px, 62vw); padding:7px 9px 5px; }
+    #scanList .srow:nth-child(n+3) { display:none; }
+    #card.show ~ #scan { display:none; }
+  }
   @media (max-width:760px) {
     #hud { min-width:0; padding:9px 12px 10px; }
     #clock { font-size:26px; }
@@ -231,6 +252,7 @@
   <button id="menuBtn" class="tileBtn" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
 </div>
 
+<div id="scan" class="sign"><div class="sh"><i></i>SCANNER</div><div id="scanList"></div></div>
 <div id="hint"></div>
 <div id="toast" class="sign"></div>
 

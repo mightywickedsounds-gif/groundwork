@@ -199,7 +199,7 @@ export function createLife(net, city, seed = 1) {
     // drive: queue a trip; the driver walks out to the car
     p.state = 'wait'; p.why = why; p.dest = to;
     city.queue.push({ from: A, to: B, t: 0, pid: p.id, kindRoll: p.carK, colorRoll: p.carC,
-      ok: car => { car.pid = p.id; p.car = car; p.state = 'drive'; L.day.trips++; const w = [dA.door, dA.walk, dA.kerb]; ghost(p, w); },
+      ok: car => { car.pid = p.id; p.car = car; p.state = 'drive'; L.day.trips++; const w = [dA.door, dA.walk, dA.kerb]; ghost(p, w); drives(p, car); },
       fail: why2 => { if (why2 === 'stranded') { p.state = 'in'; p.since = now(); p.until = now() + 40; p.blocked = why2; } else arrive(p, to, why); } });   // roads too full to pull out: they get there anyway (unseen)
   }
   // a short walk drawn for someone already in their car (out of the door to the kerb)
@@ -255,7 +255,7 @@ export function createLife(net, city, seed = 1) {
   function guestTrip(g, from, to) {
     g.state = 'wait'; g.dest = to;
     city.queue.push({ from, to, t: 0, pid: g.id, kindRoll: g.carK, colorRoll: g.carC,
-      ok: car => { car.pid = g.id; g.car = car; g.state = 'drive'; },
+      ok: car => { car.pid = g.id; g.car = car; g.state = 'drive'; drives(g, car); if (L.onCarOut) L.onCarOut(car); },
       fail: () => { if (to.exit) L.guests.delete(g.id); else { g.state = 'in'; g.at = to.id; g.until = now() + 60; } } });
   }
   function guests(dt) {
@@ -277,6 +277,25 @@ export function createLife(net, city, seed = 1) {
       g.why = 'leave'; guestTrip(g, b, X[Math.floor(Math.random() * X.length)]);
     }
   }
+  // how they drive: a few speed, a few drive like they stole it
+  function drives(p, car) { if (p.temper > .955) car.reckless = true; if (p.temper > .7) car.slow *= 1.1 + (p.temper - .7) * .6; if (p.why === 'robbery') car.reckless = true; }
+  // someone leaves a building and drives off to the edge of town (a robber, say)
+  L.spawnGuest = function (b, to, why) {
+    const R = Math.random, g = { id: -(++guestN), guest: true, fn: FIRST[Math.floor(R() * FIRST.length)], ln: LAST[Math.floor(R() * LAST.length)], age: 18 + Math.floor(R() * 30),
+      ins: R() < .4, reg: R() < .5, temper: .95, carK: R() * .8, carC: R(), state: 'in', at: b.id, why };
+    L.guests.set(g.id, g); g.why = why; guestTrip(g, b, to); return g;
+  };
+  // a carjacking: the driver is pulled out (they make their own way there), a stranger drives off
+  L.jack = function (car) {
+    const p = L.people.get(car.pid); if (!p) return null;
+    const R = Math.random, g = { id: -(++guestN), guest: true, fn: FIRST[Math.floor(R() * FIRST.length)], ln: LAST[Math.floor(R() * LAST.length)], age: 17 + Math.floor(R() * 25),
+      ins: false, reg: false, temper: .97, carK: 0, carC: 0, state: 'drive', why: 'carjacking', car };
+    L.guests.set(g.id, g); car.pid = g.id; p.car = null;
+    const to = p.dest; p.state = 'in'; p.at = p.home; p.since = now(); p.blocked = null; p.jacked = L.dayNum();
+    void to; return g;
+  };
+  // an officer walks up to the driver's window and back
+  L.walkOfficer = function (pid, a, b) { const p = L.people.get(pid); if (!p) return; const dx = b[0] - a[0], dz = b[1] - a[1], d = Math.hypot(dx, dz) || 1, s = [b[0] - dx / d * 1.6 - dz / d * 1.3, b[1] - dz / d * 1.6 + dx / d * 1.3], s0 = [a[0] - dz / d * 1.3, a[1] + dx / d * 1.3]; const w = { pid, pts: [s0, s, s, s, s0], cum: [0], s: 0, ghost: true, v: .9, ph: 0 }; for (let i = 1; i < w.pts.length; i++) w.cum.push(w.cum[i - 1] + Math.max(Math.hypot(w.pts[i][0] - w.pts[i - 1][0], w.pts[i][1] - w.pts[i - 1][1]), i === 2 || i === 3 ? 7 : 0)); w.len = w.cum[w.cum.length - 1]; L.walkers.push(w); };
   L.person = id => id > 0 ? L.people.get(id) : L.guests.get(id);
 
   // ---------- every step ----------
