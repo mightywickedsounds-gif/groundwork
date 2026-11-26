@@ -1,7 +1,7 @@
 // Everything you see: roads, junctions, markings, buildings, trees, cars, people, signals.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { ROAD_W, ONEWAY_W, WALK_W, LANE_W, RING_R, along, halfW, laneOff, rng } from './net.js';
+import { ROAD_W, ONEWAY_W, WALK_W, LANE_W, RING_R, along, halfW, laneOff, rng, closestOnPoly } from './net.js';
 
 
 const Y_ROAD = .03, Y_WALK = .16, Y_MARK = .045;
@@ -649,7 +649,7 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
     cm.castShadow = true; cm.receiveShadow = true; g.add(cm);
   }
   // lots: parking, parks, yards
-  const lotG = new Geo(), lines = new Geo(), parks = new Geo(), shore = new Geo(), pond = new Geo(), parked = [], lotLights = [];
+  const lotG = new Geo(), lines = new Geo(), parks = new Geo(), shore = new Geo(), pond = new Geo(), parked = [], lotLights = [], drive = new Geo();
   for (const l of city.lots) {
     const x0 = l.x - l.w / 2, x1 = l.x + l.w / 2, z0 = l.z - l.d / 2, z1 = l.z + l.d / 2;
     if (l.k === 'parking') {
@@ -668,6 +668,34 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
         }
         z += flip ? 5.2 : 5.2 + 6.4; row++;
       }
+      // driveways: from the side of the lot facing the nearest street, across the sidewalk (concrete) and down a curb cut onto the road
+      if (opt.net) {
+        let best = null, bd = 90;
+        for (const e of opt.net.edges.values()) {
+          if (e.ring || !e.bb || e.bb[0] - 90 > l.x || e.bb[1] + 90 < l.x || e.bb[2] - 90 > l.z || e.bb[3] + 90 < l.z) continue;
+          const c = closestOnPoly(e.pts, e.cum, l.x, l.z); if (c.d < bd) { bd = c.d; best = { e, c }; }
+        }
+        if (best) {
+          const q = along(best.e.pts, best.e.cum, best.c.s), dx = q[0] - l.x, dz = q[1] - l.z, lx = dx * lc + dz * ls, lz = -dx * ls + dz * lc;
+          const alongX = Math.abs(lx) > Math.abs(lz), sgn = alongX ? Math.sign(lx) : Math.sign(lz);
+          const n = alongX ? [lc * sgn, ls * sgn] : [-ls * sgn, lc * sgn], t = [-n[1], n[0]];
+          const half = alongX ? l.w / 2 : l.d / 2, span = alongX ? l.d : l.w, hw = halfW(best.e);
+          const spots = span > 26 ? [-(span / 2 - 5.5), span / 2 - 5.5] : [0];
+          for (const u of spots) {
+            const P = [l.x + n[0] * half + t[0] * u, l.z + n[1] * half + t[1] * u];
+            const c = closestOnPoly(best.e.pts, best.e.cum, P[0], P[1]); if (c.d - hw > 30 || c.d - hw < .8) continue;
+            const r = along(best.e.pts, best.e.cum, c.s); if (Math.abs((r[0] - P[0]) * n[0] + (r[1] - P[1]) * n[1]) < c.d * .8) continue;   // the street isn't straight out from here
+            const at = s => [P[0] + n[0] * s, P[1] + n[1] * s], L = c.d - hw, sw = Math.max(0, L - WALK_W), w = 3.3;
+            // [distance out, height]: lot edge, sidewalk's back edge, its kerb edge, the road
+            const prof = [[0, .055], [Math.max(.1, sw), .175], [Math.max(.2, L - .45), .175], [L + .05, .04]];
+            for (let k = 0; k + 1 < prof.length; k++) {
+              const [s0, y0] = prof[k], [s1, y1] = prof[k + 1], a = at(s0), b2 = at(s1), w0 = k === 2 ? w + .9 : w, w1 = k >= 2 ? w + .9 : w;
+              const i = drive.v(a[0] - t[0] * w0, y0, a[1] - t[1] * w0), j = drive.v(a[0] + t[0] * w0, y0, a[1] + t[1] * w0), kk = drive.v(b2[0] + t[0] * w1, y1, b2[1] + t[1] * w1), m = drive.v(b2[0] - t[0] * w1, y1, b2[1] - t[1] * w1);
+              drive.up(i, j, kk); drive.up(i, kk, m);
+            }
+          }
+        }
+      }
     } else {
       parks.flat([x0, z0], [x1, z0], [x1, z1], [x0, z1], .035);
       // a retention pond in some of the bigger parks
@@ -685,7 +713,7 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
   if (lines.p.length) g.add(new THREE.Mesh(lines.build(), M.mark));
   if (parks.p.length) { const m = new THREE.Mesh(parks.build(), M.park || (M.park = patchy(new THREE.MeshStandardMaterial({ map: T.lawn, color: 0x9cb46a, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1 }), .35, 8))); m.receiveShadow = true; g.add(m); }
   // houses: a lawn, a concrete driveway to the street, a wooden privacy fence round the back yard, sometimes a pool
-  const drive = new Geo(), lawn = new Geo(), pool = new Geo(), deck = new Geo(), fence = [], boxes = [];
+  const lawn = new Geo(), pool = new Geo(), deck = new Geo(), fence = [], boxes = [];
   for (const m of mulchBeds) mulch.flat(m[0], m[1], m[2], m[3], .045);
   for (const b of B) {
     if (b.kind !== 'house') continue;
