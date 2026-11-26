@@ -33,7 +33,8 @@ export function createCity(net, seed = 7) {
   order.sort((a, b) => a.r - b.r);
   C.order = order.map(o => [o.i, o.j]);
 
-  const zoneOf = (x, z) => Math.hypot(x, z) < 175 ? 'core' : 'home';   // arterial frontage is 'corridor' (by road kind)
+  const zoneOf = (x, z) => Math.hypot(x, z) < C.coreR ? 'core' : 'home';
+  C.coreR = 175;   // the town centre (the game grows it with the town)   // arterial frontage is 'corridor' (by road kind)
 
   // does a rectangle (centre, half sizes, angle) touch any road?
   function hitsRoad(x, z, hw, hd, rot, pad = ROAD_CLEAR) {
@@ -195,20 +196,23 @@ export function createCity(net, seed = 7) {
   }
 
   // open a district: its streets and buildings
-  C.unlock = function (i, j) {
+  C.unlock = function (i, j, bare = false) {
     if (C.unlocked.some(u => u[0] === i && u[1] === j)) return false;
-    C.unlocked.push([i, j]);
+    C.unlocked.push(bare ? [i, j, 1] : [i, j]);
     const k0 = i * CHUNK, l0 = j * CHUNK;
     const sx = k => gx(k), avenue = k => ((k % CHUNK) + CHUNK) % CHUNK === 0;
     // horizontal streets (along x) on lines z = l0..l0+CHUNK
     // arterials: 2 lanes each way with a centre turn lane; neighbourhood streets: one lane each way
     const ART = { kind: 'avenue', nl: 2, tl: 1 }, ST = { kind: 'street' };
-    for (let l = l0; l <= l0 + CHUNK; l++) for (let k = k0; k < k0 + CHUNK; k++) if (lineOn(0, l, k)) net.addRoad([sx(k), sx(l)], [sx(k + 1), sx(l)], null, avenue(l) ? ART : ST);
-    for (let k = k0; k <= k0 + CHUNK; k++) for (let l = l0; l < l0 + CHUNK; l++) if (lineOn(1, k, l)) net.addRoad([sx(k), sx(l)], [sx(k), sx(l + 1)], null, avenue(k) ? ART : ST);
+    // (a stretch already covered by a road along the same line, like the highway, is left as it is)
+    const covered = (a, b) => { const h = net.nearestEdge((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, 3); if (!h) return false; const q = along(h.e.pts, h.e.cum, h.s); return Math.abs(q[2] * (b[0] - a[0]) + q[3] * (b[1] - a[1])) > .95 * Math.hypot(b[0] - a[0], b[1] - a[1]); };
+    const add = (a, b, o) => { if (!covered(a, b)) net.addRoad(a, b, null, o); };
+    for (let l = l0; l <= l0 + CHUNK; l++) for (let k = k0; k < k0 + CHUNK; k++) if (lineOn(0, l, k)) add([sx(k), sx(l)], [sx(k + 1), sx(l)], avenue(l) ? ART : ST);
+    for (let k = k0; k <= k0 + CHUNK; k++) for (let l = l0; l < l0 + CHUNK; l++) if (lineOn(1, k, l)) add([sx(k), sx(l)], [sx(k), sx(l + 1)], avenue(k) ? ART : ST);
     // traffic lights where arterials cross
     for (const n of net.nodes.values()) { if (n.ring || n.sig || n.edges.size < 3) continue; let a = 0; for (const id of n.edges) if (net.edges.get(id).kind === 'avenue') a++; if (a >= 3) n.sig = { phase: 0, t: 0, st: 'g' }; }
     const nb0 = C.buildings.length;
-    for (let bx = k0; bx < k0 + CHUNK; bx++) for (let bz = l0; bz < l0 + CHUNK; bz++) fillBlock(bx, bz);
+    if (!bare) for (let bx = k0; bx < k0 + CHUNK; bx++) for (let bz = l0; bz < l0 + CHUNK; bz++) fillBlock(bx, bz);
     for (let n = nb0; n < C.buildings.length; n++) C.buildings[n].chunk = C.unlocked.length;
     // street trees along avenues
     for (let l = l0; l <= l0 + CHUNK; l++) if (avenue(l)) for (let x = sx(k0) + 14; x < sx(k0 + CHUNK) - 10; x += 16) for (const sgn of [-1, 1]) {
@@ -232,7 +236,7 @@ export function createCity(net, seed = 7) {
   C.wild = function () {
     const out = [], S = BLOCK * CHUNK;
     for (let i = -SPAN - 1; i <= SPAN + 1; i++) for (let j = -SPAN - 1; j <= SPAN + 1; j++) {
-      if (C.unlocked.some(u => u[0] === i && u[1] === j)) continue;
+      if (C.unlocked.some(u => u[0] === i && u[1] === j && !u[2])) continue;
       const r = rng((i * 7919 + j * 104729 + C.seed * 13) >>> 0), x0 = gx(i * CHUNK), z0 = gx(j * CHUNK);
       const near = C.unlocked.some(u => Math.abs(u[0] - i) <= 1 && Math.abs(u[1] - j) <= 1);
       const clumps = 2 + (r() * 4 | 0);
@@ -246,6 +250,8 @@ export function createCity(net, seed = 7) {
     const cell = 16, grid = new Map(), key = (x, z) => (Math.floor(x / cell) + 2000) * 5000 + Math.floor(z / cell) + 2000;
     for (const e of net.edges.values()) { const w = halfW(e) + 4.5; for (const p of e.pts) { const k = key(p[0], p[1]); if (!grid.has(k)) grid.set(k, []); grid.get(k).push([p[0], p[1], w]); } }
     const clear = t => { const cx = Math.floor(t[0] / cell), cz = Math.floor(t[1] / cell); for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) { const L = grid.get((cx + i + 2000) * 5000 + cz + j + 2000); if (L) for (const q of L) if (Math.hypot(q[0] - t[0], q[1] - t[1]) < q[2]) return false; } return true; };
+    for (const b of C.buildings) { const k = key(b.x, b.z); if (!grid.has(k)) grid.set(k, []); grid.get(k).push([b.x, b.z, Math.hypot(b.w, b.d) / 2 + (b.kind === 'house' ? 12 : 6)]); }
+    for (const l of C.lots) { const k = key(l.x, l.z); if (!grid.has(k)) grid.set(k, []); grid.get(k).push([l.x, l.z, Math.hypot(l.w, l.d) / 2 + 2]); }
     const kept = out.filter(clear);
     return kept.length > 3800 ? kept.filter((_, k) => k % Math.ceil(kept.length / 3800) === 0) : kept;
   };
@@ -289,7 +295,7 @@ export function createCity(net, seed = 7) {
   };
 
   // ---- the city grows back: empty land along any street gets new buildings, facing the street ----
-  const inCity = (x, z) => { const S = BLOCK * CHUNK, i = Math.floor((x - g0) / S), j = Math.floor((z - g0) / S); return C.unlocked.some(u => u[0] === i && u[1] === j); };
+  const inCity = C.inCity = (x, z) => { const S = BLOCK * CHUNK, i = Math.floor((x - g0) / S), j = Math.floor((z - g0) / S); return C.unlocked.some(u => u[0] === i && u[1] === j); };
   // do two rectangles (centre, half sizes, angle) overlap? (separating axes)
   function overlap(a, b, m = 0) {
     const ax = [Math.cos(a.r), Math.sin(a.r)], az = [-ax[1], ax[0]], bx = [Math.cos(b.r), Math.sin(b.r)], bz = [-bx[1], bx[0]], d = [b.x - a.x, b.z - a.z];
@@ -302,27 +308,16 @@ export function createCity(net, seed = 7) {
   }
   const rectOf = b => ({ x: b.x, z: b.z, hw: b.w / 2, hd: b.d / 2, r: b.rot || 0 });
   let regrowT = 0, commitT = 0, fresh = 0, tries = 0;
-  // one try at a new building on a street; returns it or null. Uses Math.random (new growth, not the saved street plan)
-  function tryGrow() {
-    const E = [...net.edges.values()].filter(e => !e.ring && e.len > 30); if (!E.length) return null;
-    const e = E[(Math.random() * E.length) | 0], A = net.nodes.get(e.a), B = net.nodes.get(e.b);
-    const mid = along(e.pts, e.cum, e.len / 2); if (!inCity(mid[0], mid[1])) return null;
-    const sg = Math.random() < .5 ? 1 : -1, zone = zoneOf(mid[0], mid[1]) === 'core' ? 'core' : e.kind === 'avenue' || halfW(e) > 5.5 ? 'corridor' : 'home';
-    const s0 = (A.edges.size > 1 ? net.trimOf(A) : 0) + 4, s1 = e.len - (B.edges.size > 1 ? net.trimOf(B) : 0) - 4;
-    const R = Math.random, q = R();
-    // what to build here (same mix as the street plan's blocks): [kind, frontage, depth, gap from the sidewalk, height, roof]
-    let plan;
-    if (zone === 'home') plan = ['house', 11 + R() * 4, 10 + R() * 4, 5.5 + R() * 2, R() < .4 ? 6.6 + R() * .8 : 3.9 + R() * .6, 1];
-    else if (zone === 'corridor') plan = q < .55 ? ['shop', 36 + R() * 24, 17 + R() * 4, 14, 5.5 + R() * 1.5, 0] : q < .8 ? ['office', 20 + R() * 10, 18 + R() * 6, 8, 7.5 + (R() * 3 | 0) * 3.6, 0] : ['apt', 30 + R() * 16, 15 + R() * 3, 13, 10 + R() * 1.5, 1];
-    else { const k = q < .45 ? 'shop' : q < .75 ? 'apt' : 'office'; plan = [k, 12 + R() * 14, 18 + R() * 6, .8, k === 'shop' ? 5.5 + R() * 3.5 : 7.5 + (R() * 3 | 0) * 3.6, 0]; }
-    let [kind, fw, fd0, gap, h, roof] = plan;
-    if (s1 - s0 < fw + 2) return null;
-    const front = halfW(e) + WALK_W + gap;
-    const sAt = s0 + fw / 2 + 1 + Math.random() * (s1 - s0 - fw - 2), p = along(e.pts, e.cum, sAt), r = [-p[3] * sg, p[2] * sg];
+  const zoneAt = (e, p) => zoneOf(p[0], p[1]) === 'core' ? 'core' : e.kind === 'avenue' || halfW(e) > 5.5 ? 'corridor' : 'home';
+  // the usable stretch of a street (clear of the junctions at its ends)
+  C.span = function (e) { const A = net.nodes.get(e.a), B = net.nodes.get(e.b); return [(A.edges.size > 1 ? net.trimOf(A) : 0) + 4, e.len - (B.edges.size > 1 ? net.trimOf(B) : 0) - 4]; };
+  // put a building facing street e at sAt on side sg (frontage fw, depth fd, gap from the sidewalk). Returns it or null
+  function placeOn(e, sAt, sg, kind, fw, fd0, gap, h, roof, extra = {}, R = Math.random) {
+    const front = halfW(e) + WALK_W + gap, p = along(e.pts, e.cum, sAt), r = [-p[3] * sg, p[2] * sg];
     const rot = Math.atan2(r[1], r[0]);   // local x points away from the street
-    const near = C.buildings.filter(b => Math.abs(b.x - p[0]) < 90 && Math.abs(b.z - p[1]) < 90).map(rectOf);
-    const lots = C.lots.filter(l => Math.abs(l.x - p[0]) < 120 && Math.abs(l.z - p[1]) < 120).map(l => ({ x: l.x, z: l.z, hw: l.w / 2, hd: l.d / 2, r: 0 }));
-    for (const fd of [fd0, fd0 * .75]) {
+    const near = C.buildings.filter(b => Math.abs(b.x - p[0]) < 120 && Math.abs(b.z - p[1]) < 120).map(rectOf);
+    const lots = C.lots.filter(l => Math.abs(l.x - p[0]) < 140 && Math.abs(l.z - p[1]) < 140).map(l => ({ x: l.x, z: l.z, hw: l.w / 2, hd: l.d / 2, r: 0 }));
+    for (const fd of [fd0, fd0 * .8]) {
       if (fd < 7) continue;
       const off = front + fd / 2, x = p[0] + r[0] * off, z = p[1] + r[1] * off;
       if (!inCity(x, z)) continue;
@@ -331,25 +326,90 @@ export function createCity(net, seed = 7) {
       if (near.some(o => overlap(me, o, kind === 'house' ? 4.4 : 2)) || lots.some(o => overlap(me, o, .5))) continue;
       const floors = Math.max(1, Math.round(h / 3.4)), area = fw * fd;
       let res = 0, jobs = 0;
-      if (kind === 'house') res = 3; else if (kind === 'apt') { res = Math.round(area * floors / 45); jobs = Math.round(area / 400); }
-      else if (kind === 'office') jobs = Math.round(area * floors / 28); else jobs = Math.round(area / 30);
+      if (kind === 'house') res = extra.res || 3; else if (kind === 'apt') res = Math.round(area * floors / 45);
+      else if (!extra.biz) { if (kind === 'office') jobs = Math.round(area * floors / 28); else jobs = Math.round(area / 30); }
       const b = addBuilding({ x: +x.toFixed(2), z: +z.toFixed(2), w: +fd.toFixed(2), d: +fw.toFixed(2), h: +h.toFixed(1), kind, res, jobs, roof,
-        face: 'r', fx: +p[0].toFixed(2), fz: +p[1].toFixed(2), tone: +Math.random().toFixed(3), chunk: C.unlocked.length, rot: +rot.toFixed(4), ...(kind === 'house' ? { lw: +(fw + 4.4).toFixed(2), ld: +(gap + fd + 12).toFixed(2) } : {}) });
+        face: 'r', fx: +p[0].toFixed(2), fz: +p[1].toFixed(2), tone: +R().toFixed(3), chunk: C.unlocked.length, rot: +rot.toFixed(4), ...(kind === 'house' ? { lw: +(fw + 4.4).toFixed(2), ld: +(gap + fd + 12).toFixed(2) } : {}), ...extra });
+      delete b.res0; if (b.biz) b.jobs = 0;
       b.e = e;
       C.trees = C.trees.filter(t => !overlap(me, { x: t[0], z: t[1], hw: .5, hd: .5, r: 0 }, 1));
-      if (kind === 'house' && Math.random() < .6) { const bo = off + fd / 2 + 4; C.trees.push([+(p[0] + r[0] * bo).toFixed(2), +(p[1] + r[1] * bo).toFixed(2), +(.65 + Math.random() * .35).toFixed(2), +(Math.random() * .7).toFixed(2)]); }
+      if (kind === 'house' && R() < .7) { const bo = off + fd / 2 + 4; C.trees.push([+(p[0] + r[0] * bo).toFixed(2), +(p[1] + r[1] * bo).toFixed(2), +(.65 + R() * .35).toFixed(2), +(R() * .7).toFixed(2)]); }
+      if (kind === 'house' && R() < .6) { const bo = front - gap * .45; C.trees.push([+(p[0] + r[0] * bo + p[2] * (fw * .3)).toFixed(2), +(p[1] + r[1] * bo + p[3] * (fw * .3)).toFixed(2), +(.6 + R() * .3).toFixed(2), +(R() * .7).toFixed(2)]); }
       return b;
     }
     return null;
   }
-  // call every sim step: a few tries a second; new buildings show up together every so often (fewer redraws)
-  C.regrow = function (dt) {
+  // what grows on its own: homes (houses on neighbourhood streets, apartments on main roads and downtown, taller in the middle)
+  function homePlan(zone, R) {
+    if (zone === 'home') return ['house', 11 + R() * 4, 10 + R() * 4, 5.5 + R() * 2, R() < .4 ? 6.6 + R() * .8 : 3.9 + R() * .6, 1];
+    if (zone === 'corridor') return ['apt', 30 + R() * 16, 15 + R() * 3, 13, 10 + R() * 1.5, 1];
+    return ['apt', 16 + R() * 12, 16 + R() * 6, .8, 10.5 + (R() * 5 | 0) * 3.4, 0];   // downtown: 3 to 7 storeys up to the sidewalk
+  }
+  // one try at new growth along a random street. resi: homes only (businesses are the player's)
+  function tryGrow(resi = false, R = Math.random) {
+    const E = [...net.edges.values()].filter(e => !e.ring && e.len > 30); if (!E.length) return null;
+    const e = E[(R() * E.length) | 0];
+    const mid = along(e.pts, e.cum, e.len / 2); if (!inCity(mid[0], mid[1])) return null;
+    const sg = R() < .5 ? 1 : -1, zone = zoneAt(e, mid), q = R();
+    const [s0, s1] = C.span(e);
+    let plan;
+    if (resi) plan = homePlan(zone, R);
+    else if (zone === 'home') plan = homePlan(zone, R);
+    else if (zone === 'corridor') plan = q < .55 ? ['shop', 36 + R() * 24, 17 + R() * 4, 14, 5.5 + R() * 1.5, 0] : q < .8 ? ['office', 20 + R() * 10, 18 + R() * 6, 8, 7.5 + (R() * 3 | 0) * 3.6, 0] : ['apt', 30 + R() * 16, 15 + R() * 3, 13, 10 + R() * 1.5, 1];
+    else { const k = q < .45 ? 'shop' : q < .75 ? 'apt' : 'office'; plan = [k, 12 + R() * 14, 18 + R() * 6, .8, k === 'shop' ? 5.5 + R() * 3.5 : 7.5 + (R() * 3 | 0) * 3.6, 0]; }
+    const [kind, fw, fd0, gap, h, roof] = plan;
+    if (s1 - s0 < fw + 2) return null;
+    const sAt = s0 + fw / 2 + 1 + R() * (s1 - s0 - fw - 2);
+    return placeOn(e, sAt, sg, kind, fw, fd0, gap, h, roof, {}, R);
+  }
+  // call every sim step: a few tries a second; new buildings show up together every so often (fewer redraws).
+  // want(): how many more homes the town wants right now (game: people move in when there are jobs); null = grow freely (tests)
+  C.regrow = function (dt, want = null) {
     regrowT += dt; commitT += dt; let made = 0;
-    while (regrowT >= 1.5) { regrowT -= 1.5; tries++; if (tryGrow()) { fresh++; made++; } }
-    if (fresh && commitT >= 12) { commitT = 0; const n = fresh; fresh = 0; C.ver++; C.changed = true; return n; }
+    const every = want == null ? 1.5 : want > 0 ? .5 : 1e9;
+    while (regrowT >= every) { regrowT -= every; tries++; if (want != null && made >= want) break; if (tryGrow(want != null)) { fresh++; made++; } }
+    if (regrowT > 5) regrowT = 0;
+    if (fresh && commitT >= (want == null ? 12 : 4)) { commitT = 0; const n = fresh; fresh = 0; C.ver++; C.changed = true; return n; }
     if (commitT >= 12) commitT = 0;
     return 0;
   };
+  // the player builds a business or service at a spot on a street (sAt along it, on side sg)
+  C.build = function (e, sAt, sg, kind, fw, fd, h, extra) {
+    const [s0, s1] = C.span(e); if (s1 - s0 < fw + 2) return null;
+    sAt = Math.max(s0 + fw / 2 + 1, Math.min(s1 - fw / 2 - 1, sAt));
+    const gap = kind === 'big' ? 22 : extra.biz && (extra.biz.t === 'gas' || extra.biz.t === 'auto') ? 9 : zoneAt(e, along(e.pts, e.cum, sAt)) === 'core' ? 1 : 6;
+    for (const ds of [0, -6, 6, -12, 12, -20, 20]) {
+      const s = sAt + ds; if (s - fw / 2 < s0 || s + fw / 2 > s1) continue;
+      const b = placeOn(e, s, sg, kind, fw, fd, gap, h, 0, extra); if (b) { C.ver++; C.changed = true; return b; }
+    }
+    return null;
+  };
+  // a new game: a crossroads village of a few streets and a handful of houses and shops
+  C.startTown = function (shops) {
+    C.unlocked.push([0, 0, 1]);
+    const R = rng((seed * 7 + 11) >>> 0), ART = { kind: 'avenue', nl: 2, tl: 1 }, ST = { kind: 'street' };
+    const L = (a, b, o) => net.addRoad(a, b, null, o);
+    L([-150, -50], [-50, -50], ART); L([-50, -50], [50, -50], ART); L([50, -50], [150, -50], ART);   // Main Street
+    L([-850, -50], [-150, -50], ART); L([150, -50], [850, -50], ART);                                // ... and the highway it becomes out of town
+    L([-50, -150], [-50, -50], ST); L([-50, -50], [-50, 50], ST);                                     // two side streets
+    L([50, -150], [50, -50], ST); L([50, -50], [50, 50], ST);
+    L([-50, 50], [50, 50], ST);                                                                       // and one across
+    const edge = (x0, z0, x1, z1) => [...net.edges.values()].find(e => { const A = net.nodes.get(e.a), B = net.nodes.get(e.b); return (Math.hypot(A.x - x0, A.z - z0) < 1 && Math.hypot(B.x - x1, B.z - z1) < 1) || (Math.hypot(A.x - x1, A.z - z1) < 1 && Math.hypot(B.x - x0, B.z - z0) < 1); });
+    // the shops on Main Street, then houses on the side streets
+    const main = [edge(-150, -50, -50, -50), edge(-50, -50, 50, -50), edge(50, -50, 150, -50)];
+    for (const [k, mi, side, frac] of shops) { const e = main[mi]; const [s0, s1] = C.span(e); k(e, s0 + (s1 - s0) * frac, side); }
+    let houses = 0;
+    for (const [x0, z0, x1, z1] of [[-50, -50, -50, 50], [50, -50, 50, 50], [-50, 50, 50, 50], [-50, -150, -50, -50], [50, -150, 50, -50]]) {
+      const e = edge(x0, z0, x1, z1); if (!e) continue; const [s0, s1] = C.span(e);
+      for (const sg of [1, -1]) for (let s = s0 + 9; s < s1 - 8 && houses < 12; s += 17 + R() * 3) {
+        if (R() < .35) continue;
+        const [kind, fw, fd, gap, h, roof] = homePlan('home', R);
+        if (placeOn(e, s, sg, kind, fw, fd, gap, h, roof, { res: 2 + (R() * 3 | 0) }, R)) houses++;
+      }
+    }
+    C.ver++;
+  };
+  C.isBare = (i, j) => C.unlocked.some(u => u[0] === i && u[1] === j && u[2]);
 
   C.totals = function () { let res = 0, jobs = 0; for (const b of C.buildings) { res += b.res; jobs += b.jobs; } return { res, jobs }; };
 
@@ -377,15 +437,17 @@ export function createCity(net, seed = 7) {
   C.release = function (dt, maxCars = 1600) {
     const out = { spawned: 0, stranded: 0, waiting: C.queue.length };
     const keep = []; let tries = 0;
+    const fail = (q, why) => { if (q.fail) q.fail(why); };
     for (const q of C.queue) {
       q.t += dt;
       if (tries >= 8) { keep.push(q); continue; }
       tries++;
-      if (net.cars.length >= maxCars || !q.from.e || !q.to.e) { if (q.t < 60) keep.push(q); else C.pending++; continue; }
-      const r = net.spawn({ e: q.from.e, x: q.from.fx, z: q.from.fz }, { e: q.to.e, x: q.to.fx, z: q.to.fz });
-      if (r === 'busy') { if (q.t < 60) keep.push(q); else C.pending++; continue; }
-      if (r === 'stranded') { out.stranded++; q.from.cut = (q.from.cut || 0) + 1; continue; }
-      r.home = q.from.id; out.spawned++;
+      if (!q.from.e || !q.to.e) { if (q.t < 60) keep.push(q); else { C.pending++; fail(q, 'stranded'); } continue; }
+      if (net.cars.length >= maxCars) { if (q.t < 20) keep.push(q); else { C.pending++; fail(q, 'cap'); } continue; }
+      const r = net.spawn({ e: q.from.e, x: q.from.fx, z: q.from.fz }, { e: q.to.e, x: q.to.fx, z: q.to.fz }, q.kindRoll ?? Math.random(), q.colorRoll ?? Math.random());
+      if (r === 'busy') { if (q.t < 60) keep.push(q); else { C.pending++; fail(q, 'busy'); } continue; }
+      if (r === 'stranded') { out.stranded++; q.from.cut = (q.from.cut || 0) + 1; fail(q, 'stranded'); continue; }
+      r.home = q.from.id; out.spawned++; if (q.ok) q.ok(r);
     }
     C.queue = keep;
     return out;
@@ -393,12 +455,12 @@ export function createCity(net, seed = 7) {
 
   C.serialize = function () {
     return { unlocked: C.unlocked, bid: C.bid, seed: C.seed,
-      b: C.buildings.map(b => [b.id, b.x, b.z, b.w, b.d, b.h, b.kind, b.res, b.jobs, b.roof, b.face, b.fx, b.fz, b.tone, b.chunk, b.rot ? +b.rot.toFixed(4) : 0, b.lw || 0, b.ld || 0]),
+      b: C.buildings.map(b => [b.id, b.x, b.z, b.w, b.d, b.h, b.kind, b.res, b.jobs, b.roof, b.face, b.fx, b.fz, b.tone, b.chunk, b.rot ? +b.rot.toFixed(4) : 0, b.lw || 0, b.ld || 0, b.biz ? [b.biz.t, b.biz.name, b.biz.lvl, Math.round(b.biz.cash)] : 0]),
       t: C.trees.map(t => t.map(v => +v.toFixed(2))), l: C.lots };
   };
   C.load = function (d) {
     C.unlocked = d.unlocked; C.bid = d.bid; C.seed = d.seed;
-    C.buildings = d.b.map(a => ({ id: a[0], x: a[1], z: a[2], w: a[3], d: a[4], h: a[5], kind: a[6], res: a[7], jobs: a[8], roof: a[9], face: a[10], fx: a[11], fz: a[12], tone: a[13], chunk: a[14], rot: a[15] || 0, lw: a[16] || 0, ld: a[17] || 0 }));
+    C.buildings = d.b.map(a => ({ id: a[0], x: a[1], z: a[2], w: a[3], d: a[4], h: a[5], kind: a[6], res: a[7], jobs: a[8], roof: a[9], face: a[10], fx: a[11], fz: a[12], tone: a[13], chunk: a[14], rot: a[15] || 0, lw: a[16] || 0, ld: a[17] || 0, ...(a[18] ? { biz: { t: a[18][0], name: a[18][1], lvl: a[18][2], cash: a[18][3] } } : {}) }));
     C.trees = d.t; C.lots = d.l; seenVer = -1; C.ver++;
   };
   return C;

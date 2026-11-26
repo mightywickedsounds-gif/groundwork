@@ -953,6 +953,7 @@ export class Net {
     if (car.granted && car.granted !== l) car.granted.busy = Math.max(0, car.granted.busy - 1);
     const j = this.cars.indexOf(car); if (j >= 0) this.cars.splice(j, 1);
     if (car.gave) this.stats.gaveUp++; else { const d = this.time - car.born; this.stats.arrived++; this.stats.tripSec += d; this.stats.ema = this.stats.ema ? this.stats.ema * .97 + d * .03 : d; }
+    if (this.onDone) this.onDone(car);
   }
 }
 

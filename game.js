@@ -2,17 +2,18 @@
 import * as THREE from 'three';
 import { Net, RING_R, ONEWAY_W, WALK_W, LANE_W, along, closestOnPoly, laneOff } from './net.js';
 import { createCity, DAY, CHUNK, BLOCK } from './city.js';
+import { createLife, BIZ, BUILD_ORDER, MAX_LVL, COST, lvlMul, upCost } from './life.js';
 import { makeMaterials, CLOUD, cloudUniforms, buildRoads, buildCity, vehicleGeos, vehicleMaterial, makeFleet, staticCarGeo, carColor, personGeo, personMaterial, lampGeo, signalGeo, buildSignals, hwOf, beamMaterial } from './draw.js';
 import { makeSky } from './sky.js';
 
 const $ = id => document.getElementById(id);
 let titleUp = true;   // the title screen is up (the camera circles the town)
-const SAVE = 'flowtown.save.v1', QKEY = 'flowtown.quality';
+const SAVE = 'flowtown.save.v2', QKEY = 'flowtown.quality';
 const touch = matchMedia('(pointer: coarse)').matches; if (touch) document.body.classList.add('touch');
 const QS = {
   high: { pr: 2, shadow: 4096, shadows: 2, treeDetail: 2, peds: 1400, maxCars: 1600 },
   medium: { pr: 1.5, shadow: 2048, shadows: 1, treeDetail: 1, peds: 700, maxCars: 1100 },
-  low: { pr: 1, shadow: 0, shadows: 0, treeDetail: 1, peds: 0, maxCars: 700 },
+  low: { pr: 1, shadow: 0, shadows: 0, treeDetail: 1, peds: 300, maxCars: 700 },
 };
 let qName = localStorage.getItem(QKEY) || (touch ? 'medium' : 'high');
 let Q = QS[qName] || QS.high;
@@ -101,20 +102,28 @@ pedLook.setUsage(THREE.DynamicDrawUsage); pedWalk.setUsage(THREE.DynamicDrawUsag
 pedMesh.setColorAt(0, new THREE.Color(1, 1, 1));
 
 function fresh(seed = (Math.random() * 1e6) | 0) {
-  net = new Net(); city = createCity(net, seed);
-  for (let i = 0; i < 3; i++) { const d = city.nextDistrict(); city.unlock(d[0], d[1]); }
-  city.sync();
-  S = { time: DAY * 7 / 24, meter: 0, growT: 0, districts: 3, speed: 1, over: false, flow: 1, cam: null, seed, view: false };
+  net = new Net(); city = createCity(net, seed); city.coreR = 0;
+  life = createLife(net, city, seed); net.onDone = c => life.carDone(c);
+  S = { time: DAY * 7 / 24, meter: 0, speed: 1, over: false, flow: 1, cam: null, seed, view: false };
+  life.T = S.time; life.startTown(); city.sync(); life.sync(); lifeVer = city.ver;
   if (typeof document !== 'undefined' && $('viewBtn')) $('viewBtn').classList.remove('on');
 }
 function load() {
   try {
-    const d = JSON.parse(localStorage.getItem(SAVE)); if (!d || d.v !== 1) return false;
+    const d = JSON.parse(localStorage.getItem(SAVE)); if (!d || d.v !== 2) return false;
     net = new Net(); net.load(d.net); city = createCity(net, d.city.seed); city.load(d.city); city.sync();
-    S = Object.assign({ speed: 1, over: false, flow: 1 }, d.s); S.over = false; return true;
+    S = Object.assign({ speed: 1, over: false, flow: 1 }, d.s); S.over = false;
+    life = createLife(net, city, d.city.seed); net.onDone = c => life.carDone(c); life.T = S.time; life.load(d.life); lifeVer = city.ver;
+    coreGrow(); return true;
   } catch (e) { console.warn('save unreadable', e); return false; }
 }
-function save() { if (!net || S.over) return; if (!titleUp) S.cam = [cam.x, cam.z, cam.dist, cam.yaw, cam.pitch]; try { localStorage.setItem(SAVE, JSON.stringify({ v: 1, net: net.serialize(), city: city.serialize(), s: { time: S.time, meter: S.meter, growT: S.growT, districts: S.districts, seed: S.seed, speed: S.speed, cam: S.cam } })); } catch (e) { /* storage full: keep playing */ } }
+function save() {
+  if (!net || S.over) return; if (!titleUp) S.cam = [cam.x, cam.z, cam.dist, cam.yaw, cam.pitch];
+  try { localStorage.setItem(SAVE, JSON.stringify({ v: 2, net: net.serialize(), city: city.serialize(), life: life.serialize(), s: { time: S.time, meter: S.meter, seed: S.seed, speed: S.speed, cam: S.cam } })); } catch (e) { /* storage full: keep playing */ }
+}
+let life, lifeVer = -1;
+// the town centre: none while it's a village; it grows (and gets taller) as people move in
+function coreGrow() { const p = life.people.size; city.coreR = p < 160 ? 0 : Math.min(175, 50 + (p - 160) * .5); }
 
 // ---------------- camera ----------------
 const cam = { x: 0, z: 40, dist: 420, yaw: .35, pitch: .82 };
@@ -302,11 +311,11 @@ const jamMarks = []; const jamGeo = new THREE.CircleGeometry(1, 40).rotateX(-Mat
 for (let i = 0; i < 24; i++) { const m = new THREE.Mesh(jamGeo, new THREE.MeshBasicMaterial({ color: 0xff3020, transparent: true, opacity: 0, depthWrite: false, toneMapped: false })); m.renderOrder = 3; m.visible = false; scene.add(m); jamMarks.push(m); }
 
 // ---------------- tools ----------------
-const TOOLS = ['road', 'curve', 'signal', 'ring', 'oneway', 'lanes', 'erase'];
+const TOOLS = ['road', 'curve', 'signal', 'ring', 'oneway', 'lanes', 'erase'];   // keys 1-7; Build is B
 const laneName = (nl, tl) => `${nl} lane${nl > 1 ? 's' : ''}${tl ? ' + turn lanes' : ''}`;
 const HINT = touch
-  ? { road: 'Hold, then drag to draw a road. Tap to keep going from the pin', curve: 'Hold, then drag to draw. Then drag to bend it', signal: 'Tap a junction for lights', ring: 'Tap a junction or road for a roundabout', oneway: 'Tap a road to switch its direction', lanes: 'Tap a road for more lanes', erase: 'Tap a road or roundabout to remove it' }
-  : { road: 'Click to start, click to place. It keeps going from the end', curve: 'Click the start, click the end, then move to bend and click', signal: 'Click a junction for lights', ring: 'Click a junction or road for a roundabout', oneway: 'Click a road to switch its direction', lanes: 'Click a road for more lanes', erase: 'Click a road or roundabout to remove it' };
+  ? { build: 'Tap a street to build there, or land outside town to buy it', road: 'Hold, then drag to draw a road. Tap to keep going from the pin', curve: 'Hold, then drag to draw. Then drag to bend it', signal: 'Tap a junction for lights', ring: 'Tap a junction or road for a roundabout', oneway: 'Tap a road to switch its direction', lanes: 'Tap a road for more lanes', erase: 'Tap a road or roundabout to remove it' }
+  : { build: 'Click a street to build there, or land outside town to buy it', road: 'Click to start, click to place. It keeps going from the end', curve: 'Click the start, click the end, then move to bend and click', signal: 'Click a junction for lights', ring: 'Click a junction or road for a roundabout', oneway: 'Click a road to switch its direction', lanes: 'Click a road for more lanes', erase: 'Click a road or roundabout to remove it' };
 const T = { tool: '', pts: [], pend: null, bend: null, draw: null, hover: null, mouse: null, plan: null };
 function setTool(t) {
   T.tool = T.tool === t ? '' : t; T.pts = []; T.pend = null; T.bend = null; T.draw = null; previewMesh.visible = false; hoverMesh.visible = false; pin.visible = false;
@@ -327,9 +336,10 @@ function previewRoad(a, b, bend, force) {
   const plan = net.planRoad(a, b, through(a, b, bend), snapR()); T.plan = plan;
   const A = plan.a || a, B = plan.b || b, c = plan.cc || [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2];
   ribbon(previewMesh, qpts(A, c, B, 20), 3.6);
-  previewMesh.material.color.setRGB(...(plan.reason ? [1, .35, .25] : [.4, .9, 1]));
+  const cost = roadCost(A, B, plan.cc), poor = !plan.reason && !life.can(cost);
+  previewMesh.material.color.setRGB(...(plan.reason || poor ? [1, .35, .25] : [.4, .9, 1]));
   cursor.position.set(B[0], .35, B[1]); cursor.visible = true;
-  hint(plan.reason);
+  hint(plan.reason || (poor ? 'Need ' + money(cost) + ' coins' : null)); if (!plan.reason && !poor) { $('hint').textContent = 'Road ' + money(cost) + ' coins'; }
 }
 function hoverUpdate() {
   const m = T.mouse; hoverMesh.visible = false; cursor.visible = !!m && !!T.tool;
@@ -347,6 +357,12 @@ function hoverUpdate() {
     const q = net.probe(m[0], m[1], R); const p = q.n ? [q.n.x, q.n.z] : q.p; cursor.position.set(p[0], .35, p[1]); hint();
     return;
   }
+  if (T.tool === 'build') {
+    const site = buildSite(m[0], m[1], R);
+    if (site && site.e) { T.hover = site; ribbon(hoverMesh, site.e.pts, hwOf(site.e) + 3.5); hoverMesh.material.color.setRGB(.95, .8, .2); }
+    else if (site && site.land) { T.hover = site; const S0 = BLOCK * CHUNK, g0 = -S0 / 2, x0 = g0 + site.land[0] * S0, z0 = g0 + site.land[1] * S0; ribbon(hoverMesh, [[x0, z0], [x0 + S0, z0], [x0 + S0, z0 + S0], [x0, z0 + S0], [x0, z0]], 4); hoverMesh.material.color.setRGB(.4, 1, .5); }
+    return;
+  }
   if (T.tool === 'erase') {
     hoverMesh.material.color.setRGB(1, .3, .2);
     const r = ringAt(m[0], m[1]); if (r) { ringShape(hoverMesh, r.c[0], r.c[1], r.R - 4, r.R + 4); T.hover = { ring: r.rid }; return; }
@@ -357,7 +373,9 @@ function hoverUpdate() {
   if (T.tool === 'lanes') {   // show how wide it will be, and what it becomes
     const h = net.nearestEdge(m[0], m[1], R); if (!h || h.e.ring) { hint(); return; }
     const [nl, tl] = net.nextLanes(h.e); T.hover = { e: h.e };
-    ribbon(hoverMesh, h.e.pts, hwOf({ ...h.e, nl, tl }) + .6); hint(`${touch ? 'Tap' : 'Click'} for ${laneName(nl, tl)}`); $('hint').classList.remove('bad');
+    ribbon(hoverMesh, h.e.pts, hwOf({ ...h.e, nl, tl }) + .6);
+    const chainL = net.roadChain(h.e).reduce((a, e) => a + e.len, 0), up = nl * 2 + tl > (h.e.nl || 1) * 2 + (h.e.tl || 0), cost = up ? Math.round(chainL * COST.lane * (nl + tl * .5) / 5) * 5 : 0;
+    hint(`${laneName(nl, tl)}${cost ? ' · ' + money(cost) + ' coins' : ''}`); $('hint').classList.remove('bad');
     return;
   }
   if (T.tool === 'signal') {
@@ -385,10 +403,15 @@ function afterEdit(pts, rgb = [.4, .9, 1]) {
   sound.magic();
   save();
 }
+// what a road costs: by its length
+function roadCost(A, B, c) { const L = c ? Math.hypot(c[0] - A[0], c[1] - A[1]) + Math.hypot(B[0] - c[0], B[1] - c[1]) : Math.hypot(B[0] - A[0], B[1] - A[1]); return Math.round(L * COST.road / 5) * 5; }
 // build a road; on success keep going from its end
 function place(a, b, bend) {
-  const c = through(a, b, bend), made = net.addRoad(a, b, c, {}, snapR());
+  const c = through(a, b, bend), plan = net.planRoad(a, b, c, snapR()), cost = plan.reason ? 0 : roadCost(plan.a || a, plan.b || b, plan.cc);
+  if (!plan.reason && !life.can(cost)) { toast('Need ' + money(cost) + ' coins', true); return false; }
+  const made = net.addRoad(a, b, c, {}, snapR());
   if (made.reason) { toast(made.reason, true); return false; }
+  life.spend(cost); life.stat.roads++; spentFx(cost);
   afterEdit(made.flatMap(e => e.pts));
   T.pts = [made.end]; T.pend = null; T.bend = null; T.draw = null; previewMesh.visible = false; hint();
   return true;
@@ -408,6 +431,7 @@ function click(x, z) {
     T.pend = [a, [x, z]]; T.bend = null; previewRoad(a, [x, z], null, true); hint(touch ? 'Drag to bend it, tap to place' : 'Move to bend it, click to place'); return;
   }
   const h = T.hover;
+  if (t === 'build') { if (h) openPicker(h); else toast('Pick a street', true); return; }
   if (t === 'erase') {
     if (!h) return;
     if (h.ring) { const c = net.ringCenter(h.ring); net.removeRoundabout(h.ring); afterEdit(null); burst(c[0], c[1], 120, [1, .45, .3], 14); toast('Roundabout removed'); }
@@ -415,20 +439,222 @@ function click(x, z) {
     T.hover = null; return;
   }
   if (t === 'lanes') {
-    if (!h) return; const r = net.cycleLanes(h.e.id); if (!r) return;
+    if (!h) return;
+    const [nl, tl] = net.nextLanes(h.e), chainL = net.roadChain(h.e).reduce((a, e) => a + e.len, 0), cost = nl * 2 + tl > (h.e.nl || 1) * 2 + (h.e.tl || 0) ? Math.round(chainL * COST.lane * (nl + tl * .5) / 5) * 5 : 0;
+    if (cost && !life.can(cost)) return toast('Need ' + money(cost) + ' coins', true);
+    const r = net.cycleLanes(h.e.id); if (!r) return; if (cost) { life.spend(cost); spentFx(cost); }
     afterEdit(net.roadChain(h.e).flatMap(e => e.pts)); toast(laneName(r.nl, r.tl) + (r.lights ? ' · lights added' : '')); hoverUpdate(); return;
   }
   if (t === 'oneway') { if (!h) return; const r = net.cycleOneWay(h.e.id); if (r != null) { afterEdit(h.e.pts); toast(r === 0 ? 'Two-way' : 'One-way'); } return; }
   if (t === 'signal') {
     if (!h) return; if (h.n.ring) return toast('Roundabouts don\'t need lights', true);
-    const r = net.toggleSignal(h.n.id); afterEdit(null); burst(h.n.x, h.n.z, 70, r ? [.4, 1, .5] : [1, .45, .3], 8); toast(r ? 'Lights on' : 'Lights off'); return;
+    if (!h.n.sig && !life.can(COST.light)) return toast('Need ' + money(COST.light) + ' coins', true);
+    const r = net.toggleSignal(h.n.id); if (r) { life.spend(COST.light); spentFx(COST.light); } afterEdit(null); burst(h.n.x, h.n.z, 70, r ? [.4, 1, .5] : [1, .45, .3], 8); toast(r ? 'Lights on' : 'Lights off'); return;
   }
   if (t === 'ring') {
     if (!h) return; if (h.bad) return toast(h.bad, true);
+    if (!life.can(COST.ring)) return toast('Need ' + money(COST.ring) + ' coins', true);
     const r = h.n ? net.makeRoundabout(h.n.id) : net.roundaboutOnRoad(h.e, h.s);
     if (typeof r !== 'number') return toast(r, true);
+    life.spend(COST.ring); spentFx(COST.ring);
     const c = net.ringCenter(r); afterEdit(null); burst(c[0], c[1], 160, [.5, .95, 1], 18); toast('Roundabout built'); hoverUpdate();
   }
+}
+
+// ---------------- the town: building, buying land, looking at people and places ----------------
+const hsh = (a, b = 0) => { let h = (a * 374761393 + b * 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+function buildSite(x, z, R) {
+  const S0 = BLOCK * CHUNK, i = Math.floor((x + S0 / 2) / S0), j = Math.floor((z + S0 / 2) / S0);
+  if (!city.inCity(x, z)) {
+    const adj = city.unlocked.some(u => Math.abs(u[0] - i) + Math.abs(u[1] - j) === 1);
+    return adj && Math.abs(i) <= 3 && Math.abs(j) <= 3 ? { land: [i, j] } : null;
+  }
+  const h = net.nearestEdge(x, z, Math.max(R, 34)); if (!h || h.e.ring) return null;
+  const q = along(h.e.pts, h.e.cum, h.s), sg = Math.sign((x - q[0]) * -q[3] + (z - q[1]) * q[2]) || 1;
+  return { e: h.e, s: h.s, sg };
+}
+const coinI = '<i class="coin"></i>';
+function openPicker(site) {
+  const L = $('pickList'); L.innerHTML = '';
+  const add = (html, cls, ok, fn) => { const b = document.createElement('button'); b.innerHTML = html; if (cls) b.className = cls; b.disabled = !ok; b.onclick = () => { show('pick', false); fn(); }; L.appendChild(b); };
+  if (site.land) {
+    const c = COST.land(life.bought);
+    $('pick').querySelector('h3').textContent = 'New land';
+    add(`Buy this land, streets included<small>${coinI}${money(c)}</small>`, 'land', life.can(c), () => buyLand(site.land, c));
+  } else {
+    $('pick').querySelector('h3').textContent = 'Build on ' + life.streetName(site.e);
+    for (const t of BUILD_ORDER) {
+      const B = BIZ[t], locked = B.pop && life.people.size < B.pop;
+      add(`${B.name}<small>${locked ? 'Needs ' + B.pop + ' people' : coinI + money(B.cost)}</small>`, B.svc ? 'svc' : '', !locked && life.can(B.cost), () => doBuild(site, t));
+    }
+  }
+  show('pick', true);
+}
+$('pickX').onclick = () => show('pick', false);
+$('pick').addEventListener('pointerdown', e => { if (e.target === $('pick')) show('pick', false); });
+function doBuild(site, t) {
+  const B = BIZ[t]; if (!life.can(B.cost)) return toast('Need ' + money(B.cost) + ' coins', true);
+  const b = life.place(t, site.e, site.s, site.sg);
+  if (!b) return toast('No room here', true);
+  life.spend(B.cost); life.stat.built++; spentFx(B.cost);
+  burst(b.x, b.z, 140, [1, .85, .3], Math.max(b.w, b.d) / 2); sound.magic(); toast(b.biz.name + ' opened');
+  select({ k: 'b', id: b.id }); save();
+}
+function buyLand([i, j], c) {
+  if (!life.spend(c)) return toast('Need ' + money(c) + ' coins', true);
+  city.unlock(i, j, true); city.sync(); life.bought++; spentFx(c);
+  const S0 = BLOCK * CHUNK, x = i * S0, z = j * S0;
+  burst(x, z, 260, [.5, 1, .6], 130); sound.magic(); toast('New land: streets are in'); save();
+}
+function spentFx(c) { const el = $('coins'); el.classList.remove('spent'); void el.offsetWidth; el.classList.add('spent'); }
+function gainFx() { const el = $('coins'); el.classList.remove('gain'); void el.offsetWidth; el.classList.add('gain'); }
+
+// where a walker is: [x, z, hx, hz]
+function walkPos(w) {
+  let i = w.i || 0; const c = w.cum, s = Math.min(w.s, w.len);
+  while (i < c.length - 2 && c[i + 1] < s) i++; while (i > 0 && c[i] > s) i--; w.i = i;
+  const a = w.pts[i], b = w.pts[Math.min(i + 1, w.pts.length - 1)], L = (c[i + 1] - c[i]) || 1, t = Math.max(0, Math.min(1, (s - c[i]) / L));
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, (b[0] - a[0]) / L, (b[1] - a[1]) / L];
+}
+// where a person is right now: [x, z] (in a car, on foot, or inside a building)
+function personPos(p) {
+  if (p.car && net.cars.includes(p.car)) return [p.car.x, p.car.z];
+  if (p.walk) { const q = walkPos(p.walk); return [q[0], q[1]]; }
+  const b = life.bmap.get(p.at); return b ? [b.x, b.z] : null;
+}
+// ray from the camera through a screen point into a building's box
+const rayO = new THREE.Vector3(), rayD = new THREE.Vector3();
+function hitBuilding(sx, sy) {
+  ndc.set(sx / innerWidth * 2 - 1, -(sy / innerHeight) * 2 + 1); ray.setFromCamera(ndc, camera); rayO.copy(ray.ray.origin); rayD.copy(ray.ray.direction);
+  let best = null, bt = 1e9;
+  for (const b of city.buildings) {
+    const r = b.rot || 0, c = Math.cos(r), s = Math.sin(r), ox = rayO.x - b.x, oz = rayO.z - b.z;
+    const o = [ox * c + oz * s, rayO.y, -ox * s + oz * c], d = [rayD.x * c + rayD.z * s, rayD.y, -rayD.x * s + rayD.z * c];
+    const lo = [-b.w / 2, 0, -b.d / 2], hi = [b.w / 2, b.h + (b.roof ? 2.5 : .6), b.d / 2];
+    let t0 = 0, t1 = 1e9, ok = true;
+    for (let k = 0; k < 3 && ok; k++) {
+      if (Math.abs(d[k]) < 1e-8) { if (o[k] < lo[k] || o[k] > hi[k]) ok = false; continue; }
+      let ta = (lo[k] - o[k]) / d[k], tb = (hi[k] - o[k]) / d[k]; if (ta > tb) [ta, tb] = [tb, ta];
+      t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) ok = false;
+    }
+    if (ok && t0 < bt) { bt = t0; best = b; }
+  }
+  return best;
+}
+let sel = null, follow = null, cardT = 0;
+function onTapWorld(x, z, sx, sy) {
+  // a coin over a business: collect it
+  for (const q of coinSpots) { const v = new THREE.Vector3(q.x, q.y, q.z).project(camera), px = (v.x + 1) / 2 * innerWidth, py = (1 - v.y) / 2 * innerHeight; if (Math.hypot(px - sx, py - sy) < (touch ? 34 : 24)) { collectAt(q.b); return; } }
+  // people: on foot or in a car
+  const r = Math.max(3.2, snapR() * .55); let best = null, bd = r;
+  for (const w of life.walkers) { if (w.ghost) continue; const q = walkPos(w), d = Math.hypot(q[0] - x, q[1] - z); if (d < bd) { bd = d; best = w.pid; } }
+  for (const c of net.cars) { if (!c.pid) continue; const d = Math.max(0, Math.hypot(c.x - x, c.z - z) - c.len * .35); if (d < bd) { bd = d; best = c.pid; } }
+  if (best != null && life.person(best)) { select({ k: 'p', id: best }); return; }
+  const b = hitBuilding(sx, sy); if (b) { select({ k: 'b', id: b.id }); return; }
+  select(null);
+}
+
+function collectAt(b) {
+  const c = life.collect(b); if (!c) return;
+  life.stat.collected++; burst(b.x, b.z, 50, [1, .82, .2], 4); sound.coin(); gainFx(); toast('+' + money(c));
+}
+function select(s) { sel = s; if (!s) { follow = null; $('card').classList.remove('show'); selRing.visible = false; return; } drawCard(); $('card').classList.add('show'); }
+const X_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function drawCard() {
+  const C = $('card'); if (!sel) return;
+  if (sel.k === 'p') {
+    const p = life.person(sel.id); if (!p) return select(null);
+    const w = p.work && life.bmap.get(p.work), boss = life.boss(p), home = life.bmap.get(p.home);
+    const role = p.guest ? 'Visitor' : p.work ? life.title(p) : p.kid ? 'Student' : p.ret ? 'Retired' : 'Looking for work';
+    let rows = '';
+    if (w) rows += `<span>Job</span><b>${esc(life.title(p))}</b><span>Works at</span><b class="link" data-b="${w.id}">${esc(w.biz.name)}</b>`;
+    if (w) rows += `<span>Reports to</span>${boss ? `<b class="link" data-p="${boss.id}">${esc(boss.fn + ' ' + boss.ln)}, ${esc(life.title(boss))}</b>` : '<b>Nobody: runs the place</b>'}`;
+    if (w) { const sh = life.shift(p); if (sh) rows += `<span>Hours</span><b>${hhmm(sh[0])} to ${hhmm(sh[1])}</b>`; }
+    if (home) rows += `<span>Lives at</span><b class="link" data-b="${home.id}">${esc(life.address(home))}</b>`;
+    else if (p.guest) rows += `<span>From</span><b>Out of town</b>`;
+    if (!p.kid) rows += `<span>Car</span><b>${p.ins ? 'Insured' : 'No insurance'}, ${p.reg ? 'tags current' : 'tags expired'}</b>`;
+    C.innerHTML = `<div class="ch"><div><h4>${esc(p.fn + ' ' + p.ln)}</h4><div class="sub">${p.age} · ${esc(role)}</div></div><button class="x" data-act="close">${X_ICON}</button></div>
+      <div class="doing">${esc(life.doing(p))}</div><div class="rows">${rows}</div>
+      <div class="cb"><button data-act="follow" class="${follow === p.id ? 'y' : ''}">${follow === p.id ? 'Following' : 'Follow'}</button>${w ? `<button data-b="${w.id}">Workplace</button>` : ''}${home ? `<button data-b="${home.id}">Home</button>` : ''}</div>`;
+    return;
+  }
+  const b = life.bmap.get(sel.id); if (!b) return select(null);
+  if (b.biz) {
+    const B = BIZ[b.biz.t], lv = b.biz.lvl, up = lv < MAX_LVL ? upCost(b.biz.t, lv) : 0, cap = life.cashCap(b);
+    const per = B.rate ? Math.round(B.rate * lvlMul(lv)) : 0;
+    let staff = '';
+    for (const id of b.biz.staff) { const p = life.people.get(id); if (!p) continue; staff += `<div data-p="${id}"><b>${esc(p.fn + ' ' + p.ln)}</b><span>${esc(life.title(p))}</span><i class="${p.state === 'in' && p.at === b.id ? 'in' : ''}"></i></div>`; }
+    const inside = [...life.people.values(), ...life.guests.values()].filter(p => p.state === 'in' && p.at === b.id).length;
+    C.innerHTML = `<div class="ch"><div><h4>${esc(b.biz.name)}</h4><div class="sub">${esc(B.name)} · Level ${lv}</div></div><button class="x" data-act="close">${X_ICON}</button></div>
+      <div class="lvl">${[1, 2, 3, 4, 5].map(i => `<i class="${i <= lv ? 'on' : ''}"></i>`).join('')}</div>
+      <div class="rows"><span>Staff in</span><b>${b.biz.here || 0} of ${b.jobs}${b.biz.staff.length < b.jobs ? ' (' + (b.jobs - b.biz.staff.length) + ' to hire)' : ''}</b>
+      <span>Inside now</span><b>${inside}</b>
+      ${per ? `<span>Earns</span><b>${money(per)} an hour, fully staffed</b>` : `<span>Upkeep</span><b>${money(B.upkeep * (1 + (lv - 1) * .35))} a day</b>`}
+      <span>Open</span><b>${B.hours[1] - B.hours[0] >= 24 ? 'Day and night' : hhmm(B.hours[0]) + ' to ' + hhmm(B.hours[1])}</b>
+      <span>Address</span><b>${esc(life.address(b))}</b>
+      ${lv >= 3 ? '<span>Manager</span><b>Banks the takings for you</b>' : B.rate || B.spend ? `<span>Till</span><b>${money(b.biz.cash || 0)} of ${money(cap)}</b>` : ''}</div>
+      <div class="cb">${lv < 3 && (B.rate || B.spend) ? `<button data-act="collect" class="y" ${b.biz.cash >= 1 ? '' : 'disabled'}>${coinI} Collect</button>` : ''}
+      <button data-act="upgrade" ${lv < MAX_LVL && life.can(up) ? '' : 'disabled'}>${lv < MAX_LVL ? 'Upgrade ' + coinI + money(up) : 'Top level'}</button></div>
+      <div class="staff">${staff}</div>`;
+    return;
+  }
+  const res = [...life.people.values()].filter(p => p.home === b.id);
+  const inside = res.filter(p => p.state === 'in' && p.at === b.id).length;
+  C.innerHTML = `<div class="ch"><div><h4>${esc(life.address(b))}</h4><div class="sub">${b.kind === 'house' ? 'House' : 'Apartments'} · ${res.length} living here</div></div><button class="x" data-act="close">${X_ICON}</button></div>
+    <div class="rows"><span>Home now</span><b>${inside}</b></div>
+    <div class="staff">${res.slice(0, 40).map(p => `<div data-p="${p.id}"><b>${esc(p.fn + ' ' + p.ln)}</b><span>${p.work ? esc(life.title(p)) : p.kid ? 'Student' : p.ret ? 'Retired' : 'Looking for work'}</span><i class="${p.state === 'in' && p.at === b.id ? 'in' : ''}"></i></div>`).join('')}</div>`;
+}
+const hhmm = h => { h = ((h % 24) + 24) % 24; const H = Math.floor(h), m = Math.round((h - H) * 60); return (H % 12 || 12) + (m ? ':' + String(m).padStart(2, '0') : '') + (H < 12 ? ' am' : ' pm'); };
+$('card').addEventListener('click', e => {
+  const t = e.target.closest('[data-act],[data-b],[data-p]'); if (!t) return;
+  if (t.dataset.act === 'close') return select(null);
+  if (t.dataset.act === 'follow') { follow = follow === sel.id ? null : sel.id; drawCard(); return; }
+  if (t.dataset.act === 'collect') { const b = life.bmap.get(sel.id); if (b) collectAt(b); drawCard(); return; }
+  if (t.dataset.act === 'upgrade') { const b = life.bmap.get(sel.id); if (b && life.upgrade(b)) { spentFx(0); burst(b.x, b.z, 120, [.5, 1, .6], Math.max(b.w, b.d) / 2); sound.magic(); toast(b.biz.name + ': level ' + b.biz.lvl); save(); } drawCard(); return; }
+  if (t.dataset.b) { const b = life.bmap.get(+t.dataset.b); if (b) { select({ k: 'b', id: b.id }); follow = null; flyTo({ x: b.x, z: b.z, dist: Math.min(cam.dist, 160) }, .9); } return; }
+  if (t.dataset.p) { const p = life.person(+t.dataset.p); if (p) { select({ k: 'p', id: p.id }); const q = personPos(p); if (q) flyTo({ x: q[0], z: q[1], dist: Math.min(cam.dist, 140) }, .9); } }
+});
+// the selected person: a ring at their feet (or round their car); following keeps them in view
+const selRing = new THREE.Mesh(new THREE.RingGeometry(1.5, 2.1, 36).rotateX(-Math.PI / 2), glowMat([1, .8, .15], .95)); selRing.renderOrder = 6; selRing.visible = false; scene.add(selRing);
+function selTick(dt) {
+  selRing.visible = false;
+  if (!sel) return;
+  cardT += dt; if (cardT > .5) { cardT = 0; drawCard(); }
+  if (sel.k === 'p') {
+    const p = life.person(sel.id); if (!p) return;
+    const q = personPos(p); if (!q) return;
+    const inCar = p.car && net.cars.includes(p.car), r = inCar ? 3.3 : 1;
+    selRing.position.set(q[0], .45, q[1]); selRing.scale.set(r, 1, r); selRing.visible = !(p.state === 'in');
+    if (follow === p.id && !drag && !pinch) { const k = 1 - Math.exp(-dt * 4); cam.x += (q[0] - cam.x) * k; cam.z += (q[1] - cam.z) * k; placeCamera(); }
+  } else if (sel.k === 'b') {
+    const b = life.bmap.get(sel.id); if (!b) return;
+    selRing.position.set(b.x, .45, b.z); const r = Math.max(b.w, b.d) / 2 / 1.8 + 1.5; selRing.scale.set(r, 1, r); selRing.visible = true;
+  }
+}
+// coins waiting over the businesses (tap one to collect)
+const coinTex = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d');
+  g.fillStyle = '#121314'; g.beginPath(); g.arc(64, 64, 62, 0, 7); g.fill();
+  g.fillStyle = '#f5c000'; g.beginPath(); g.arc(64, 64, 54, 0, 7); g.fill();
+  g.strokeStyle = '#b38a00'; g.lineWidth = 7; g.beginPath(); g.arc(64, 64, 38, 0, 7); g.stroke();
+  g.fillStyle = '#b38a00'; g.fillRect(57, 40, 14, 48);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+})();
+const coinMesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: coinTex, transparent: true, alphaTest: .5, toneMapped: false, depthTest: true }), 256);
+coinMesh.count = 0; coinMesh.frustumCulled = false; coinMesh.renderOrder = 7; scene.add(coinMesh);
+let coinSpots = [];
+function drawCoins(t) {
+  coinSpots = []; let n = 0;
+  if (!titleUp) for (const b of city.buildings) {
+    if (!b.biz || b.biz.lvl >= 3 || n >= 256) continue;
+    const cap = life.cashCap(b); if ((b.biz.cash || 0) < Math.max(12, cap * .12)) continue;
+    const sc = Math.max(3.2, Math.min(16, cam.dist * .028)) * (b.biz.cash >= cap - 1 ? 1.25 : 1), y = b.h + 3 + sc * .6 + Math.sin(t * 2.4 + b.id) * sc * .08;
+    dummy.position.set(b.x, y, b.z); dummy.quaternion.copy(camera.quaternion); dummy.scale.set(sc, sc, sc); dummy.updateMatrix(); coinMesh.setMatrixAt(n++, dummy.matrix);
+    coinSpots.push({ x: b.x, y, z: b.z, b });
+  }
+  dummy.quaternion.identity();
+  coinMesh.count = n; coinMesh.instanceMatrix.needsUpdate = true;
 }
 
 // ---------------- input ----------------
@@ -494,7 +720,7 @@ canvas.addEventListener('pointermove', e => {
   if (drag.moved > 6 && drag.g0) {
     const g = groundAt(e.clientX, e.clientY);
     if (g) {
-      const mx = drag.g0[0] - g[0], mz = drag.g0[1] - g[1]; cam.x += mx; cam.z += mz; placeCamera();
+      const mx = drag.g0[0] - g[0], mz = drag.g0[1] - g[1]; cam.x += mx; cam.z += mz; placeCamera(); if (follow) { follow = null; if (sel) drawCard(); }
       // how fast the map is moving (for the glide when the finger lets go)
       const t = e.timeStamp, dt = Math.max(.004, (t - (drag.vt || drag.t0)) / 1000); drag.vt = t;
       const k = Math.min(1, dt * 18); drag.vx = (drag.vx || 0) * (1 - k) + mx / dt * k; drag.vz = (drag.vz || 0) * (1 - k) + mz / dt * k;
@@ -535,9 +761,9 @@ function tap(x, z, sx, sy) {
   const now = performance.now();
   if (lastTap && now - lastTap.t < 320 && Math.hypot(sx - lastTap.sx, sy - lastTap.sy) < 30) { zoomTo = { dist: Math.max(26, cam.dist * .45), cx: sx, cy: sy }; lastTap = null; return; }
   lastTap = { t: now, sx, sy };
-  if (typeof onTap === 'function') onTap(x, z, sx, sy);
+  onTapWorld(x, z, sx, sy);
 }
-let onTap = null;
+
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('pointerleave', () => { if (!ptrs.size) { T.mouse = null; cursor.visible = false; } });
 canvas.addEventListener('wheel', e => {
@@ -555,7 +781,7 @@ addEventListener('keydown', e => {
   }
   if (e.code === 'Escape' && !T.tool && !T.pts.length) { showMenu(true); return; }
   keys.add(e.code);
-  const n = '1234567'.indexOf(e.key); if (n >= 0) setTool(TOOLS[n]);
+  const n = '1234567'.indexOf(e.key); if (n >= 0) setTool(TOOLS[n]); if (e.code === 'KeyB') setTool('build');
   if (e.code === 'Escape') { if (T.pend) T.pend = null; else if (T.pts.length) T.pts = []; else setTool(''); previewMesh.visible = false; hint(); hoverUpdate(); }
   if (e.code === 'Space') { e.preventDefault(); setSpeed(S.speed ? 0 : (S.lastSpeed || 1)); }
   if (e.code === 'KeyT') toggleView();
@@ -582,39 +808,36 @@ for (const b of document.querySelectorAll('#tools button[data-tool]')) b.addEven
 for (const b of document.querySelectorAll('#speed button')) b.addEventListener('click', () => setSpeed(+b.dataset.speed));
 $('viewBtn').addEventListener('click', toggleView);
 const fmt = n => n >= 1e4 ? (n / 1e3).toFixed(1) + 'k' : String(n);
-const growInterval = () => Math.max(85, 170 - (S.districts - 3) * 7);
+const money = n => Math.floor(n).toLocaleString('en-US');
 function hud() {
   const h = (S.time / DAY * 24) % 24, day = Math.floor(S.time / DAY) + 1;
   $('clock').textContent = String(Math.floor(h)).padStart(2, '0') + ':' + String(Math.floor(h % 1 * 60)).padStart(2, '0');
   $('day').textContent = 'DAY ' + day;
-  const { res } = city.totals();
-  $('sPop').textContent = fmt(res); $('sCars').textContent = fmt(net.cars.length); $('sFlow').textContent = Math.round(S.flow * 100) + '%';
-  const tr = net.stats.ema || 0; $('sTrip').textContent = Math.floor(tr / 60) + ':' + String(Math.floor(tr % 60)).padStart(2, '0');
-  const nx = city.nextDistrict();
-  $('growTxt').textContent = nx ? 'New district in ' + Math.max(0, Math.ceil((growInterval() - S.growT) / 60 * 24 / DAY * 60)) + ' min' : 'City complete';
-  $('growBar').style.width = (nx ? Math.min(100, S.growT / growInterval() * 100) : 100) + '%';
+  $('sCoins').textContent = money(life.coins);
+  let jobs = 0, filled = 0; for (const b of city.buildings) if (b.biz) { jobs += b.jobs; filled += b.biz.staff.length; }
+  $('sPop').textContent = fmt(life.people.size); $('sJobs').textContent = filled + '/' + jobs; $('sCars').textContent = fmt(net.cars.length); $('sFlow').textContent = Math.round(S.flow * 100) + '%';
+  const g = life.goal(); $('goalTxt').textContent = g.txt; $('goalPay').textContent = g.pay ? '+' + money(g.pay) : '';
   $('jamPct').textContent = Math.round(S.meter * 100) + '%';
   $('jamBar').querySelector('i').style.width = (S.meter * 100) + '%';
   $('jamBar').className = S.meter > .7 ? 'bad' : S.meter > .4 ? 'warn' : '';
 }
 
 // ---------------- simulation tick ----------------
-let jamT = 0, ovT = 0, lastGave = 0;
+let jamT = 0, ovT = 0, lastGave = 0, goalT = 0, jamWarnT = 0;
 function simStep(dt) {
-  S.time += dt * clockRate((S.time / DAY * 24) % 24);
-  const hour = (S.time / DAY * 24) % 24;
-  city.demand(dt, hour);
+  S.time += dt * clockRate((S.time / DAY * 24) % 24); life.T = S.time;
   city.release(dt, Q.maxCars);
   net.step(dt);
-  // the city keeps growing
-  S.growT += dt;
-  if (S.growT >= growInterval()) {
-    S.growT = 0; const d = city.nextDistrict();
-    if (d) { city.unlock(d[0], d[1]); S.districts++; city.sync(); toast('A new district opened'); const x = (d[0] * CHUNK) * BLOCK, z = (d[1] * CHUNK) * BLOCK; burst(x, z, 200, [.5, .95, 1], 120); }
+  life.step(dt);
+  // people move in when there's work: new homes go up along the streets (together every few seconds)
+  if (city.regrow(dt, life.wantHomes())) save();
+  if (city.ver !== lifeVer) { life.sync(); lifeVer = city.ver; coreGrow(); }
+  goalT += dt; if (goalT > 1) { goalT = 0; life.checkGoal(); }
+  for (const ev of life.events.splice(0)) {
+    if (ev.k === 'goal') { toast('Goal done +' + money(ev.pay)); sound.coin(); }
+    if (ev.k === 'day' && !titleUp) daySummary(ev);
   }
-  // empty land along streets fills back in (new buildings show up together every few seconds)
-  if (city.regrow(dt)) save();
-  // gridlock meter
+  // gridlock meter: when it's high, workers and shoppers don't get through (the businesses earn less)
   jamT += dt;
   if (jamT >= .5) {
     let stuck = 0, flow = 0; for (const c of net.cars) { if (c.stuck > 25) stuck++; flow += Math.min(1, c.v / (c.lane.vmax * .8)); }
@@ -623,17 +846,18 @@ function simStep(dt) {
     const gave = net.stats.gaveUp - lastGave; lastGave = net.stats.gaveUp;
     S.meter = Math.max(0, Math.min(1, S.meter + (jam - .1) * jamT / 45 + gave * .006));
     jamT = 0;
-    if (S.meter >= 1 && !S.over) gameOver();
+    jamWarnT -= .5; if (S.meter > .85 && jamWarnT <= 0 && !titleUp) { jamWarnT = 60; toast('Gridlock: people can\'t get to work', true); }
   }
 }
-function gameOver() {
-  S.over = true; setSpeed(0);
-  const { res } = city.totals(), day = Math.floor(S.time / DAY) + 1;
-  $('overTxt').innerHTML = `Day <b>${day}</b> · <b>${fmt(res)}</b> people · <b>${S.districts}</b> districts<br><b>${fmt(net.stats.arrived)}</b> trips made, <b>${fmt(net.stats.gaveUp)}</b> drivers gave up`;
-  $('over').classList.add('show'); localStorage.removeItem(SAVE);
+// the end of each day: the books, then on to the next day
+function daySummary(ev) {
+  const s = ev.sum, row = (k, v, cls = '') => `<span class="${cls}">${k}</span><b class="${cls}">${v}</b>`;
+  $('dsTitle').textContent = 'DAY ' + ev.day;
+  $('dsRows').innerHTML = row('Businesses', '+' + money(s.biz)) + row('Taxes', '+' + money(s.tax)) + (s.fines ? row('Fines', '+' + money(s.fines)) : '') + (s.upkeep ? row('Services', '-' + money(s.upkeep)) : '') + (s.spent ? row('Spent', '-' + money(s.spent)) : '')
+    + row('Total', (s.net >= 0 ? '+' : '') + money(s.net), 'tot') + row('Trips', fmt(s.trips)) + (s.late ? row('Late for work', s.late) : '') + (s.crashes ? row('Crashes', s.crashes) : '') + (s.stops ? row('Traffic stops', s.stops) : '') + (s.arrests ? row('Arrests', s.arrests) : '') + row('People', fmt(s.people));
+  S.daySpeed = S.speed || S.lastSpeed || 1; setSpeed(0); show('daySum', true); sound.coin(); save();
 }
-$('goOnBtn').onclick = () => { S.over = false; S.meter = .55; $('over').classList.remove('show'); setSpeed(1); };
-$('overNewBtn').onclick = () => { $('over').classList.remove('show'); newCity(); };
+$('dsGo').onclick = () => { show('daySum', false); setSpeed(S.daySpeed || 1); };
 
 // ---------------- per frame drawing ----------------
 const kinds = Object.keys(fleet);
@@ -653,55 +877,21 @@ function drawCars() {
   for (const k of kinds) { const m = fleet[k]; m.count = cnt[k]; m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; m.geometry.attributes.aBrake.needsUpdate = true; }
   beams.count = nb; beams.visible = lit; if (nb) beams.instanceMatrix.needsUpdate = true;
 }
-// people on the sidewalks
-let peds = [];
-function edgeList() { return [...net.edges.values()].filter(e => !e.ring && e.len > 20); }
-// where a walker is on a sidewalk: edge, distance along it, which side, how far out from the kerb
-function pedSpot(e, sAt, side, o) { const q = along(e.pts, e.cum, sAt), w = hwOf(e) + o; return [q[0] - q[3] * w * side, q[1] + q[2] * w * side, q[2], q[3]]; }
-function updatePeds(dt, night) {
-  const want = Math.min(Q.peds, Math.round(city.totals().res / 9));
-  if (peds.length !== want) { const E = edgeList(); while (peds.length < want && E.length) peds.push(newPed(E)); peds.length = Math.min(peds.length, want); }
-  let n = 0; const show = 1 - night * .7;
-  for (let i = 0; i < peds.length; i++) {
-    const p = peds[i]; let e = net.edges.get(p.e);
-    if (!e || (p.x && p.x.e && !net.edges.has(p.x.e))) { peds[i] = newPed(edgeList()); continue; }
-    let x, z, hx, hz;
-    if (p.x) {   // crossing at the corner to the next street
-      p.x.t += p.v * dt / p.x.L;
-      const t = Math.min(1, p.x.t); x = p.x.a[0] + (p.x.b[0] - p.x.a[0]) * t; z = p.x.a[1] + (p.x.b[1] - p.x.a[1]) * t; hx = (p.x.b[0] - p.x.a[0]) / p.x.L; hz = (p.x.b[1] - p.x.a[1]) / p.x.L;
-      if (p.x.t >= 1) { p.e = p.x.e; p.dir = p.x.dir; p.s = p.x.s; p.x = null; }
-    } else {
-      p.s += p.v * p.dir * dt;
-      if (p.s < 0 || p.s > e.len) {   // walk on round the corner: cross over to the next street
-        const nid = p.s < 0 ? e.a : e.b, node = net.nodes.get(nid);
-        const opts = node ? [...node.edges].map(id => net.edges.get(id)).filter(f => f && !f.ring && f.id !== e.id && f.len > 20) : [];
-        const from = pedSpot(e, Math.max(0, Math.min(e.len, p.s)), p.side, p.o);
-        if (opts.length) {
-          const f = opts[(Math.random() * opts.length) | 0], dir = f.a === nid ? 1 : -1, s0 = dir > 0 ? Math.min(f.len / 2, node.trim + 1.5) : Math.max(f.len / 2, f.len - node.trim - 1.5);
-          if (Math.random() < .5) p.side = -p.side;
-          const to = pedSpot(f, s0, p.side, p.o), L = Math.hypot(to[0] - from[0], to[1] - from[1]);
-          if (L > .5 && L < 60) p.x = { a: from, b: to, L, t: 0, e: f.id, dir, s: s0 }; else { p.e = f.id; p.dir = dir; p.s = s0; }
-        } else { p.dir *= -1; p.s = Math.max(0, Math.min(e.len, p.s)); }
-        e = net.edges.get(p.e);
-      }
-      if (!p.x) { const q = pedSpot(e, Math.max(0, Math.min(e.len, p.s)), p.side, p.o); x = q[0]; z = q[1]; hx = q[2] * p.dir; hz = q[3] * p.dir; }
-      else { x = p.x.a[0]; z = p.x.a[1]; hx = (p.x.b[0] - x) / p.x.L; hz = (p.x.b[1] - z) / p.x.L; }
-    }
-    p.ph += dt * p.v * 4.4;
-    if (i / peds.length > show) continue;
-    dummy.position.set(x, .16 + Math.abs(Math.sin(p.ph)) * .035, z); dummy.rotation.set(0, Math.atan2(-hz, hx), 0); dummy.scale.setScalar(p.h); dummy.updateMatrix();
-    pedMesh.setMatrixAt(n, dummy.matrix); pedMesh.setColorAt(n, col.setRGB(p.c[0], p.c[1], p.c[2], THREE.SRGBColorSpace));
-    pedLook.setXYZ(n, p.look[0], p.look[1], p.look[2]); pedWalk.setX(n, dt > 0 ? Math.sin(p.ph) : pedWalk.getX(n)); n++;
+// people on foot: everyone you see walking is someone in the town (or a visitor), going somewhere
+const PED_MAX = Math.max(1, Q.peds);
+function updatePeds(dt) {
+  let n = 0;
+  for (const w of life.walkers) {
+    if (n >= PED_MAX) break;
+    const [x, z, hx, hz] = walkPos(w), p = life.person(w.pid), id = Math.abs(w.pid);
+    const h = p && p.kid ? .72 + hsh(id, 1) * .12 : .92 + hsh(id, 1) * .14;
+    dummy.position.set(x, .16 + Math.abs(Math.sin(w.ph)) * .035, z); dummy.rotation.set(0, Math.atan2(-hz, hx), 0); dummy.scale.setScalar(h); dummy.updateMatrix();
+    pedMesh.setMatrixAt(n, dummy.matrix); const c = CLOTH[Math.floor(hsh(id, 2) * CLOTH.length)]; pedMesh.setColorAt(n, col.setRGB(c[0], c[1], c[2], THREE.SRGBColorSpace));
+    pedLook.setXYZ(n, hsh(id, 3), hsh(id, 4), hsh(id, 5)); pedWalk.setX(n, dt > 0 ? Math.sin(w.ph) : pedWalk.getX(n)); n++;
   }
   pedMesh.count = n; pedMesh.instanceMatrix.needsUpdate = true; if (pedMesh.instanceColor) pedMesh.instanceColor.needsUpdate = true; pedLook.needsUpdate = true; pedWalk.needsUpdate = true;
 }
 const CLOTH = [[.15, .17, .22], [.85, .85, .82], [.6, .12, .12], [.18, .3, .5], [.25, .25, .25], [.62, .5, .32], [.3, .42, .3], [.9, .65, .2], [.1, .1, .12], [.55, .3, .5], [.3, .55, .65], [.95, .95, .95]];
-function newPed(E) {
-  const e = E[(Math.random() * E.length) | 0], R = Math.random;
-  const look = [R(), R(), R()], h = R() < .12 ? .72 + R() * .12 : .92 + R() * .14;   // some children
-  if (!e) return { e: -1, s: 0, v: 1.3, dir: 1, side: 1, o: 1.5, ph: 0, c: CLOTH[0], look, h, x: null };
-  return { e: e.id, s: R() * e.len, v: 1.1 + R() * .6, dir: R() < .5 ? 1 : -1, side: R() < .5 ? 1 : -1, o: .8 + R() * 1.6, ph: R() * 6, c: CLOTH[(R() * CLOTH.length) | 0], look, h, x: null };
-}
 function drawSignals() {
   if (!lampMesh) return;
   const st = new Map();
@@ -801,8 +991,12 @@ const sound = (() => {
     if (!ctx || !on) return; const t = ctx.currentTime;
     [880, 1320, 1760].forEach((fr, i) => { const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'sine'; o.frequency.setValueAtTime(fr, t + i * .05); o.frequency.exponentialRampToValueAtTime(fr * 1.5, t + i * .05 + .35); g.gain.setValueAtTime(0, t + i * .05); g.gain.linearRampToValueAtTime(.05, t + i * .05 + .02); g.gain.exponentialRampToValueAtTime(.0001, t + i * .05 + .6); o.connect(g).connect(ctx.destination); o.start(t + i * .05); o.stop(t + i * .05 + .7); });
   }
+  function coin() {
+    if (!ctx || !on) return; const t = ctx.currentTime;
+    [1318, 1976].forEach((fr, i) => { const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'triangle'; o.frequency.value = fr; g.gain.setValueAtTime(0, t + i * .07); g.gain.linearRampToValueAtTime(.06, t + i * .07 + .01); g.gain.exponentialRampToValueAtTime(.0001, t + i * .07 + .35); o.connect(g).connect(ctx.destination); o.start(t + i * .07); o.stop(t + i * .07 + .4); });
+  }
   function toggle() { on = !on; localStorage.setItem('flowtown.sound', on ? '1' : '0'); if (on) start(); return on; }
-  return { start, tick, magic, toggle, get on() { return on; } };
+  return { start, tick, magic, coin, toggle, get on() { return on; } };
 })();
 
 // ---------------- menus ----------------
@@ -826,12 +1020,12 @@ $('soundBtn').onclick = () => { sound.toggle(); soundTxt(); };
 for (const b of document.querySelectorAll('#qRow button')) { b.classList.toggle('on', b.dataset.q === qName); b.onclick = () => { localStorage.setItem(QKEY, b.dataset.q); save(); location.reload(); }; }
 $('resetBtn').onclick = () => { if (confirm('Start a brand new city? This one will be lost.')) { show('settings', false); show('menu', false); newCity(); if (titleUp) play(); } };
 const HOME_CAM = { x: 0, z: 40, dist: 300, yaw: .55, pitch: .72 };
-function newCity(seed) { localStorage.removeItem(SAVE); fresh(seed); peds = []; seenNet = seenCity = -1; Object.assign(cam, HOME_CAM); placeCamera(); setSpeed(titleUp ? 0 : 1); setTool(''); }
+function newCity(seed) { localStorage.removeItem(SAVE); fresh(seed); select(null); seenNet = seenCity = -1; Object.assign(cam, HOME_CAM); placeCamera(); setSpeed(titleUp ? 0 : 1); setTool(''); }
 let hadSave = !!localStorage.getItem(SAVE);
 function titleButtons() {
   $('playBtn').querySelector('span').textContent = hadSave ? 'Continue' : 'Start';
   $('newBtn').style.display = hadSave ? '' : 'none';
-  $('titlePop').textContent = 'POP ' + (city ? city.totals().res.toLocaleString('en-US') : 0);
+  $('titlePop').textContent = 'POP ' + (life ? life.people.size.toLocaleString('en-US') : 0);
 }
 // the title: the camera circles the town; leaving it flies down to where you were
 let orbit = 0;
@@ -889,7 +1083,7 @@ function frame(now) {
   const spd = titleUp ? 1 : S.speed;   // the town lives on behind the title
   if (spd && !S.over) { let left = rdt * spd; while (left > 1e-4) { const d = Math.min(.1, left); simStep(d); left -= d; } }
   const hour = (S.time / DAY * 24) % 24, night = lighting(hour);
-  drawCars(); updatePeds(rdt * (S.speed ? Math.min(2, S.speed) : 0), night); drawSignals(); updateSparks(rdt);
+  drawCars(); updatePeds(rdt * (spd ? Math.min(2, spd) : 0)); drawSignals(); updateSparks(rdt); selTick(rdt); drawCoins(now / 1000);
   ovT += rdt; if (ovT > .5) { ovT = 0; paintOverlay(); }
   drawJams(now / 1000);
   hudT += rdt; if (hudT > .25) { hudT = 0; hud(); }
@@ -904,9 +1098,9 @@ window.FT = {
   dbg() { return { tris: renderer.info.render.triangles, calls: renderer.info.render.calls, shadowOn: renderer.shadowMap.enabled, sunCast: sun.castShadow, map: !!sun.shadow.map, ms: sun.shadow.mapSize.x, bg: scene.background && scene.background.isTexture, env: !!scene.environment, cam: sun.shadow.camera.right, sunPos: sun.position.toArray().map(Math.round), q: qName, prog: renderer.info.programs.length }; },
   get net() { return net; }, get scene() { return scene; }, along, toScreen(x, z) { const v = new THREE.Vector3(x, 0, z).project(camera), r = canvas.getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; }, hover(x, z) { T.mouse = [x, z]; hoverUpdate(); }, get T() { return T; }, get city() { return city; }, get S() { return S; }, cam, placeCamera, setTool, click, setSpeed, toggleView,
   step(sec) { for (let t = 0; t < sec; t += .1) simStep(.1); },
-  render() { if (net.ver !== seenNet) rebuildRoads(); if (city.ver !== seenCity) rebuildCity(); lighting((S.time / DAY * 24) % 24); drawCars(); updatePeds(.05, U.uNight.value); drawSignals(); paintOverlay(); drawJams(1); renderer.render(scene, camera); },
+  render() { if (net.ver !== seenNet) rebuildRoads(); if (city.ver !== seenCity) rebuildCity(); lighting((S.time / DAY * 24) % 24); drawCars(); updatePeds(.05); drawCoins(1); drawSignals(); paintOverlay(); drawJams(1); renderer.render(scene, camera); },
   setHour(h) { S.time = Math.floor(S.time / DAY) * DAY + h / 24 * DAY; },
   newCity(seed) { newCity(seed); setSpeed(0); },
-  pedPos(i) { const p = peds[i]; const e = p && net.edges.get(p.e); if (!e) return null; const q = pedSpot(e, Math.max(0, Math.min(e.len, p.s)), p.side, p.o); return [q[0], q[1]]; },
+  pedPos(i) { const w = life.walkers[i]; if (!w) return null; const q = walkPos(w); return [q[0], q[1]]; }, get life() { return life; }, select, onTapWorld, buyLand, doBuild, openPicker, money,
   carPos(i) { const c = net.cars[i]; return c ? [c.x, c.z, c.type] : null; },
 };

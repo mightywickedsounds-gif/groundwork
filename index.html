@@ -127,6 +127,68 @@
     .logo .lg { font-size:46px; }
     #title.leaving .titleCol { transform:translateY(120%); }
   }
+
+  /* coins and goal on the guide sign */
+  #coins { display:flex; align-items:center; gap:9px; margin-top:8px; }
+  #coins b { font-size:30px; font-weight:900; line-height:1; padding-top:3px; }
+  #coins.spent b { animation:spent .5s ease; } #coins.gain b { animation:gain .5s ease; }
+  @keyframes spent { 0% { color:#ff8a80; transform:translateY(2px); } 100% { color:inherit; transform:none; } }
+  @keyframes gain { 0% { color:var(--yellow); transform:scale(1.12); } 100% { color:inherit; transform:none; } }
+  #coins b { display:inline-block; transform-origin:left center; }
+  .coin { display:inline-block; width:22px; height:22px; border-radius:50%; background:var(--yellow); box-shadow:inset 0 0 0 3px #b38a00, inset 0 0 0 6px var(--yellow), inset 0 0 0 8px #b38a00; flex:none; }
+  #goal { margin-top:10px; padding-top:9px; border-top:2px solid rgba(246,246,241,.85); font-size:12.5px; display:flex; align-items:center; gap:8px; }
+  #goal .gl { background:var(--white); color:var(--green); font-weight:900; font-size:11px; padding:3px 6px 1px; border-radius:4px; }
+  #goal #goalTxt { flex:1; font-weight:800; }
+  #goalPay { font-weight:900; color:var(--yellow); }
+  /* info card: a white sign */
+  #card { --bg:var(--white); --line:var(--ink); color:var(--ink); position:fixed; left:max(14px, env(safe-area-inset-left)); bottom:calc(max(12px, env(safe-area-inset-bottom)) + 84px); width:330px; padding:14px 16px 14px; display:none; pointer-events:auto; }
+  #card.show { display:block; animation:pop .2s cubic-bezier(.2,.8,.2,1); }
+  #card .ch { display:flex; align-items:flex-start; gap:10px; }
+  #card .ch h4 { margin:0; font-size:21px; font-weight:900; line-height:1.05; flex:1; }
+  #card .sub { font-size:12.5px; font-weight:800; opacity:.65; margin-top:3px; }
+  #card .x, .pickHead .x { width:34px; height:34px; border:0; border-radius:8px; background:var(--ink); color:var(--white); padding:8px; cursor:pointer; flex:none; }
+  .pickHead .x { background:var(--tile); }
+  #card .x svg, .pickHead .x svg { width:100%; height:100%; display:block; }
+  #card .rows, .rows { display:grid; grid-template-columns:auto 1fr; gap:5px 14px; margin-top:11px; font-size:13.5px; }
+  #card .rows span, .rows span { opacity:.62; font-weight:800; }
+  #card .rows b, .rows b { font-weight:800; }
+  #card .rows b.link { text-decoration:underline; cursor:pointer; }
+  #card .doing { margin-top:10px; background:var(--ink); color:var(--white); border-radius:7px; padding:7px 10px 5px; font-size:13.5px; font-weight:800; }
+  #card .lvl { display:flex; gap:4px; margin-top:8px; }
+  #card .lvl i { flex:1; height:7px; border-radius:2px; background:rgba(18,19,20,.15); }
+  #card .lvl i.on { background:var(--green); }
+  #card .cb { display:flex; gap:7px; margin-top:12px; }
+  #card .cb button { flex:1; height:42px; border:0; border-radius:9px; background:var(--ink); color:var(--white); font-size:14px; font-weight:900; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:7px; }
+  #card .cb button.y { background:var(--yellow); color:var(--ink); box-shadow:inset 0 0 0 2px var(--ink); }
+  #card .cb button:disabled { opacity:.35; cursor:default; }
+  #card .cb .coin { width:16px; height:16px; box-shadow:inset 0 0 0 2px #b38a00, inset 0 0 0 4px var(--yellow), inset 0 0 0 5px #b38a00; }
+  #card .staff { margin-top:10px; max-height:150px; overflow:auto; border-top:2px solid rgba(18,19,20,.12); padding-top:7px; font-size:13px; }
+  #card .staff div { display:flex; justify-content:space-between; padding:4px 0; cursor:pointer; gap:8px; }
+  #card .staff div span { opacity:.6; font-weight:800; }
+  #card .staff div i { width:8px; height:8px; border-radius:50%; background:rgba(18,19,20,.2); align-self:center; flex:none; }
+  #card .staff div i.in { background:var(--green); }
+  /* build picker */
+  .pickP { width:min(560px, 94vw); max-height:84vh; overflow:auto; }
+  .pickHead { display:flex; align-items:center; justify-content:space-between; }
+  .pickHead h3 { margin:0 !important; }
+  #pickList { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px; margin-top:12px; }
+  #pickList button { height:74px; border:0; border-radius:10px; background:var(--tile); color:var(--white); text-align:left; padding:10px 12px; cursor:pointer; display:flex; flex-direction:column; justify-content:space-between; font-size:15px; font-weight:900; }
+  #pickList button:hover { background:var(--tile2); }
+  #pickList button small { font-size:12px; font-weight:800; display:flex; align-items:center; gap:6px; opacity:.85; }
+  #pickList button small .coin { width:14px; height:14px; box-shadow:inset 0 0 0 2px #b38a00, inset 0 0 0 4px var(--yellow), inset 0 0 0 5px #b38a00; }
+  #pickList button.svc { background:#24364a; }
+  #pickList button:disabled { opacity:.38; cursor:default; }
+  #pickList button.land { grid-column:1/-1; background:var(--green); }
+  #daySum .rows { font-size:16px; gap:7px 22px; }
+  #daySum .rows span { opacity:.85; }
+  #daySum .rows b { text-align:right; }
+  #daySum .rows .tot { border-top:2px solid rgba(246,246,241,.8); padding-top:6px; font-size:19px; font-weight:900; opacity:1; }
+  @media (max-width:760px) {
+    #card { left:8px; right:8px; width:auto; bottom:calc(max(12px, env(safe-area-inset-bottom)) + 132px); padding:12px 13px; }
+    #card .staff { max-height:96px; }
+    #coins b { font-size:24px; }
+    #goal { font-size:11px; }
+  }
   @media (max-width:760px) {
     #hud { min-width:0; padding:9px 12px 10px; }
     #clock { font-size:26px; }
@@ -136,7 +198,7 @@
     .tileBtn { width:42px; height:42px; padding:10px; }
     #bar { flex-wrap:wrap; justify-content:center; width:calc(100vw - 16px); gap:5px; padding:5px; }
     #tools { gap:5px; } .sep { display:none; }
-    #tools button, #viewBtn { min-width:0; width:calc((100vw - 16px - 10px - 35px) / 8); height:54px; font-size:10px; padding:6px 2px 4px; }
+    #tools button, #viewBtn { min-width:0; width:calc((100vw - 16px - 10px - 40px) / 9); height:54px; font-size:10px; padding:6px 2px 4px; }
     #speed { width:100%; } #speed button { flex:1; height:36px; }
     #tools button kbd { display:none; }
     #tools button .lg { display:none; } #tools button .sh { display:inline; }
@@ -151,13 +213,14 @@
 
 <div id="hud" class="sign">
   <div class="top"><span id="clock" class="num">06:00</span><span id="day">DAY 1</span></div>
+  <div id="coins"><i class="coin"></i><b id="sCoins" class="num">0</b></div>
   <div id="stats">
     <div><b id="sPop" class="num">0</b><span>People</span></div>
+    <div><b id="sJobs" class="num">0</b><span>Jobs</span></div>
     <div><b id="sCars" class="num">0</b><span>Cars</span></div>
     <div><b id="sFlow" class="num">100%</b><span>Flow</span></div>
-    <div><b id="sTrip" class="num">0:00</b><span>Avg trip</span></div>
   </div>
-  <div id="grow"><span id="growTxt">City growing</span><i><u id="growBar"></u></i></div>
+  <div id="goal"><span class="gl">GOAL</span><span id="goalTxt"></span><span id="goalPay" class="num"></span></div>
 </div>
 
 <div id="topr">
@@ -173,6 +236,7 @@
 
 <div id="bar">
   <div id="tools">
+    <button data-tool="build" aria-label="Build"><kbd>B</kbd><svg viewBox="0 0 24 24"><path d="M4 21V10l8-6 8 6v11M9 21v-6h6v6"/></svg>Build</button>
     <button data-tool="road" aria-label="Road"><kbd>1</kbd><svg viewBox="0 0 24 24"><path d="M7 21 10 3M17 21 14 3M12 5v2M12 11v2M12 17v2"/></svg>Road</button>
     <button data-tool="curve" aria-label="Curve"><kbd>2</kbd><svg viewBox="0 0 24 24"><path d="M4 20C4 9 10 4 20 4"/><path d="M9 20C9 12.5 12.5 9 20 9"/></svg>Curve</button>
     <button data-tool="signal" aria-label="Lights"><kbd>3</kbd><svg viewBox="0 0 24 24"><rect x="8" y="2.5" width="8" height="15" rx="2"/><circle cx="12" cy="6.5" r="1.2"/><circle cx="12" cy="10" r="1.2"/><circle cx="12" cy="13.5" r="1.2"/><path d="M12 17.5V22"/></svg>Lights</button>
@@ -190,6 +254,10 @@
     <button data-speed="4">4x</button>
   </div>
 </div>
+
+<div id="card" class="sign"></div>
+<div id="pick" class="screen"><div class="panel dark pickP"><div class="pickHead"><h3>Build here</h3><button id="pickX" class="x" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div id="pickList"></div></div></div>
+<div id="daySum" class="screen"><div class="panel guide sign"><h1 id="dsTitle">DAY 1</h1><h2>Closing time</h2><div id="dsRows" class="rows"></div><div class="btns"><button id="dsGo" class="main">Start the next day</button></div></div></div>
 
 <div id="boot" class="screen show">
   <div class="bootIn">
@@ -233,7 +301,8 @@
       <b>Move</b><span>Drag, or W A S D</span>
       <b>Turn and tilt</b><span>Right-drag, Q E, or two fingers</span>
       <b>Zoom</b><span>Scroll, pinch or double tap</span>
-      <b>Tools</b><span>1 to 8, Esc to drop</span>
+      <b>Tools</b><span>B, 1 to 7, Esc to drop</span>
+      <b>Look at</b><span>Tap a car, a person or a building</span>
       <b>Pause</b><span>Space</span>
     </div>
     <div class="btns">
@@ -255,17 +324,6 @@
   </div>
 </div>
 
-<div id="over" class="screen">
-  <div class="panel stop sign">
-    <h1>GRIDLOCK</h1>
-    <h2>The city has locked up</h2>
-    <div class="big" id="overTxt"></div>
-    <div class="btns">
-      <button id="goOnBtn" class="main">Keep fixing it</button>
-      <button id="overNewBtn">New city</button>
-    </div>
-  </div>
-</div>
 
 <script type="module" src="game.js?v=9"></script>
 </body>
