@@ -216,3 +216,15 @@ The owner's screenshots from a phone: the green sign and the gridlock sign overl
 - **Report a driver.** Anyone with expired tags, no insurance or a reckless streak gets a Report button on their card (you need a police station). It goes out on the scanner as a lookout, and the next time they're behind the wheel the nearest free unit goes after them, leaving the station or pulling out of its hiding spot. They're pulled over and ticketed for everything that's wrong (some try to run). If they get home first, the lookout stays on.
 - **Fix:** a ticket could list the same offence twice (and charge it twice) when the reason for the stop was also one of the extras.
 - **Tests:** the law check now reports a driver and checks a unit is sent after them; it passes, as do life, traffic (595 trips a day, 9 gave up) and the browser check.
+
+### Round 12: parking lots
+
+The owner's screenshot: many of the shops sat between the grass and the road with no parking, which isn't how a Texas town looks.
+
+- **Businesses get a parking lot out front.** Any business you build (and the five you start with) now stands back from the street behind a striped parking lot with head-in stalls, parked cars and a lot light. It's wider than the building where there's room. Gas stations and garages sit a little closer; a supermarket sits far back behind a big lot. Downtown buildings (once the town has a centre) still come right up to the sidewalk, as they do in real towns.
+- **Towns saved before this** get lots added in front of their businesses when they load, wherever there's room between the building and the street.
+- **Garden apartments** along the main roads get a lot out front too.
+- **A lot follows its building,** whatever angle the street runs at. A lot whose building is knocked down goes with it.
+- **People drive a little more:** they only walk to work when it's right next door (under about 90 m, it was 140); lunch, errands nearby and evening strolls are still on foot.
+- **Tests:** life (29 car trips to work on the first day), law, build, lanes and the browser check pass. The old no-player growth test still locks up on its own around day 3 (it isn't how the game plays any more; it only checks traffic).
+

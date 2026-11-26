@@ -276,7 +276,8 @@ export function createCity(net, seed = 7) {
     C.cutBack = cut;
     const nt = C.trees.length;
     C.trees = C.trees.filter(t => !hitsRoad(t[0], t[1], .5, .5, 0, 5.5));
-    C.lots = C.lots.filter(l => !hitsRoad(l.x, l.z, l.w / 2, l.d / 2, 0, ROAD_CLEAR - .8) || cutBack(l, ROAD_CLEAR - .5, 8, .3) || (gone.push({ lot: l }), false));
+    const ids = new Set(C.buildings.map(b => b.id));
+    C.lots = C.lots.filter(l => (!l.bid || ids.has(l.bid)) && (!hitsRoad(l.x, l.z, l.w / 2, l.d / 2, l.rot || 0, ROAD_CLEAR - .8) || cutBack(l, ROAD_CLEAR - .5, 8, .3) || (gone.push({ lot: l }), false)));
     // street for every building: a spatial hash of road samples
     const cell = 25, grid = new Map(), key = (x, z) => (Math.floor(x / cell) + 1000) * 4000 + Math.floor(z / cell) + 1000;
     for (const e of net.edges.values()) { if (e.ring) continue; const seen = new Set(); for (const p of e.pts) { const k = key(p[0], p[1]); if (seen.has(k)) continue; seen.add(k); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(e); } }
@@ -316,7 +317,7 @@ export function createCity(net, seed = 7) {
     const front = halfW(e) + WALK_W + gap, p = along(e.pts, e.cum, sAt), r = [-p[3] * sg, p[2] * sg];
     const rot = Math.atan2(r[1], r[0]);   // local x points away from the street
     const near = C.buildings.filter(b => Math.abs(b.x - p[0]) < 120 && Math.abs(b.z - p[1]) < 120).map(rectOf);
-    const lots = C.lots.filter(l => Math.abs(l.x - p[0]) < 140 && Math.abs(l.z - p[1]) < 140).map(l => ({ x: l.x, z: l.z, hw: l.w / 2, hd: l.d / 2, r: 0 }));
+    const lots = C.lots.filter(l => Math.abs(l.x - p[0]) < 140 && Math.abs(l.z - p[1]) < 140).map(l => ({ x: l.x, z: l.z, hw: l.w / 2, hd: l.d / 2, r: l.rot || 0 }));
     for (const fd of [fd0, fd0 * .8]) {
       if (fd < 7) continue;
       const off = front + fd / 2, x = p[0] + r[0] * off, z = p[1] + r[1] * off;
@@ -360,7 +361,9 @@ export function createCity(net, seed = 7) {
     const [kind, fw, fd0, gap, h, roof] = plan;
     if (s1 - s0 < fw + 2) return null;
     const sAt = s0 + fw / 2 + 1 + R() * (s1 - s0 - fw - 2);
-    return placeOn(e, sAt, sg, kind, fw, fd0, gap, h, roof, {}, R);
+    const b = placeOn(e, sAt, sg, kind, fw, fd0, gap, h, roof, {}, R);
+    if (b && kind === 'apt' && zone === 'corridor') C.frontLot(b);   // garden apartments: parking out front
+    return b;
   }
   // call every sim step: a few tries a second; new buildings show up together every so often (fewer redraws).
   // want(): how many more homes the town wants right now (game: people move in when there are jobs); null = grow freely (tests)
@@ -377,10 +380,14 @@ export function createCity(net, seed = 7) {
   C.build = function (e, sAt, sg, kind, fw, fd, h, extra) {
     const [s0, s1] = C.span(e); if (s1 - s0 < fw + 2) return null;
     sAt = Math.max(s0 + fw / 2 + 1, Math.min(s1 - fw / 2 - 1, sAt));
-    const gap = kind === 'big' ? 22 : extra.biz && (extra.biz.t === 'gas' || extra.biz.t === 'auto') ? 9 : zoneAt(e, along(e.pts, e.cum, sAt)) === 'core' ? 1 : 6;
+    // set back behind a parking lot (downtown: up to the sidewalk, no lot)
+    const core = zoneAt(e, along(e.pts, e.cum, sAt)) === 'core', t = extra.biz && extra.biz.t;
+    const gap = core ? 1 : kind === 'big' ? 26 : ({ gas: 12, auto: 12, police: 14, fire: 11, hospital: 18 })[t] || 14;
     for (const ds of [0, -6, 6, -12, 12, -20, 20]) {
       const s = sAt + ds; if (s - fw / 2 < s0 || s + fw / 2 > s1) continue;
-      const b = placeOn(e, s, sg, kind, fw, fd, gap, h, 0, extra); if (b) { C.ver++; C.changed = true; return b; }
+      for (const g of core ? [gap] : [gap, 8]) {
+        const b = placeOn(e, s, sg, kind, fw, fd, g, h, 0, extra); if (b) { if (!core) C.frontLot(b); C.ver++; C.changed = true; return b; }
+      }
     }
     return null;
   };
@@ -409,6 +416,25 @@ export function createCity(net, seed = 7) {
     }
     C.ver++;
   };
+  // a parking lot between a building and its street, filling the space there (head-in stalls, wider than the building where there's room)
+  C.frontLot = function (b) {
+    if (b.face !== 'r' || !b.e || C.lots.some(l => l.bid === b.id)) return null;
+    const e = b.e, c = closestOnPoly(e.pts, e.cum, b.x, b.z), r = b.rot || 0, ax = [Math.cos(r), Math.sin(r)];
+    const space = c.d - halfW(e) - WALK_W - b.w / 2 - 1.5; if (space < 6.2) return null;
+    const D = Math.min(space, 32), mid = b.w / 2 + .6 + D / 2;
+    for (const L of [b.d + 8, b.d + 3, b.d]) {
+      const lot = { k: 'parking', x: +(b.x - ax[0] * mid).toFixed(2), z: +(b.z - ax[1] * mid).toFixed(2), w: +L.toFixed(2), d: +D.toFixed(2), rot: +(r + Math.PI / 2).toFixed(4), fill: +(.3 + hash(b.id, 3, seed) * .5).toFixed(2), seed: +hash(b.id, 4, seed).toFixed(4), bid: b.id };
+      const me = { x: lot.x, z: lot.z, hw: L / 2, hd: D / 2, r: lot.rot };
+      if (hitsRoad(lot.x, lot.z, L / 2, D / 2, lot.rot, ROAD_CLEAR - .8)) continue;
+      if (C.buildings.some(o => o !== b && Math.abs(o.x - lot.x) < 90 && Math.abs(o.z - lot.z) < 90 && overlap(me, rectOf(o), .3))) continue;
+      if (C.lots.some(o => Math.abs(o.x - lot.x) < 120 && Math.abs(o.z - lot.z) < 120 && overlap(me, { x: o.x, z: o.z, hw: o.w / 2, hd: o.d / 2, r: o.rot || 0 }, .2))) continue;
+      C.trees = C.trees.filter(t => !overlap(me, { x: t[0], z: t[1], hw: .5, hd: .5, r: 0 }, 1));
+      C.lots.push(lot); C.ver++; return lot;
+    }
+    return null;
+  };
+  // businesses from before parking lots: give each one where there's room
+  C.ensureLots = function () { let n = 0; for (const b of C.buildings) if ((b.biz || (b.kind === 'apt' && b.face === 'r')) && C.frontLot(b)) n++; return n; };
   C.isBare = (i, j) => C.unlocked.some(u => u[0] === i && u[1] === j && u[2]);
 
   C.totals = function () { let res = 0, jobs = 0; for (const b of C.buildings) { res += b.res; jobs += b.jobs; } return { res, jobs }; };

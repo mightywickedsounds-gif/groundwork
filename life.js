@@ -190,7 +190,7 @@ export function createLife(net, city, seed = 1) {
     if (A === B) { arrive(p, to, why); return; }
     const dA = D(A), dB = D(B); if (!dA || !dB) return;
     const d = Math.hypot(A.x - B.x, A.z - B.z);
-    const walkMax = p.kid ? 900 : why === 'lunch' ? 460 : why === 'walk' ? 900 : 140;   // Texas: most people drive anywhere further than next door
+    const walkMax = p.kid ? 900 : why === 'lunch' ? 460 : why === 'walk' ? 900 : 90;   // Texas: most people drive anywhere further than next door
     if (d < walkMax) {    // close: walk
       const pts = walkRoute(dA, dB, .5 + hash(p.id, 5, seed) * 1.6);
       if (pts) { startWalk(p, pts, to, why); return; }
@@ -470,6 +470,7 @@ export function createLife(net, city, seed = 1) {
   };
   // a new game: the crossroads village, its first shops (on Main Street) and its first families
   L.startTown = function () {
+    city.coreR = 0;   // a village: no town centre yet
     const shop = t => (e, s, sg) => L.place(t, e, s, sg);
     city.startTown([[shop('diner'), 1, 1, .28], [shop('gas'), 0, -1, .55], [shop('salon'), 1, 1, .78], [shop('hardware'), 2, -1, .45], [shop('auto'), 1, -1, .55]]);
     L.sync(); hire(); L.placeAll(); L.coins = 1500;

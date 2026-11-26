@@ -116,6 +116,7 @@ function load() {
     const d = JSON.parse(localStorage.getItem(SAVE)); if (!d || d.v !== 2) return false;
     net = new Net(); net.load(d.net); city = createCity(net, d.city.seed); city.load(d.city); city.sync();
     S = Object.assign({ speed: 1, over: false, flow: 1 }, d.s); S.over = false;
+    if (city.ensureLots()) city.sync();   // towns from before parking lots get them now
     life = createLife(net, city, d.city.seed); net.onDone = c => life.carDone(c); life.T = S.time; life.load(d.life); lifeVer = city.ver;
     law = createLaw(net, city, life); life.onCarOut = c => law.carOut(c);
     coreGrow(); return true;

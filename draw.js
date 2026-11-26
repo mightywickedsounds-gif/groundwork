@@ -648,15 +648,18 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
   for (const l of city.lots) {
     const x0 = l.x - l.w / 2, x1 = l.x + l.w / 2, z0 = l.z - l.d / 2, z1 = l.z + l.d / 2;
     if (l.k === 'parking') {
-      lotG.flat([x0, z0], [x1, z0], [x1, z1], [x0, z1], .05);
-      for (let x = x0 + 14; x < x1 - 8; x += 30) for (let z = z0 + 11.6; z < z1 - 6; z += 23.2) lotLights.push([x, z]);
+      // laid out in the lot's own frame (a lot in front of a building turns with it), then put in place
+      const lr = l.rot || 0, lc = Math.cos(lr), ls = Math.sin(lr), W = (x, z) => { const u = x - l.x, v = z - l.z; return [l.x + u * lc - v * ls, l.z + u * ls + v * lc]; };
+      lotG.flat(W(x0, z0), W(x1, z0), W(x1, z1), W(x0, z1), .05);
+      for (let x = x0 + 14; x < x1 - 8; x += 30) for (let z = z0 + 11.6; z < z1 - 6; z += 23.2) lotLights.push(W(x, z));
+      if (l.bid && l.w > 16) lotLights.push(W(x0 + 2, z0 + 1.5));
       let s = Math.floor(l.seed * 1e6) || 1; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
       let z = z0 + 1, row = 0;
       while (z + 5.2 <= z1 - 1) {
         const flip = row % 2;
         for (let x = x0 + 1; x + 2.6 <= x1 - 1; x += 2.6) {
-          lines.flat([x, z], [x + .1, z], [x + .1, z + 5], [x, z + 5], .065);
-          if (r() < l.fill) parked.push([x + 1.3, z + 2.6, (flip ? -1 : 1) * Math.PI / 2 + (r() - .5) * .06, r()]);
+          lines.flat(W(x, z), W(x + .1, z), W(x + .1, z + 5), W(x, z + 5), .065);
+          if (r() < l.fill) { const p = W(x + 1.3, z + 2.6); parked.push([p[0], p[1], (flip ? -1 : 1) * Math.PI / 2 + (r() - .5) * .06 - lr, r()]); }
         }
         z += flip ? 5.2 : 5.2 + 6.4; row++;
       }
