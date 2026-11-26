@@ -14,7 +14,7 @@ const SAVE = 'flowtown.save.v2', QKEY = 'flowtown.quality';
 const touch = matchMedia('(pointer: coarse)').matches; if (touch) document.body.classList.add('touch');
 const QS = {
   high: { pr: 2, shadow: 4096, shadows: 2, treeDetail: 2, peds: 1400, maxCars: 1600 },
-  medium: { pr: 1.5, shadow: 2048, shadows: 1, treeDetail: 1, peds: 700, maxCars: 1100 },
+  medium: { pr: 2, shadow: 2048, shadows: 1, treeDetail: 1, peds: 700, maxCars: 1100 },
   low: { pr: 1, shadow: 0, shadows: 0, treeDetail: 1, peds: 300, maxCars: 700 },
 };
 let qName = localStorage.getItem(QKEY) || (touch ? 'medium' : 'high');
@@ -60,7 +60,7 @@ function hillH(x, z) {
 }
 const groundGeo = new THREE.PlaneGeometry(12000, 12000, 160, 160).rotateX(-Math.PI / 2);
 { const p = groundGeo.attributes.position; for (let i = 0; i < p.count; i++) p.setY(i, hillH(p.getX(i), p.getZ(i))); groundGeo.computeVertexNormals(); }
-const groundMat = new THREE.MeshStandardMaterial({ map: grassTex, roughness: 1, color: 0xc4bf94, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 });   // (pushed back: roads and lots always draw over it)   // drier Hill Country grass
+const groundMat = new THREE.MeshStandardMaterial({ map: grassTex, roughness: 1, color: 0xb4bd8a, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 });   // (pushed back: roads and lots always draw over it)   // drier Hill Country grass
 groundMat.onBeforeCompile = sh => {
   sh.uniforms.tDry = { value: dryTex }; cloudUniforms(sh);
   sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vGw; varying float vGny;').replace('#include <uv_vertex>', '#include <uv_vertex>\n vGw = (modelMatrix * vec4(position, 1.)).xyz; vGny = normal.y;');
@@ -71,9 +71,12 @@ float gn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f); return mix
 #define pn1 gn
 ${CLOUD}`)
     .replace('#include <map_fragment>', `vec2 gw = vGw.xz;
-      vec4 g1 = texture2D(map, gw / 13.); vec4 g2 = texture2D(map, gw / 47. + .3); vec4 dr = texture2D(tDry, gw / 21.);
+      vec4 g1 = texture2D(map, gw / 13.); vec4 g2 = texture2D(map, gw / 47. + .3); vec4 g0 = texture2D(map, gw / 3.7 + .7); vec4 dr = texture2D(tDry, gw / 21.);
       float m = gn(gw / 90.) * .7 + gn(gw / 23.) * .3;
-      vec3 gc = mix(g1, g2, .45).rgb * mix(vec3(.92, .95, .8), vec3(1.08, 1.0, .82), m);
+      vec3 gc = mix(mix(g1, g2, .45).rgb, g0.rgb, .35) * mix(vec3(.86, .97, .74), vec3(1.04, 1.0, .8), m);
+      // clumps and bare spots at a few metres, so the field isn't one flat colour up close
+      float cl = gn(gw / 2.3) * .6 + gn(gw / .9) * .4; gc *= .82 + .3 * cl;
+      gc = mix(gc, vec3(.36, .31, .22), smoothstep(.8, .95, gn(gw / 7. + 5.)) * .35);
       // straw-coloured dry patches
       float dry = smoothstep(.55, .8, gn(gw / 140. + 3.) * .75 + gn(gw / 31.) * .25);
       gc = mix(gc, dr.rgb * vec3(1.05, 1., .9), dry * .55);
@@ -116,6 +119,7 @@ function load() {
     const d = JSON.parse(localStorage.getItem(SAVE)); if (!d || d.v !== 2) return false;
     net = new Net(); net.load(d.net); city = createCity(net, d.city.seed); city.load(d.city); city.sync();
     S = Object.assign({ speed: 1, over: false, flow: 1 }, d.s); S.over = false;
+    if (city.ensureLots()) city.sync();   // towns from before parking lots get them now
     life = createLife(net, city, d.city.seed); net.onDone = c => life.carDone(c); life.T = S.time; life.load(d.life); lifeVer = city.ver;
     law = createLaw(net, city, life); life.onCarOut = c => law.carOut(c);
     coreGrow(); return true;
@@ -134,7 +138,7 @@ const cam = { x: 0, z: 40, dist: 420, yaw: .35, pitch: .82 };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v)), smooth01 = (a, b, v) => { const t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 // how far the view may tilt at this zoom: close in it leans over to show the street fronts (never flat on the map),
 // far out it looks down more so the whole town reads
-function pitchRange(d) { return [.22 + .5 * smooth01(160, 1300, d), Math.min(1.45, .95 + .5 * smooth01(90, 800, d))]; }
+function pitchRange(d) { return [.34 + .4 * smooth01(160, 1300, d), Math.min(1.45, .95 + .5 * smooth01(90, 800, d))]; }
 let camBox = null;   // where the camera may go (the town plus a margin)
 function placeCamera() {
   cam.dist = clamp(cam.dist, 26, 1500);
@@ -231,10 +235,24 @@ function rebuildCity() {
     LL.forEach((q, i) => { dummy.rotation.set(0, 0, 0); dummy.position.set(q[0], 8.88, q[1]); dummy.scale.set(1, 1, 1); dummy.updateMatrix(); gm.setMatrixAt(i, dummy.matrix); dummy.position.set(q[0], .2, q[1]); dummy.scale.set(24, 1, 24); dummy.updateMatrix(); pm.setMatrixAt(i, dummy.matrix); });
     cityG.add(gm, pm);
   }
+  if (contactB) { scene.remove(contactB); contactB.dispose(); }
+  contactB = new THREE.InstancedMesh(contactGeo, contactMat, Math.max(1, city.buildings.length)); contactB.renderOrder = 1;
+  city.buildings.forEach((b, i) => { dummy.position.set(b.x, b.kind === 'house' ? .09 : .07, b.z); dummy.rotation.set(0, -(b.rot || 0), 0); dummy.scale.set(b.w + 5, 1, b.d + 5); dummy.updateMatrix(); contactB.setMatrixAt(i, dummy.matrix); });
+  dummy.scale.set(1, 1, 1); scene.add(contactB);
   scene.add(cityG); seenCity = city.ver;
   const b = city.bounds(); camBox = { x0: b.x0 - 250, x1: b.x1 + 250, z0: b.z0 - 250, z1: b.z1 + 250 };
 }
 const lampGlowMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0, toneMapped: false });
+// contact shadows: a soft dark patch under every building and car, so nothing looks pasted on the ground
+const softTex = (() => {
+  const S = 128, c = document.createElement('canvas'); c.width = c.height = S; const g2 = c.getContext('2d'), img = g2.createImageData(S, S);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) { const u = Math.abs(x / (S - 1) * 2 - 1), v = Math.abs(y / (S - 1) * 2 - 1), d = Math.pow(Math.pow(u, 4) + Math.pow(v, 4), .25), a = Math.max(0, Math.min(1, (1 - d) / .45)); img.data[(y * S + x) * 4 + 3] = Math.round(255 * a * a); }
+  g2.putImageData(img, 0, 0); return new THREE.CanvasTexture(c);
+})();
+const contactMat = new THREE.MeshBasicMaterial({ color: 0x000000, map: softTex, transparent: true, opacity: .42, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
+const contactGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+let contactB = null;
+const carBlobs = new THREE.InstancedMesh(contactGeo, contactMat, Q.maxCars + 300); carBlobs.count = 0; carBlobs.frustumCulled = false; carBlobs.renderOrder = 1; scene.add(carBlobs);
 
 // traffic view: a coloured ribbon per lane
 function buildOverlay() {
@@ -916,12 +934,13 @@ const beams = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Mat
 function drawCars() {
   const cnt = {}; for (const k of kinds) cnt[k] = 0;
   const lit = beamMat.opacity > .02; let nb = 0;
-  flashes.length = 0;
+  flashes.length = 0; let nBlob = 0;
   for (const c of net.cars) {
     const look = LOOK(c), m = fleet[look], i = cnt[look]++; if (i >= m.instanceMatrix.count) continue;
     const yaw = Math.atan2(-c.hz, c.hx) + (c.spin || 0);
     dummy.position.set(c.x, 0, c.z); dummy.rotation.set(0, yaw, c.crashed ? .02 : 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix();
     if (c.siren || c.lights) flashes.push([c.x, c.z, c.id]);
+    if (nBlob < carBlobs.instanceMatrix.count) { dummy.position.set(c.x, .2, c.z); dummy.scale.set(c.len + 1.4, 1, c.w + 1.3); dummy.updateMatrix(); carBlobs.setMatrixAt(nBlob++, dummy.matrix); dummy.position.set(c.x, 0, c.z); dummy.scale.set(1, 1, 1); dummy.updateMatrix(); }
     m.setMatrixAt(i, dummy.matrix); m.setColorAt(i, c.type === 'bus' ? col.setRGB(.96, .6, .03, THREE.SRGBColorSpace) : c.type === 'police' || c.type === 'ems' || c.type === 'fire' ? col.setRGB(1, 1, 1) : c.type === 'truck' ? carColor((c.color * 3) % 1, col) : carColor(c.color, col));
     m.geometry.attributes.aBrake.array[i] = c.brake + 2 * (c.sig || 0) + (c.siren || c.lights ? 8 : 0);
     if (lit) { const f = c.len / 2 + 6.5; dummy.position.set(c.x + c.hx * f, .1, c.z + c.hz * f); dummy.scale.set(13, 1, 7.5); dummy.updateMatrix(); beams.setMatrixAt(nb++, dummy.matrix); }
@@ -932,6 +951,7 @@ function drawCars() {
     dummy.position.set(u.spot.x, 0, u.spot.z); dummy.rotation.set(0, u.spot.yaw, 0); dummy.updateMatrix(); m.setMatrixAt(i, dummy.matrix); m.setColorAt(i, col.setRGB(1, 1, 1)); m.geometry.attributes.aBrake.array[i] = 0;
   }
   for (const k of kinds) { const m = fleet[k]; m.count = cnt[k]; m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; m.geometry.attributes.aBrake.needsUpdate = true; }
+  carBlobs.count = nBlob; carBlobs.instanceMatrix.needsUpdate = true;
   beams.count = nb; beams.visible = lit; if (nb) beams.instanceMatrix.needsUpdate = true;
 }
 // people on foot: everyone you see walking is someone in the town (or a visitor), going somewhere
@@ -1082,10 +1102,15 @@ function scanPush(f) {
   row.innerHTML = `<b>${esc(f.code)}</b><span>${esc(f.txt)}</span>`;
   row.onclick = () => { flyTo({ x: f.x, z: f.z, dist: Math.min(cam.dist, 130) }, 1); if (f.pid && life.person(f.pid)) { select({ k: 'p', id: f.pid }); } else if (f.bid) select({ k: 'b', id: f.bid }); };
   L.prepend(row); while (L.children.length > 5) L.lastChild.remove();
+  if (scanOff) { $('scanBtn').classList.add('show', 'ping'); return; }   // closed: just a dot on the radio button
   $('scan').classList.add('show', 'fresh'); $('scan').classList.remove('ping'); void $('scan').offsetWidth; $('scan').classList.add('ping');
   clearTimeout(scanPush.h); scanPush.h = setTimeout(() => $('scan').classList.remove('fresh'), 9000);   // (on a phone it folds away to its header after a while)
 }
-$('scan').querySelector('.sh').onclick = () => $('scan').classList.toggle('fresh');
+let scanOff = localStorage.getItem('flowtown.scan') === '0';
+$('scan').querySelector('.sh').onclick = e => { if (!e.target.closest('#scanX')) $('scan').classList.toggle('fresh'); };
+$('scanX').onclick = e => { e.stopPropagation(); scanOff = true; localStorage.setItem('flowtown.scan', '0'); $('scan').classList.remove('show'); $('scanBtn').classList.add('show'); $('scanBtn').classList.remove('ping'); };
+$('scanBtn').onclick = () => { scanOff = false; localStorage.setItem('flowtown.scan', '1'); $('scanBtn').classList.remove('show', 'ping'); if ($('scanList').children.length) $('scan').classList.add('show', 'fresh'); };
+if (scanOff) $('scanBtn').classList.add('show');
 // what an officer, firefighter or paramedic is doing right now
 function unitDoing(pid) {
   for (const u of law.units) {

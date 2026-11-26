@@ -216,3 +216,36 @@ The owner's screenshots from a phone: the green sign and the gridlock sign overl
 - **Report a driver.** Anyone with expired tags, no insurance or a reckless streak gets a Report button on their card (you need a police station). It goes out on the scanner as a lookout, and the next time they're behind the wheel the nearest free unit goes after them, leaving the station or pulling out of its hiding spot. They're pulled over and ticketed for everything that's wrong (some try to run). If they get home first, the lookout stays on.
 - **Fix:** a ticket could list the same offence twice (and charge it twice) when the reason for the stop was also one of the extras.
 - **Tests:** the law check now reports a driver and checks a unit is sent after them; it passes, as do life, traffic (595 trips a day, 9 gave up) and the browser check.
+
+### Round 12: parking lots
+
+The owner's screenshot: many of the shops sat between the grass and the road with no parking, which isn't how a Texas town looks.
+
+- **Businesses get a parking lot out front.** Any business you build (and the five you start with) now stands back from the street behind a striped parking lot with head-in stalls, parked cars and a lot light. It's wider than the building where there's room. Gas stations and garages sit a little closer; a supermarket sits far back behind a big lot. Downtown buildings (once the town has a centre) still come right up to the sidewalk, as they do in real towns.
+- **Towns saved before this** get lots added in front of their businesses when they load, wherever there's room between the building and the street.
+- **Garden apartments** along the main roads get a lot out front too.
+- **A lot follows its building,** whatever angle the street runs at. A lot whose building is knocked down goes with it.
+- **People drive a little more:** they only walk to work when it's right next door (under about 90 m, it was 140); lunch, errands nearby and evening strolls are still on foot.
+- **Tests:** life (29 car trips to work on the first day), law, build, lanes and the browser check pass. The old no-player growth test still locks up on its own around day 3 (it isn't how the game plays any more; it only checks traffic).
+
+### Round 13: picture quality
+
+The owner's screenshots: from a low angle the fields looked glitched and distorted, and the graphics still looked blocky.
+
+- **The grass clumps are gone.** They were flat painted cards standing up in the fields; up close or from a low angle they looked like cardboard cut-outs and made the view look broken. The ground itself now carries the detail instead: greener grass, a finer grass texture close up, clumps and bare patches every few metres, and the dry straw patches further out.
+- **Sharper picture on phones:** Medium quality now draws at twice the screen's basic resolution (it was 1.5 times), so edges, signs and road markings are crisp instead of soft and jagged.
+- **Things sit on the ground:** a soft contact shadow under every building and every car (they looked pasted on, especially where the sun's shadow falls the other way).
+- **Shopfronts:** glass between thin dark aluminium frames with a transom bar, a stone base under the windows, and a darker cornice line along the top of the walls.
+- **Roofs:** store roofs were glaring white in the sun; they're now a grey gravel-and-membrane roof with seams, and the copings on top of the walls are darker. Power line wires are a softer grey.
+- **The camera** doesn't go quite as low when zoomed in (it could end up skimming across the fields, which is what made the view look distorted).
+- **Tests:** the browser check passes (the drawing changes don't touch the traffic, people or police).
+
+
+### Round 14: the scanner can be closed
+
+The owner's screenshot: on a phone the scanner was a tall empty box stuck down the right side of the screen, with no way to close it.
+
+- **The bug:** a layout rule added in round 11 (moving the scanner up on computers) also applied on phones, so the scanner was pinned to both the top and the bottom of the screen and stretched into a tall empty panel.
+- **Fixed:** on a phone the scanner sits small in the bottom right, above the toolbar, only as tall as its calls.
+- **A close button:** a big white X on the scanner closes it, and it stays closed (even after reloading). A small radio button appears next to the menu button; a red dot on it means there's a new call. Tap it to bring the scanner back. Tapping the word Scanner still folds it down to just its title on a phone.
+- **Tests:** the browser check passes.

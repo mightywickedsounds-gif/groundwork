@@ -382,7 +382,9 @@ function buildingMaterial(U, T) {
           else if (st < 2.5) { float has = step(h21(id + vI.z * 13.), .62);                                          // a house: white-trimmed windows
                                win = step(.3, g.x) * step(g.x, .7) * step(.3, g.y) * step(g.y, .78) * has;
                                trim = (step(.26, g.x) * step(g.x, .74) * step(.25, g.y) * step(g.y, .82)) * has - win; }
-          else if (st < 3.5) { win = step(.5, y) * step(y, 3.1) * step(.05, fract(u / 6.)) * step(fract(u / 6.), .95);   // shopfronts
+          else if (st < 3.5) { float bay = fract(u / 6.), mul = fract(u / 1.5);
+                               win = step(.5, y) * step(y, 3.1) * step(.05, bay) * step(bay, .95) * step(.035, mul) * step(mul, .965) * (1. - step(2.45, y) * step(y, 2.55));   // shopfronts: glass between thin frames, a transom bar
+                               trim = step(.05, bay) * step(bay, .95) * step(y, 3.2) * (1. - win) * step(.3, y) * .55;                                                         // dark aluminium frames
                                band = step(3.6, y) * step(y, H - .4) * step(.08, fract(u / 12.)) * step(fract(u / 12.), .7); } // sign band
           else win = step(.4, y) * step(y, 4.2) * step(.44, fract(u / 46.)) * step(fract(u / 46.), .56);                // a big store's entrance
           if (vI.w > 1.5) { win = 0.; trim = 0.; }   // a garage wing
@@ -394,12 +396,15 @@ function buildingMaterial(U, T) {
           // glass reflects the sky; a hint of blinds and rooms behind it
           vec3 glass = st < .5 ? mix(vec3(.08, .12, .15), vec3(.13, .16, .15), step(.25, vI.z)) : vec3(.07, .08, .09) + vec3(.05, .045, .04) * step(.55, h21(id * 1.7 + vI.z));
           diffuseColor.rgb = mix(diffuseColor.rgb, glass, win);
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.86, .85, .82), trim * .9);
+          diffuseColor.rgb = mix(diffuseColor.rgb, st > 2.5 && st < 3.5 ? vec3(.16, .17, .18) : vec3(.86, .85, .82), trim * .9);
+          float corn = (1. - fRoof) * step(st, 3.5) * step(.5, st) * step(H - .55, y) * step(st, 1.5) + (1. - fRoof) * step(2.5, st) * step(H - .5, y);   // a cornice line along the top
+          diffuseColor.rgb *= 1. - corn * .28;
+          float kick = (1. - fRoof) * step(y, .45) * step(2.5, st); diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.42, .4, .37), kick);   // a stone base under the shopfronts
           { float sh = h21(vec2(floor(u / 12.), vI.z * 7.)); vec3 sc = sh < .2 ? vec3(.45, .08, .06) : sh < .4 ? vec3(.08, .14, .3) : sh < .55 ? vec3(.1, .26, .16) : sh < .7 ? vec3(.33, .24, .16) : sh < .85 ? vec3(.88, .86, .8) : vec3(.12, .12, .12);
             diffuseColor.rgb = mix(diffuseColor.rgb, sc, band); }   // each tenant's sign panel
           diffuseColor.rgb *= 1. - slab * .25;
           // flat roofs: white membrane with seams on stores, gravel elsewhere (pitched roofs sit on top as their own mesh)
-          vec3 roofC = st > 2.5 ? vec3(.78, .78, .76) * (.92 + .08 * texture2D(tStucco, vWp.xz / 5.).r / .28) * (1. - .12 * step(fract(vWp.x / 3.05), .025))
+          vec3 roofC = st > 2.5 ? mix(vec3(.4, .41, .41), texture2D(tGravel, vWp.xz / 4.).rgb * .85, .45) * (.9 + .1 * texture2D(tStucco, vWp.xz / 5.).r / .28) * (1. - .14 * step(fract(vWp.x / 3.05), .03))
                                 : texture2D(tGravel, vWp.xz / 5.).rgb * 1.05;
           diffuseColor.rgb = mix(diffuseColor.rgb, roofC * (.9 + .2 * h21(floor(vWp.xz * .1))), fRoof);
           float ao = clamp(y / 2.2, .62, 1.); diffuseColor.rgb *= mix(1., ao, 1. - fRoof) * (1. - csh(vWp.xz) * .4);
@@ -586,7 +591,7 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
       }
     } else {
       // parapet round a flat roof, the wall colour, with a lighter coping on top
-      const pc = [c[0] * .92, c[1] * .92, c[2] * .92], cc = [.82, .8, .76], ph = b.kind === 'house' ? 0 : .9, th = .3;
+      const pc = [c[0] * .92, c[1] * .92, c[2] * .92], cc = [.6, .58, .55], ph = b.kind === 'house' ? 0 : .9, th = .3;
       if (ph) {   // with a cornice: the top band stands a little proud of the wall
         const cx = .2, cy = b.h - .4;
         const outer = [at(-b.w / 2 - cx, -b.d / 2 - cx), at(b.w / 2 + cx, -b.d / 2 - cx), at(b.w / 2 + cx, b.d / 2 + cx), at(-b.w / 2 - cx, b.d / 2 + cx)];
@@ -648,15 +653,18 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
   for (const l of city.lots) {
     const x0 = l.x - l.w / 2, x1 = l.x + l.w / 2, z0 = l.z - l.d / 2, z1 = l.z + l.d / 2;
     if (l.k === 'parking') {
-      lotG.flat([x0, z0], [x1, z0], [x1, z1], [x0, z1], .05);
-      for (let x = x0 + 14; x < x1 - 8; x += 30) for (let z = z0 + 11.6; z < z1 - 6; z += 23.2) lotLights.push([x, z]);
+      // laid out in the lot's own frame (a lot in front of a building turns with it), then put in place
+      const lr = l.rot || 0, lc = Math.cos(lr), ls = Math.sin(lr), W = (x, z) => { const u = x - l.x, v = z - l.z; return [l.x + u * lc - v * ls, l.z + u * ls + v * lc]; };
+      lotG.flat(W(x0, z0), W(x1, z0), W(x1, z1), W(x0, z1), .05);
+      for (let x = x0 + 14; x < x1 - 8; x += 30) for (let z = z0 + 11.6; z < z1 - 6; z += 23.2) lotLights.push(W(x, z));
+      if (l.bid && l.w > 16) lotLights.push(W(x0 + 2, z0 + 1.5));
       let s = Math.floor(l.seed * 1e6) || 1; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
       let z = z0 + 1, row = 0;
       while (z + 5.2 <= z1 - 1) {
         const flip = row % 2;
         for (let x = x0 + 1; x + 2.6 <= x1 - 1; x += 2.6) {
-          lines.flat([x, z], [x + .1, z], [x + .1, z + 5], [x, z + 5], .065);
-          if (r() < l.fill) parked.push([x + 1.3, z + 2.6, (flip ? -1 : 1) * Math.PI / 2 + (r() - .5) * .06, r()]);
+          lines.flat(W(x, z), W(x + .1, z), W(x + .1, z + 5), W(x, z + 5), .065);
+          if (r() < l.fill) { const p = W(x + 1.3, z + 2.6); parked.push([p[0], p[1], (flip ? -1 : 1) * Math.PI / 2 + (r() - .5) * .06 - lr, r()]); }
         }
         z += flip ? 5.2 : 5.2 + 6.4; row++;
       }
