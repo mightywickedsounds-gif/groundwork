@@ -90,6 +90,43 @@
   .keys b { font-weight:800; }
   .keys span { opacity:.7; }
 
+
+  /* boot + title: the city itself is the background */
+  #boot { background:#101214; z-index:20; transition:opacity .6s ease; }
+  #boot.gone { opacity:0; pointer-events:none; }
+  .bootIn { display:flex; flex-direction:column; align-items:center; gap:22px; }
+  #loadBar { width:220px; height:8px; background:#2b2e33; border-radius:4px; overflow:hidden; }
+  #loadBar i { display:block; height:100%; width:0; background:var(--yellow); transition:width .25s ease; }
+  .logo { --bg:var(--green); --line:var(--white); align-self:flex-start; display:flex; flex-direction:column; align-items:center; padding:14px 30px 16px; border-radius:14px; box-shadow:inset 0 0 0 4px var(--bg), inset 0 0 0 7px var(--line), 0 6px 0 rgba(0,0,0,.35); }
+  .logo .lt { font-weight:800; font-size:15px; }
+  .logo .lg { font-weight:900; font-size:58px; line-height:.95; margin-top:4px; letter-spacing:-.015em; }
+  .logo .lp { font-weight:900; font-size:22px; margin-top:6px; background:var(--white); color:var(--green); padding:3px 12px 1px; border-radius:6px; }
+  #title { background:none; justify-content:flex-start; align-items:stretch; }
+  .titleCol { display:flex; flex-direction:column; gap:22px; padding:max(34px, env(safe-area-inset-top)) 0 34px max(40px, env(safe-area-inset-left)); width:400px; transform:translateX(0); transition:transform .5s cubic-bezier(.2,.8,.2,1); }
+  #title.leaving .titleCol { transform:translateX(-120%); }
+  .tbtns { display:flex; flex-direction:column; gap:10px; margin-top:auto; }
+  .tb { height:58px; border:0; border-radius:12px; background:var(--asphalt); color:var(--white); font-size:19px; font-weight:900; cursor:pointer; display:flex; align-items:center; justify-content:space-between; padding:0 20px; box-shadow:var(--drop); transition:transform .12s ease, background .12s ease; }
+  .tb:hover { background:var(--tile2); transform:translateX(6px); }
+  .tb:active { transform:translateX(6px) scale(.98); }
+  .tb.main { background:var(--yellow); color:var(--ink); height:66px; font-size:22px; }
+  .tb.main:hover { background:#ffd02a; }
+  .tb svg { width:24px; height:24px; }
+  .ver { position:fixed; right:16px; bottom:12px; font-size:12px; color:var(--white); background:var(--asphalt); padding:3px 8px 1px; border-radius:5px; }
+  body.titleUp #hud, body.titleUp #topr { transform:translateY(-160%); pointer-events:none; } body.titleUp #hint, body.titleUp #toast { display:none; }
+  body.titleUp #bar { transform:translate(-50%, 160%); pointer-events:none; }
+  #hud, #topr { transition:transform .45s cubic-bezier(.2,.8,.2,1); }
+  #bar { transition:transform .45s cubic-bezier(.2,.8,.2,1); }
+  .screen .panel { animation:pop .22s cubic-bezier(.2,.8,.2,1); }
+  @keyframes pop { from { transform:translateY(14px) scale(.97); } to { transform:none; } }
+  .panel.credits .keys { font-size:15px; }
+  #settings .seg { margin-bottom:4px; }
+  @media (max-width:760px) {
+    .titleCol { width:auto; padding:max(28px, env(safe-area-inset-top)) 18px max(22px, env(safe-area-inset-bottom)); align-items:stretch; }
+    #title .logo { align-self:center; }
+    .titleCol .tbtns { margin-top:auto; }
+    .logo .lg { font-size:46px; }
+    #title.leaving .titleCol { transform:translateY(120%); }
+  }
   @media (max-width:760px) {
     #hud { min-width:0; padding:9px 12px 10px; }
     #clock { font-size:26px; }
@@ -109,7 +146,7 @@
   @media (max-width:420px) { #stats { gap:2px 9px; } #stats b { font-size:14px; } #clock { font-size:24px; } #jam { width:126px; padding:8px 10px 10px; } #jamLbl { font-size:11px; } #jamLbl b { font-size:15px; } }
 </style>
 </head>
-<body>
+<body class="titleUp">
 <canvas id="view"></canvas>
 
 <div id="hud" class="sign">
@@ -154,38 +191,67 @@
   </div>
 </div>
 
-<div id="start" class="screen show">
-  <div class="panel guide sign">
-    <h1>FLOWTOWN</h1>
-    <h2>Keep the city moving</h2>
-    <div class="big">The city never stops growing. Rebuild its streets with <b>roads, curves, lights, roundabouts, one-ways and extra lanes</b> before the traffic locks up.</div>
-    <div class="btns">
-      <button id="playBtn" class="main"><span>Play</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg></button>
-      <button id="newBtn" style="display:none">New city</button>
+<div id="boot" class="screen show">
+  <div class="bootIn">
+    <div class="logo sign"><span class="lt">CITY LIMIT</span><span class="lg">FLOWTOWN</span></div>
+    <div id="loadBar"><i></i></div>
+  </div>
+</div>
+
+<div id="title" class="screen">
+  <div class="titleCol">
+    <div class="logo sign"><span class="lt">CITY LIMIT</span><span class="lg">FLOWTOWN</span><span class="lp" id="titlePop">POP 0</span></div>
+    <div class="tbtns">
+      <button id="playBtn" class="tb main"><span>Start</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg></button>
+      <button id="newBtn" class="tb" style="display:none">New city</button>
+      <button id="setBtn" class="tb">Settings</button>
+      <button id="credBtn" class="tb">Credits</button>
     </div>
   </div>
+  <div class="ver">v10</div>
 </div>
 
 <div id="menu" class="screen">
   <div class="panel dark">
+    <h3>Paused</h3>
+    <div class="btns">
+      <button id="closeBtn" class="main">Resume</button>
+      <button id="menuSetBtn">Settings</button>
+      <button id="quitBtn">Save and quit to title</button>
+    </div>
+  </div>
+</div>
+
+<div id="settings" class="screen">
+  <div class="panel dark">
     <h3>Graphics</h3>
     <div class="seg" id="qRow"><button data-q="high">High</button><button data-q="medium">Medium</button><button data-q="low">Low</button></div>
+    <h3>Sound and sky</h3>
+    <div class="seg"><button id="soundBtn">Sound on</button><button id="nightBtn">Night on</button></div>
     <h3>Controls</h3>
     <div class="keys">
       <b>Move</b><span>Drag, or W A S D</span>
       <b>Turn and tilt</b><span>Right-drag, Q E, or two fingers</span>
-      <b>Zoom</b><span>Scroll or pinch</span>
-      <b>Tools</b><span>1 to 7, Esc to drop</span>
+      <b>Zoom</b><span>Scroll, pinch or double tap</span>
+      <b>Tools</b><span>1 to 8, Esc to drop</span>
       <b>Pause</b><span>Space</span>
-      <b>Traffic view</b><span>T</span>
     </div>
     <div class="btns">
-      <button id="closeBtn" class="main">Back to the city</button>
-      <button id="soundBtn">Sound on</button>
-      <button id="nightBtn">Night on</button>
-      <button id="resetBtn">New city</button>
-      <button id="digBtn">Play the digging game</button>
+      <button id="setBack" class="main">Back</button>
+      <button id="resetBtn">Start a new city</button>
     </div>
+  </div>
+</div>
+
+<div id="credits" class="screen">
+  <div class="panel dark credits">
+    <h3>Credits</h3>
+    <div class="keys">
+      <b>Engine</b><span>three.js (MIT)</span>
+      <b>Photos</b><span>Poly Haven (CC0)</span>
+      <b>Type</b><span>Overpass (SIL OFL)</span>
+    </div>
+    <div class="btns"><button id="credBack" class="main">Back</button></div>
   </div>
 </div>
 

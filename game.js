@@ -6,6 +6,7 @@ import { makeMaterials, CLOUD, cloudUniforms, buildRoads, buildCity, vehicleGeos
 import { makeSky } from './sky.js';
 
 const $ = id => document.getElementById(id);
+let titleUp = true;   // the title screen is up (the camera circles the town)
 const SAVE = 'flowtown.save.v1', QKEY = 'flowtown.quality';
 const touch = matchMedia('(pointer: coarse)').matches; if (touch) document.body.classList.add('touch');
 const QS = {
@@ -56,7 +57,7 @@ function hillH(x, z) {
 }
 const groundGeo = new THREE.PlaneGeometry(12000, 12000, 160, 160).rotateX(-Math.PI / 2);
 { const p = groundGeo.attributes.position; for (let i = 0; i < p.count; i++) p.setY(i, hillH(p.getX(i), p.getZ(i))); groundGeo.computeVertexNormals(); }
-const groundMat = new THREE.MeshStandardMaterial({ map: grassTex, roughness: 1, color: 0xc4bf94 });   // drier Hill Country grass
+const groundMat = new THREE.MeshStandardMaterial({ map: grassTex, roughness: 1, color: 0xc4bf94, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 });   // (pushed back: roads and lots always draw over it)   // drier Hill Country grass
 groundMat.onBeforeCompile = sh => {
   sh.uniforms.tDry = { value: dryTex }; cloudUniforms(sh);
   sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vGw; varying float vGny;').replace('#include <uv_vertex>', '#include <uv_vertex>\n vGw = (modelMatrix * vec4(position, 1.)).xyz; vGny = normal.y;');
@@ -113,14 +114,19 @@ function load() {
     S = Object.assign({ speed: 1, over: false, flow: 1 }, d.s); S.over = false; return true;
   } catch (e) { console.warn('save unreadable', e); return false; }
 }
-function save() { if (!net || S.over) return; try { localStorage.setItem(SAVE, JSON.stringify({ v: 1, net: net.serialize(), city: city.serialize(), s: { time: S.time, meter: S.meter, growT: S.growT, districts: S.districts, seed: S.seed, speed: S.speed, cam: [cam.x, cam.z, cam.dist, cam.yaw, cam.pitch] } })); } catch (e) { /* storage full: keep playing */ } }
+function save() { if (!net || S.over) return; if (!titleUp) S.cam = [cam.x, cam.z, cam.dist, cam.yaw, cam.pitch]; try { localStorage.setItem(SAVE, JSON.stringify({ v: 1, net: net.serialize(), city: city.serialize(), s: { time: S.time, meter: S.meter, growT: S.growT, districts: S.districts, seed: S.seed, speed: S.speed, cam: S.cam } })); } catch (e) { /* storage full: keep playing */ } }
 
 // ---------------- camera ----------------
 const cam = { x: 0, z: 40, dist: 420, yaw: .35, pitch: .82 };
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v)), smooth01 = (a, b, v) => { const t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+// how far the view may tilt at this zoom: close in it leans over to show the street fronts (never flat on the map),
+// far out it looks down more so the whole town reads
+function pitchRange(d) { return [.22 + .5 * smooth01(160, 1300, d), Math.min(1.45, .95 + .5 * smooth01(90, 800, d))]; }
+let camBox = null;   // where the camera may go (the town plus a margin)
 function placeCamera() {
-  // low angles show the skyline and the hills; zoomed far out the view stays higher
-  cam.dist = Math.max(28, Math.min(1500, cam.dist)); cam.pitch = Math.max(Math.min(.32, .12 + cam.dist / 2000), Math.min(1.5, cam.pitch));
-  if (city) { const b = city.bounds(); cam.x = Math.max(b.x0 - 300, Math.min(b.x1 + 300, cam.x)); cam.z = Math.max(b.z0 - 300, Math.min(b.z1 + 300, cam.z)); }
+  cam.dist = clamp(cam.dist, 26, 1500);
+  const [p0, p1] = pitchRange(cam.dist); cam.pitch = clamp(cam.pitch, p0, p1);
+  if (camBox) { cam.x = clamp(cam.x, camBox.x0, camBox.x1); cam.z = clamp(cam.z, camBox.z0, camBox.z1); }
   for (let k = 0; k < 20; k++) {   // never inside a hill
     const cp = Math.cos(cam.pitch);
     camera.position.set(cam.x + Math.sin(cam.yaw) * cp * cam.dist, Math.sin(cam.pitch) * cam.dist, cam.z + Math.cos(cam.yaw) * cp * cam.dist);
@@ -129,6 +135,31 @@ function placeCamera() {
   }
   camera.lookAt(cam.x, 0, cam.z);
   scene.fog.near = 500 + cam.dist * .8; scene.fog.far = 2600 + cam.dist * 2.4;
+  // depth precision: the near limit follows the camera's height, so far out the roads never flicker with the grass under them
+  const near = clamp((camera.position.y - Math.max(0, hillH(camera.position.x, camera.position.z))) * .35, 1, 90);
+  if (Math.abs(camera.near - near) > .05) { camera.near = near; camera.updateProjectionMatrix(); }
+}
+// smooth camera moves (flying to a spot, wheel zoom); finger drags move it directly
+let fly = null, zoomTo = null, coast = null;
+function flyTo(goal, secs = 1.2) { fly = { from: { ...cam }, to: { ...cam, ...goal }, t: 0, secs }; coast = null; }
+function camTick(dt) {
+  if (fly) {
+    fly.t += dt / fly.secs; const t = Math.min(1, fly.t), k = t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    let dy = fly.to.yaw - fly.from.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+    cam.x = fly.from.x + (fly.to.x - fly.from.x) * k; cam.z = fly.from.z + (fly.to.z - fly.from.z) * k; cam.yaw = fly.from.yaw + dy * k;
+    cam.dist = Math.exp(Math.log(fly.from.dist) + (Math.log(fly.to.dist) - Math.log(fly.from.dist)) * k); cam.pitch = fly.from.pitch + (fly.to.pitch - fly.from.pitch) * k;
+    placeCamera(); if (t >= 1) fly = null; return;
+  }
+  if (zoomTo) {   // ease towards the wanted zoom, keeping the ground under the pointer where it is
+    const f = 1 - Math.exp(-dt * 14), g0 = groundAt(zoomTo.cx, zoomTo.cy);
+    cam.dist = Math.exp(Math.log(cam.dist) + (Math.log(zoomTo.dist) - Math.log(cam.dist)) * f); placeCamera();
+    const g1 = groundAt(zoomTo.cx, zoomTo.cy); if (g0 && g1) { cam.x += g0[0] - g1[0]; cam.z += g0[1] - g1[1]; placeCamera(); }
+    if (Math.abs(Math.log(cam.dist / zoomTo.dist)) < .004 || cam.dist <= 26.01 || cam.dist >= 1499.9) zoomTo = null;
+  }
+  if (coast) {   // a flicked map keeps gliding a moment
+    cam.x += coast.vx * dt; cam.z += coast.vz * dt; const k = Math.exp(-dt * 4.2); coast.vx *= k; coast.vz *= k; placeCamera();
+    if (Math.hypot(coast.vx, coast.vz) < cam.dist * .02) coast = null;
+  }
 }
 const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hitV = new THREE.Vector3();
 function groundAt(cx, cy) {
@@ -184,6 +215,7 @@ function rebuildCity() {
     cityG.add(gm, pm);
   }
   scene.add(cityG); seenCity = city.ver;
+  const b = city.bounds(); camBox = { x0: b.x0 - 250, x1: b.x1 + 250, z0: b.z0 - 250, z1: b.z1 + 250 };
 }
 const lampGlowMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0, toneMapped: false });
 
@@ -421,7 +453,8 @@ canvas.addEventListener('pointerdown', e => {
     if (drawing(e) && e.button === 0) { if (T.tool === 'curve' && T.pend) drag.draw = true; else { const d = drag; d.mayDraw = true; d.timer = setTimeout(() => startDraw(d), HOLD); } }
   }
   else { if (drag) clearTimeout(drag.timer); drag = null; if (T.draw) { T.draw = null; previewMesh.visible = false; hint(); } }
-  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), ang: Math.atan2(b.y - a.y, b.x - a.x), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, g0: groundAt((a.x + b.x) / 2, (a.y + b.y) / 2) }; }
+  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), ang: Math.atan2(b.y - a.y, b.x - a.x), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, ay: a.y, by: b.y, g0: groundAt((a.x + b.x) / 2, (a.y + b.y) / 2) }; }
+  fly = zoomTo = coast = null;
 });
 canvas.addEventListener('pointermove', e => {
   const p = ptrs.get(e.pointerId);
@@ -429,10 +462,17 @@ canvas.addEventListener('pointermove', e => {
   if (!p) return;
   p.x = e.clientX; p.y = e.clientY;
   if (ptrs.size === 2 && pinch) {
+    // two fingers hold the map: twist turns it the way the fingers turn, pinch zooms, sliding both up or down tilts.
+    // The ground between the fingers stays between the fingers.
     const [a, b] = [...ptrs.values()], d = Math.hypot(a.x - b.x, a.y - b.y), ang = Math.atan2(b.y - a.y, b.x - a.x);
-    cam.dist *= pinch.d / Math.max(10, d); cam.yaw -= ang - pinch.ang; pinch.d = d; pinch.ang = ang;
-    const my = (a.y + b.y) / 2; cam.pitch += (my - pinch.my) * .004; pinch.my = my;
-    placeCamera(); const g = groundAt((a.x + b.x) / 2, (a.y + b.y) / 2); if (g && pinch.g0) { cam.x += pinch.g0[0] - g[0]; cam.z += pinch.g0[1] - g[1]; placeCamera(); }
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    let da = ang - pinch.ang; da = Math.atan2(Math.sin(da), Math.cos(da));
+    const tilting = Math.abs(my - pinch.my) > 2 * Math.abs(d - pinch.d) && Math.abs(a.y - pinch.ay - (b.y - pinch.by)) < 14;   // both fingers slide together
+    cam.dist *= pinch.d / Math.max(10, d); cam.yaw += da;
+    if (tilting) cam.pitch += (my - pinch.my) * .0045;
+    pinch.d = d; pinch.ang = ang; pinch.my = my; pinch.ay = a.y; pinch.by = b.y; fly = zoomTo = coast = null;
+    placeCamera(); const g = groundAt(mx, my); if (g && pinch.g0 && !tilting) { cam.x += pinch.g0[0] - g[0]; cam.z += pinch.g0[1] - g[1]; placeCamera(); }
+    if (tilting) pinch.g0 = groundAt(mx, my);
     return;
   }
   if (!drag) return;
@@ -451,7 +491,15 @@ canvas.addEventListener('pointermove', e => {
     return;
   }
   if (drag.btn === 2 || (drag.btn === 0 && e.shiftKey && e.pointerType === 'mouse')) { cam.yaw -= (e.movementX || 0) * .006; cam.pitch += (e.movementY || 0) * .005; placeCamera(); return; }
-  if (drag.moved > 6 && drag.g0) { const g = groundAt(e.clientX, e.clientY); if (g) { cam.x += drag.g0[0] - g[0]; cam.z += drag.g0[1] - g[1]; placeCamera(); } }
+  if (drag.moved > 6 && drag.g0) {
+    const g = groundAt(e.clientX, e.clientY);
+    if (g) {
+      const mx = drag.g0[0] - g[0], mz = drag.g0[1] - g[1]; cam.x += mx; cam.z += mz; placeCamera();
+      // how fast the map is moving (for the glide when the finger lets go)
+      const t = e.timeStamp, dt = Math.max(.004, (t - (drag.vt || drag.t0)) / 1000); drag.vt = t;
+      const k = Math.min(1, dt * 18); drag.vx = (drag.vx || 0) * (1 - k) + mx / dt * k; drag.vz = (drag.vz || 0) * (1 - k) + mz / dt * k;
+    }
+  }
 });
 function up(e) {
   const had = ptrs.has(e.pointerId); ptrs.delete(e.pointerId);
@@ -470,21 +518,42 @@ function up(e) {
   }
   if (drag.btn === 2 && drag.moved < 6) { T.pts = []; T.pend = null; previewMesh.visible = false; hint(); hoverUpdate(); drag = null; return; }
   if (drag.draw && drag.moved < 10) { hint(); drag = null; return; }   // held but didn't drag: nothing
-  if (drag.btn === 0 && drag.moved < 10 && g) { click(g[0], g[1]); if (e.pointerType === 'mouse') { T.mouse = g; hoverUpdate(); } }
+  if (drag.btn === 0 && drag.moved < 10 && g) {
+    if (T.tool) click(g[0], g[1]); else tap(g[0], g[1], e.clientX, e.clientY);
+    if (e.pointerType === 'mouse') { T.mouse = g; hoverUpdate(); }
+  }
+  // let go while moving: the map glides on (not after a slow, careful drag)
+  else if (drag.moved >= 10 && drag.vx !== undefined && e.timeStamp - (drag.vt || 0) < 80 && !ptrs.size) {
+    const v = Math.hypot(drag.vx, drag.vz), cap = cam.dist * 4;
+    if (v > cam.dist * .25) coast = { vx: drag.vx * Math.min(1, cap / v), vz: drag.vz * Math.min(1, cap / v) };
+  }
   drag = null;
 }
+// a tap with no tool picked: double tap zooms in there (selecting things comes with the people)
+let lastTap = null;
+function tap(x, z, sx, sy) {
+  const now = performance.now();
+  if (lastTap && now - lastTap.t < 320 && Math.hypot(sx - lastTap.sx, sy - lastTap.sy) < 30) { zoomTo = { dist: Math.max(26, cam.dist * .45), cx: sx, cy: sy }; lastTap = null; return; }
+  lastTap = { t: now, sx, sy };
+  if (typeof onTap === 'function') onTap(x, z, sx, sy);
+}
+let onTap = null;
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('pointerleave', () => { if (!ptrs.size) { T.mouse = null; cursor.visible = false; } });
 canvas.addEventListener('wheel', e => {
-  e.preventDefault(); const g0 = groundAt(e.clientX, e.clientY);
-  const f = Math.exp(Math.max(-1, Math.min(1, e.deltaY * .0012))); cam.dist *= f; placeCamera();
-  const g1 = groundAt(e.clientX, e.clientY); if (g0 && g1) { cam.x += g0[0] - g1[0]; cam.z += g0[1] - g1[1]; placeCamera(); }
+  e.preventDefault(); fly = coast = null;
+  const f = Math.exp(Math.max(-1, Math.min(1, e.deltaY * (e.deltaMode ? .05 : .0016))));
+  zoomTo = { dist: clamp((zoomTo ? zoomTo.dist : cam.dist) * f, 26, 1500), cx: e.clientX, cy: e.clientY };
 }, { passive: false });
 const keys = new Set();
 addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   // while the start screen, the menu or the game-over sign is up, keys don't reach the game behind it
-  if (document.querySelector('.screen.show')) { if (e.code === 'Escape' && $('menu').classList.contains('show')) showMenu(false); if (e.code === 'Space') e.preventDefault(); return; }
+  if (document.querySelector('.screen.show') || titleUp) {
+    if (e.code === 'Escape') { if ($('settings').classList.contains('show')) $('setBack').click(); else if ($('credits').classList.contains('show')) show('credits', false); else if ($('menu').classList.contains('show')) showMenu(false); }
+    if (e.code === 'Space') e.preventDefault(); return;
+  }
+  if (e.code === 'Escape' && !T.tool && !T.pts.length) { showMenu(true); return; }
   keys.add(e.code);
   const n = '1234567'.indexOf(e.key); if (n >= 0) setTool(TOOLS[n]);
   if (e.code === 'Escape') { if (T.pend) T.pend = null; else if (T.pts.length) T.pts = []; else setTool(''); previewMesh.visible = false; hint(); hoverUpdate(); }
@@ -737,40 +806,88 @@ const sound = (() => {
 })();
 
 // ---------------- menus ----------------
-function showMenu(v) { $('menu').classList.toggle('show', v); if (v) { S.menuSpeed = S.speed; setSpeed(0); } else setSpeed(S.menuSpeed || 1); }
+// screens: the title (the city slowly circling behind it), pause, settings, credits
+let settingsFrom = null;
+const show = (id, v) => $(id).classList.toggle('show', v);
+function showMenu(v) { show('menu', v); if (v) { S.menuSpeed = S.speed; setSpeed(0); } else setSpeed(S.menuSpeed || 1); }
 $('menuBtn').onclick = () => showMenu(true);
 $('closeBtn').onclick = () => showMenu(false);
-$('soundBtn').textContent = sound.on ? 'Sound on' : 'Sound off';
-$('nightBtn').textContent = nightOn ? 'Night on' : 'Night off';
-$('nightBtn').onclick = () => { nightOn = !nightOn; localStorage.setItem('flowtown.night', nightOn ? '1' : '0'); $('nightBtn').textContent = nightOn ? 'Night on' : 'Night off'; };
-$('soundBtn').onclick = () => { $('soundBtn').textContent = sound.toggle() ? 'Sound on' : 'Sound off'; };
+$('menuSetBtn').onclick = () => { show('menu', false); settingsFrom = 'menu'; show('settings', true); };
+$('setBtn').onclick = () => { settingsFrom = null; show('settings', true); };
+$('setBack').onclick = () => { show('settings', false); if (settingsFrom) show(settingsFrom, true); };
+$('credBtn').onclick = () => show('credits', true);
+$('credBack').onclick = () => show('credits', false);
+$('quitBtn').onclick = () => { save(); show('menu', false); toTitle(); };
+const soundTxt = () => { $('soundBtn').textContent = sound.on ? 'Sound on' : 'Sound off'; $('soundBtn').classList.toggle('on', sound.on); };
+const nightTxt = () => { $('nightBtn').textContent = nightOn ? 'Night on' : 'Night off'; $('nightBtn').classList.toggle('on', nightOn); };
+soundTxt(); nightTxt();
+$('nightBtn').onclick = () => { nightOn = !nightOn; localStorage.setItem('flowtown.night', nightOn ? '1' : '0'); nightTxt(); };
+$('soundBtn').onclick = () => { sound.toggle(); soundTxt(); };
 for (const b of document.querySelectorAll('#qRow button')) { b.classList.toggle('on', b.dataset.q === qName); b.onclick = () => { localStorage.setItem(QKEY, b.dataset.q); save(); location.reload(); }; }
-$('digBtn').onclick = () => { save(); location.href = 'dig/'; };
-$('resetBtn').onclick = () => { if (confirm('Start a brand new city? This one will be lost.')) { showMenu(false); newCity(); } };
-function newCity(seed) { localStorage.removeItem(SAVE); fresh(seed); peds = []; seenNet = seenCity = -1; cam.x = 0; cam.z = 40; cam.dist = 420; cam.yaw = .35; cam.pitch = .82; placeCamera(); setSpeed(1); setTool(''); }
-const hadSave = !!localStorage.getItem(SAVE);
-if (hadSave) { $('playBtn').textContent = 'Continue'; $('newBtn').style.display = ''; }
-$('playBtn').onclick = () => { $('start').classList.remove('show'); sound.start(); setSpeed(S.speed || 1); };
-$('newBtn').onclick = () => { $('start').classList.remove('show'); newCity(); sound.start(); };
+$('resetBtn').onclick = () => { if (confirm('Start a brand new city? This one will be lost.')) { show('settings', false); show('menu', false); newCity(); if (titleUp) play(); } };
+const HOME_CAM = { x: 0, z: 40, dist: 300, yaw: .55, pitch: .72 };
+function newCity(seed) { localStorage.removeItem(SAVE); fresh(seed); peds = []; seenNet = seenCity = -1; Object.assign(cam, HOME_CAM); placeCamera(); setSpeed(titleUp ? 0 : 1); setTool(''); }
+let hadSave = !!localStorage.getItem(SAVE);
+function titleButtons() {
+  $('playBtn').querySelector('span').textContent = hadSave ? 'Continue' : 'Start';
+  $('newBtn').style.display = hadSave ? '' : 'none';
+  $('titlePop').textContent = 'POP ' + (city ? city.totals().res.toLocaleString('en-US') : 0);
+}
+// the title: the camera circles the town; leaving it flies down to where you were
+let orbit = 0;
+function toTitle() {
+  titleUp = true; hadSave = !!localStorage.getItem(SAVE); titleButtons(); setTool('');
+  S.titleSpeed = S.speed || S.lastSpeed || 1; setSpeed(0);
+  document.body.classList.add('titleUp'); $('title').classList.remove('leaving'); show('title', true);
+  fly = zoomTo = coast = null; orbit = 0;
+}
+function play() {
+  if (!titleUp) return;
+  titleUp = false; sound.start();
+  $('title').classList.add('leaving');
+  const goal = S.cam ? { x: S.cam[0], z: S.cam[1], dist: S.cam[2], yaw: S.cam[3], pitch: S.cam[4] } : HOME_CAM;
+  flyTo(goal, 1.6);
+  setTimeout(() => { show('title', false); document.body.classList.remove('titleUp'); }, 650);
+  setSpeed(S.titleSpeed || S.speed || 1);
+}
+$('playBtn').onclick = () => play();
+$('newBtn').onclick = () => { if (confirm('Start a brand new city? This one will be lost.')) { newCity(); S.cam = null; play(); } };
+function titleCam(dt) {   // a slow circle round the middle of town, low enough to see the streets
+  orbit += dt;
+  const b = city.bounds(), cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2;
+  cam.x = cx + Math.sin(orbit * .05) * 40; cam.z = cz + Math.cos(orbit * .05) * 40; cam.yaw += dt * .045;
+  cam.dist = 260 + Math.sin(orbit * .07) * 40; cam.pitch = .5 + Math.sin(orbit * .09) * .06; placeCamera();
+}
 
 // ---------------- boot ----------------
 if (!(hadSave && load())) fresh();
 if (S.cam) [cam.x, cam.z, cam.dist, cam.yaw, cam.pitch] = S.cam;
 placeCamera(); setTool(''); S.view = false;
-const startSpeed = S.speed || 1; setSpeed(0); S.lastSpeed = startSpeed;
+const startSpeed = S.speed || 1; setSpeed(0); S.lastSpeed = startSpeed; S.titleSpeed = startSpeed;
+titleButtons();
 addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 addEventListener('pagehide', save);
 document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
-setInterval(save, 10000);
+setInterval(() => { if (!titleUp) save(); }, 10000);
+// loading: textures and fonts first, then a couple of frames, then the title fades in (nothing pops in half-drawn)
+{
+  let total = 1, done = 0, frames = 0, ready = false;
+  const bar = $('loadBar').querySelector('i'), upd = () => { bar.style.width = Math.round(100 * Math.min(1, (done + (ready ? 1 : 0)) / (total + 1))) + '%'; };
+  THREE.DefaultLoadingManager.onProgress = (u, l, t) => { done = l; total = Math.max(total, t); upd(); };
+  const fontsOk = document.fonts ? document.fonts.ready : Promise.resolve();
+  const texOk = new Promise(r => { THREE.DefaultLoadingManager.onLoad = r; setTimeout(r, 12000); });
+  Promise.all([fontsOk, texOk]).then(() => { ready = true; upd(); const wait = () => { if (++frames > 3) { show('title', true); $('boot').classList.add('gone'); setTimeout(() => show('boot', false), 700); } else requestAnimationFrame(wait); }; requestAnimationFrame(wait); });
+}
 
 let last = performance.now(), hudT = 0;
 function frame(now) {
   requestAnimationFrame(frame);
   const rdt = Math.min(.1, (now - last) / 1000); last = now;
-  keyMove(rdt);
+  if (titleUp) titleCam(rdt); else { keyMove(rdt); camTick(rdt); }
   if (net.ver !== seenNet) rebuildRoads();
   if (city.ver !== seenCity) rebuildCity();
-  if (S.speed && !S.over) { let left = rdt * S.speed; while (left > 1e-4) { const d = Math.min(.1, left); simStep(d); left -= d; } }
+  const spd = titleUp ? 1 : S.speed;   // the town lives on behind the title
+  if (spd && !S.over) { let left = rdt * spd; while (left > 1e-4) { const d = Math.min(.1, left); simStep(d); left -= d; } }
   const hour = (S.time / DAY * 24) % 24, night = lighting(hour);
   drawCars(); updatePeds(rdt * (S.speed ? Math.min(2, S.speed) : 0), night); drawSignals(); updateSparks(rdt);
   ovT += rdt; if (ovT > .5) { ovT = 0; paintOverlay(); }
