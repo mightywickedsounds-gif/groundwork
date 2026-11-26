@@ -201,7 +201,7 @@ export function createLife(net, city, seed = 1) {
     }
     // drive: queue a trip; the driver walks out to the car
     p.state = 'wait'; p.why = why; p.dest = to;
-    city.queue.push({ from: A, to: B, t: 0, pid: p.id, kindRoll: p.carK, colorRoll: p.carC,
+    city.queue.push({ from: A, to: B, t: 0, pid: p.id, kindRoll: p.carK, colorRoll: p.carC, toAt: B.biz ? L.park.gate(B) : null, fromAt: p.parked && p.parked.bid === A.id ? L.park.gate(A) : null,
       ok: car => { car.pid = p.id; p.car = car; p.state = 'drive'; L.day.trips++; if (!pullOut(p, A, car, dA)) ghost(p, [dA.door, dA.walk, dA.kerb]); drives(p, car); },
       fail: why2 => { if (why2 !== 'stranded') unpark(p); if (why2 === 'stranded') { p.state = 'in'; p.since = now(); p.until = now() + 40; p.blocked = why2; } else arrive(p, to, why); } });   // roads too full to pull out: they get there anyway (unseen)
   }
@@ -278,7 +278,7 @@ export function createLife(net, city, seed = 1) {
   };
   function guestTrip(g, from, to) {
     g.state = 'wait'; g.dest = to;
-    city.queue.push({ from, to, t: 0, pid: g.id, kindRoll: g.carK, colorRoll: g.carC,
+    city.queue.push({ from, to, t: 0, pid: g.id, kindRoll: g.carK, colorRoll: g.carC, toAt: !to.exit && to.biz ? L.park.gate(to) : null, fromAt: !from.exit && g.parked && g.parked.bid === from.id ? L.park.gate(from) : null,
       ok: car => { car.pid = g.id; g.car = car; g.state = 'drive'; if (!from.exit) { const dA = D(from); if (dA) pullOut(g, from, car, dA); } drives(g, car); if (L.onCarOut) L.onCarOut(car); },
       fail: () => { if (to.exit) L.guests.delete(g.id); else { g.state = 'in'; g.at = to.id; g.until = now() + 60; } } });
   }

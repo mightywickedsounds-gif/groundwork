@@ -72,6 +72,8 @@ export function createParking(net, city) {
     lotsOf.set(b.id, { ver: net.ver + ':' + city.ver, lot: ok });
     return ok;
   };
+  // where a trip should start or end for a building with a lot: on the street right by its driveway
+  P.gate = function (b) { const L = P.lotFor(b); if (!L) return null; const en = L.E[L.E.length > 1 ? 1 : 0]; return { e: en.e, x: en.K[0], z: en.K[1] }; };
   const key = (l, r, i) => l.bid + ':' + r + ':' + i;
   // the free stall nearest the building's door
   function freeStall(L) {
@@ -80,14 +82,15 @@ export function createParking(net, city) {
     return best;
   }
   // the way from the street to a stall: kerb lane, driveway, down the aisle, nose into the stall
-  function route(L, r, st) {
+  function route(L, r, st, side = 0) {   // side: which half of the driveway (in on one side, out on the other)
     const F = frame(L.l), lay = layout(L.l), row = lay.rows[r];
     let ent = L.E[0], bd = 1e9; for (const e of L.E) { const p = F.L(e.P[0], e.P[1]), d = Math.abs(p[0] - st.x); if (d < bd) { bd = d; ent = e; } }
     const Pl = F.L(ent.P[0], ent.P[1]);
     const aisle = row.aisle, path = [];
-    path.push([ent.K[0] + ent.n[0] * 2.2, ent.K[1] + ent.n[1] * 2.2]);                 // in the kerb lane by the driveway
-    path.push(ent.K, ent.P);                                                          // up the driveway
-    path.push(F.W(Pl[0], aisle), F.W(st.x + (st.x > Pl[0] ? -3.5 : 3.5) * 0, aisle));   // down the aisle
+    const o = [ent.t[0] * side, ent.t[1] * side], off = p => [p[0] + o[0], p[1] + o[1]];
+    path.push(off([ent.K[0] + ent.n[0] * 2.2, ent.K[1] + ent.n[1] * 2.2]));          // in the kerb lane by the driveway
+    path.push(off(ent.K), off(ent.P));                                                // up their side of the driveway
+    path.push(F.W(Pl[0] - side, aisle), F.W(st.x, aisle));                           // down the aisle
     path.push(F.W(st.x, aisle + (row.flip ? 1.5 : -1.5) * 0), F.W(st.x, st.z));         // and into the stall
     return { pts: path, ent };
   }
@@ -97,7 +100,7 @@ export function createParking(net, city) {
     if (car.type === 'truck' || car.type === 'bus' || car.type === 'ems' || car.type === 'fire') return false;   // (too big for a stall: they stop at the kerb)
     const L = P.lotFor(b); if (!L) return false;
     const f = freeStall(L); if (!f) return false;
-    const { pts } = route(L, f.r, f.st);
+    const { pts } = route(L, f.r, f.st, -1.6);
     const start = [car.x, car.z], path = smooth([start, ...pts], 2), F = frame(L.l), lay = layout(L.l);
     const stallW = F.W(f.st.x, f.st.z), nose = lay.rows[f.r].flip ? 1 : -1;
     const spot = { x: stallW[0], z: stallW[1], yaw: yawAt(...(() => { const a = F.W(f.st.x, f.st.z + nose), b2 = F.W(f.st.x, f.st.z); return [a[0] - b2[0], a[1] - b2[1]]; })()), type: car.type, color: car.color, id: car.id, pid, bid: b.id };
@@ -110,14 +113,17 @@ export function createParking(net, city) {
     const sp = P.parked.get(k); if (!sp) return false;
     const b = city.buildings.find(o => o.id === sp.bid), L = P.lotFor(b); if (!L) { P.parked.delete(k); return false; }
     const [, r, i] = k.split(':').map(Number), lay = layout(L.l), row = lay.rows[r], st = row && row.stalls.find(s => s.i === i); if (!st) { P.parked.delete(k); return false; }
-    const F = frame(L.l), { pts } = route(L, r, st);
+    const F = frame(L.l), { pts } = route(L, r, st, 1.6);
     // back out into the aisle (reversing), then forward out of the lot to the car's spot in the road
     const back = F.W(st.x + (st.x > F.L(pts[2][0], pts[2][1])[0] ? 3 : -3), row.aisle);
     const fwd = smooth([back, ...pts.slice(1, 4).reverse(), pts[0], end || [car.x, car.z]], 2);
     const rev = [F.W(st.x, st.z), F.W(st.x, row.aisle + (row.flip ? 1.2 : -1.2)), back];
     // it stops at the stop bar (just inside the sidewalk) before pulling out
     const fc = cumOf(fwd), Kp = pts[1], Pp = pts[2], bar = [Pp[0] + (Kp[0] - Pp[0]) * .35, Pp[1] + (Kp[1] - Pp[1]) * .35]; let bi = 0, bd = 1e9; fwd.forEach((p, j) => { const d = Math.hypot(p[0] - bar[0], p[1] - bar[1]); if (d < bd) { bd = d; bi = j; } });
-    P.movers.push({ pts: smooth(rev, 1), cum: cumOf(smooth(rev, 1)), s: 0, v: 0, type: sp.type, color: sp.color, id: sp.id, pid: sp.pid, k, wait, rev: true, next: fwd, stopAt: fc[bi], car, ready, sig: 1 });
+    // which way they'll turn out: with the traffic on this side (right) or across it (left)
+    const ent = L.E.reduce((b2, e) => Math.hypot(e.P[0] - pts[2][0], e.P[1] - pts[2][1]) < Math.hypot(b2.P[0] - pts[2][0], b2.P[1] - pts[2][1]) ? e : b2, L.E[0]);
+    const h = along(car.lane.pts, car.lane.cum, Math.max(0, car.s)), turn = h[2] * ent.t[0] + h[3] * ent.t[1] > 0 ? 2 : 1;
+    P.movers.push({ pts: smooth(rev, 1), cum: cumOf(smooth(rev, 1)), s: 0, v: 0, type: sp.type, color: sp.color, id: sp.id, pid: sp.pid, k, wait, rev: true, next: fwd, stopAt: fc[bi], car, ready, sig: 1, turn });
     return true;
   };
   P.free = k => { P.parked.delete(k); };

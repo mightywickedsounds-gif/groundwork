@@ -650,7 +650,7 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
     cm.castShadow = true; cm.receiveShadow = true; g.add(cm);
   }
   // lots: parking, parks, yards
-  const lotG = new Geo(), lines = new Geo(), parks = new Geo(), shore = new Geo(), pond = new Geo(), parked = [], lotLights = [], drive = new Geo(), blue = new Geo(), islands = new Geo(), curbs = [], wheelStops = [], accSigns = [], stopSigns = [];
+  const lotG = new Geo(), lines = new Geo(), parks = new Geo(), shore = new Geo(), pond = new Geo(), parked = [], lotLights = [], drive = new Geo(), apron = new Geo(), joints = new Geo(), blue = new Geo(), islands = new Geo(), curbs = [], wheelStops = [], accSigns = [], stopSigns = [];
   const islandTrees = opt.more || (opt.more = []);
   for (const l of city.lots) {
     const x0 = l.x - l.w / 2, x1 = l.x + l.w / 2, z0 = l.z - l.d / 2, z1 = l.z + l.d / 2;
@@ -683,27 +683,49 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
       // driveways: from the side of the lot facing the nearest street, across the sidewalk (concrete) and down a curb cut onto the road
       const ents = opt.net ? ENTRIES(l, opt.net) : [];
       for (const en of ents) {
-        const { P, n, t, L } = en, at = s2 => [P[0] + n[0] * s2, P[1] + n[1] * s2], sw = Math.max(0, L - WALK_W), w = 3.3;
-        const prof = [[0, .055], [Math.max(.1, sw), .175], [Math.max(.2, L - .45), .175], [L + .05, .04]];
-        for (let k = 0; k + 1 < prof.length; k++) {
-          const [s0, y0] = prof[k], [s1, y1] = prof[k + 1], a2 = at(s0), b2 = at(s1), w0 = k === 2 ? w + .9 : w, w1 = k >= 2 ? w + .9 : w;
-          const i = drive.v(a2[0] - t[0] * w0, y0, a2[1] - t[1] * w0), j = drive.v(a2[0] + t[0] * w0, y0, a2[1] + t[1] * w0), kk = drive.v(b2[0] + t[0] * w1, y1, b2[1] + t[1] * w1), m = drive.v(b2[0] - t[0] * w1, y1, b2[1] - t[1] * w1);
-          drive.up(i, j, kk); drive.up(i, kk, m);
+        // a real entrance: the lot's asphalt flares out to the sidewalk between rounded curb ends, a concrete apron crosses
+        // the sidewalk (joints scored across it), and a sloped lip takes it down into the gutter where the curb is cut
+        const { P, n, t, L } = en, at = (s2, o) => [P[0] + n[0] * s2 + t[0] * o, P[1] + n[1] * s2 + t[1] * o];
+        const sw = Math.max(.4, L - WALK_W), w = 3.3, mouth = w + 1.6;
+        const strip = (G, s0, s1, w0, w1, y0, y1, segs = 1) => {
+          for (let k = 0; k < segs; k++) {
+            const a0 = s0 + (s1 - s0) * k / segs, a1 = s0 + (s1 - s0) * (k + 1) / segs, f0 = k / segs, f1 = (k + 1) / segs;
+            const wa = w0 + (w1 - w0) * f0, wb = w0 + (w1 - w0) * f1, ya = y0 + (y1 - y0) * f0, yb = y0 + (y1 - y0) * f1;
+            const p = at(a0, -wa), q = at(a0, wa), r2 = at(a1, wb), m = at(a1, -wb);
+            const i = G.v(p[0], ya, p[1]), j = G.v(q[0], ya, q[1]), kk = G.v(r2[0], yb, r2[1]), mm = G.v(m[0], yb, m[1]); G.up(i, j, kk); G.up(i, kk, mm);
+          }
+        };
+        // the mouth: asphalt, wide where it leaves the lot (rounded), narrowing to the driveway, rising to sidewalk height at the end
+        const ease = k => { const f = k / 6; return mouth + (w - mouth) * (1 - Math.pow(1 - f, 2)); };
+        for (let k = 0; k < 6; k++) { const s0 = sw * k / 6, s1 = sw * (k + 1) / 6, y0 = k < 4 ? .052 : .052 + (k - 4) / 2 * .12, y1 = k + 1 < 4 ? .052 : .052 + (k - 3) / 2 * .12; strip(lotG, s0, s1, ease(k), ease(k + 1), y0, y1); }
+        // the apron across the sidewalk, and its lip down into the road (wider at the gutter)
+        strip(apron, sw, sw + .5, w, w, .177, .177);
+        strip(apron, sw + .5, L - .15, w, w + 1.4, .177, .177);          // the wings widen across the sidewalk to the curb
+        strip(apron, L - .15, L + .6, w + 1.4, w + 1.4, .177, .034, 2);  // the cut curb: a short slope into the gutter
+        // scored joints: along both sides, across at each end and down the middle of the apron
+        const jl = (s0, s1, o0, o1, wd = .06) => { const dx = n[0] * (s1 - s0) + t[0] * (o1 - o0), dz = n[1] * (s1 - s0) + t[1] * (o1 - o0), Lj = Math.hypot(dx, dz) || 1, px = -dz / Lj * wd, pz = dx / Lj * wd, A = at(s0, o0), B2 = at(s1, o1); joints.flat([A[0] - px, A[1] - pz], [A[0] + px, A[1] + pz], [B2[0] + px, B2[1] + pz], [B2[0] - px, B2[1] - pz], .182); };
+        jl(sw, sw, -w, w, .03); jl(sw + .5, sw + .5, -w, w, .02); jl(L - .15, L - .15, -w - 1.4, w + 1.4, .025); jl(sw + .5, L - .15, 0, 0, .02); jl(sw + .5, L - .15, -w * .5 - .7, -w * .5 - .7, .018); jl(sw + .5, L - .15, w * .5 + .7, w * .5 + .7, .018);
+        // rounded curb ends turning into the mouth from the lot's front curb
+        for (const sd of [-1, 1]) {
+          const S0 = [0, sd * (mouth + 1.4)], C0 = [0, sd * mouth], S1 = [Math.min(sw, 1.6), sd * ease(Math.min(6, 6 * Math.min(sw, 1.6) / sw))];
+          let prev = at(S0[0], S0[1]);
+          for (let k = 1; k <= 5; k++) { const f = k / 5, u = 1 - f, s2 = u * u * S0[0] + 2 * u * f * C0[0] + f * f * S1[0], o = u * u * S0[1] + 2 * u * f * C0[1] + f * f * S1[1], p = at(s2, o); curbs.push([prev, p]); prev = p; }
         }
-        // a stop bar where the driveway meets the sidewalk, and a stop sign on the right going out
-        const s0 = Math.max(.1, sw - .5), a2 = at(s0); lines.flat([a2[0] - t[0] * .1 - n[0] * .25, a2[1] - t[1] * .1 - n[1] * .25], [a2[0] + t[0] * 3.1 - n[0] * .25, a2[1] + t[1] * 3.1 - n[1] * .25], [a2[0] + t[0] * 3.1 + n[0] * .25, a2[1] + t[1] * 3.1 + n[1] * .25], [a2[0] - t[0] * .1 + n[0] * .25, a2[1] - t[1] * .1 + n[1] * .25], .07);
-        const ss = at(Math.max(.1, sw - .8)); stopSigns.push([ss[0] + t[0] * 4.1, ss[1] + t[1] * 4.1, Math.atan2(n[1], -n[0])]);
+        // a stop bar across the mouth, and a stop sign on the right going out
+        const sb = Math.max(.15, sw - .55), wb = ease(6 * sb / sw) - .3;
+        lines.flat(at(sb - .22, -.1), at(sb - .22, wb), at(sb + .22, wb), at(sb + .22, -.1), .068);   // (the way out is the right-hand half)
+        const ss = at(Math.max(.1, sw - .7), mouth + .9); stopSigns.push([ss[0], ss[1], Math.atan2(n[1], -n[0])]);
       }
       // a curb all round, open at the driveways; a planted strip with shrubs between the lot and the street
       const corners = [W(x0, z0), W(x1, z0), W(x1, z1), W(x0, z1)];
       for (let k = 0; k < 4; k++) {
         const A = corners[k], B = corners[(k + 1) % 4], len = Math.hypot(B[0] - A[0], B[1] - A[1]); if (len < .5) continue;
         const ux = (B[0] - A[0]) / len, uz = (B[1] - A[1]) / len; let cuts = [];
-        for (const en of ents) { const pr = (en.P[0] - A[0]) * ux + (en.P[1] - A[1]) * uz, off = Math.abs((en.P[0] - A[0]) * -uz + (en.P[1] - A[1]) * ux); if (off < 1 && pr > -4 && pr < len + 4) cuts.push([pr - 3.6, pr + 3.6]); }
+        for (const en of ents) { const pr = (en.P[0] - A[0]) * ux + (en.P[1] - A[1]) * uz, off = Math.abs((en.P[0] - A[0]) * -uz + (en.P[1] - A[1]) * ux); if (off < 1 && pr > -7 && pr < len + 7) cuts.push([pr - 6.3, pr + 6.3]); }   // (the rounded curb ends take it from there)
         cuts.sort((p, q) => p[0] - q[0]); let s0 = 0;
         const seg = (a2, b2) => { if (b2 - a2 > .3) curbs.push([[A[0] + ux * a2, A[1] + uz * a2], [A[0] + ux * b2, A[1] + uz * b2]]); };
         for (const [c0, c1] of cuts) { seg(s0, Math.max(s0, c0)); s0 = Math.max(s0, c1); } seg(s0, len);
-        if (cuts.length) for (let s3 = 2; s3 < len - 1.5; s3 += 2.7) { if (cuts.some(([c0, c1]) => s3 > c0 - 1 && s3 < c1 + 1)) continue; const nx = uz, nz = -ux; shrubs.push([A[0] + ux * s3 + nx * .55, A[1] + uz * s3 + nz * .55, .45 + r() * .2]); }
+        if (cuts.length) for (let s3 = 2; s3 < len - 1.5; s3 += 2.7) { if (cuts.some(([c0, c1]) => s3 > c0 - .6 && s3 < c1 + .6)) continue; const nx = uz, nz = -ux; shrubs.push([A[0] + ux * s3 + nx * .55, A[1] + uz * s3 + nz * .55, .45 + r() * .2]); }
       }
     } else {
       parks.flat([x0, z0], [x1, z0], [x1, z1], [x0, z1], .035);
@@ -720,6 +742,8 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
   if (pond.p.length) { const m = new THREE.Mesh(pond.build(), M.pond || (M.pond = new THREE.MeshStandardMaterial({ color: 0x2f4f4a, roughness: .04, metalness: .1 }))); m.receiveShadow = true; g.add(m); }
   if (lotG.p.length) { const m = new THREE.Mesh(lotG.build(), M.lot); m.receiveShadow = true; g.add(m); }
   if (lines.p.length) g.add(new THREE.Mesh(lines.build(), M.mark));
+  if (apron.p.length) { const m = new THREE.Mesh(apron.build(), M.apron || (M.apron = patchy(new THREE.MeshStandardMaterial({ map: M.walk.map, color: 0xd9d4c8, roughness: .9, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }), .35, 3))); m.receiveShadow = true; g.add(m); }
+  if (joints.p.length) g.add(new THREE.Mesh(joints.build(), M.joint || (M.joint = new THREE.MeshStandardMaterial({ color: 0x8c8981, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }))));
   if (blue.p.length) g.add(new THREE.Mesh(blue.build(), M.accPaint || (M.accPaint = new THREE.MeshStandardMaterial({ color: 0x1f4fa0, roughness: .7, polygonOffset: true, polygonOffsetFactor: -2 }))));
   if (islands.p.length) { const m = new THREE.Mesh(islands.build(), M.mulchIsl || (M.mulchIsl = patchy(new THREE.MeshStandardMaterial({ map: T.lawn, color: 0x7d8f52, roughness: 1 }), .4, 3))); m.receiveShadow = true; g.add(m); }
   if (curbs.length) {   // concrete curbs round the lots and islands

@@ -266,3 +266,17 @@ The owner: keep working on the parking lots and how they connect to the roads, a
 - **The lots themselves:** a concrete curb all round (open at the driveways), concrete wheel stops at the head of every stall, a blue accessible stall with its sign near the door, planted islands with a small tree at the ends of the rows on wider lots, a strip of shrubs between the lot and the sidewalk, and at each driveway a white stop bar and a stop sign for cars going out.
 - Older lots along the main roads (the ones from the original city layout) get the curbs, wheel stops, islands and driveways too; their parked cars stay as scenery.
 - **Tests:** the life check now counts cars parking (up to 19 parked at once in the starting town) and backing out (110 in two days), and checks no car is ever left waiting unseen in the road; it passes, as do law, build and the browser check.
+
+### Round 17: proper entrances into the parking lots
+
+The owner: make the way the driveway concrete joins the parking lot (and the road) better.
+
+- **Before:** the driveway was a plain strip the same colour as the sidewalk; the road's curb and edge line ran straight across it, and the lot just stopped at a strip of grass.
+- **Now each entrance is built like a real commercial driveway:**
+  - the lot's asphalt flares out into a wide mouth, with the lot's curb curving round into it on both sides (rounded curb ends instead of a square gap);
+  - a concrete apron crosses the sidewalk, a shade darker than the sidewalk so you can see it, widening into wings towards the street, with fine scored joints;
+  - where it meets the road the curb is cut: a short sloped lip runs down into the gutter, over the road's edge line;
+  - the stop bar is across the way-out half of the mouth, with the stop sign on the right of cars leaving.
+- **Cars use it properly:** cars head for the driveway itself (they used to stop in front of the building, which on a wide lot could be past the entrance), turn in keeping to the right-hand half, and leave by the other half from the exit. Leaving, they stop at the bar with the blinker on for the way they're turning (right with the traffic, left across it).
+- **Nothing stands in the way:** bus shelters, poles, hydrants, signs and street trees are kept off every driveway (a bus shelter had been put right on one).
+- **Tests:** life (up to 26 cars parked at once, 112 backing out in two days), law and the browser check pass.
