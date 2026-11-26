@@ -1,25 +1,31 @@
 # Flowtown
 
-A traffic game you play in the browser. A suburban town in the style of the Central Texas Hill Country keeps growing on its own, full of cars, buses, trucks and people heading to work, home and the shops. You fly above it with magic tools and reshape the streets so traffic keeps moving. If the jams get bad enough for long enough, the city locks up.
+A town-building and traffic game you play in the browser. You start with a crossroads village in the Central Texas Hill Country: a handful of streets, a few shops and a dozen families. Every person in town has a name, a home, a job and a boss, and drives (or walks) to work, lunch and the shops. Businesses earn coins while their staff are in; you collect it, upgrade them, open new ones, build roads, buy land and add a police station, a fire station and a hospital. Police hide and run radar, pull people over, chase robbers and carjackers; crashes bring police, fire engines and ambulances.
 
 Play it here (from `main`, once merged): https://mightywickedsounds-gif.github.io/groundwork/
 
-The old digging game still works at https://mightywickedsounds-gif.github.io/groundwork/dig/ (also linked from the menu).
-
 ## How it plays
 
+- **Coins.** Each business earns while its staff are at work (and from every customer who comes in). The takings wait in the till (a coin over the building): tap the coin or the building to collect. From level 3 a manager banks it for you. Homes pay a little tax each night; services (police, fire, hospital) cost upkeep.
+- **Upgrade and expand.** Tap a business to see its staff, who's in, what it earns, and upgrade it (more staff, more income; offices grow taller). Use Build to open a new business or service on any street, or to buy the land next to town (its streets come with it). Roads, extra lanes, lights and roundabouts cost coins.
+- **People move in when there's work.** New jobs bring new families: houses on the side streets, apartments on the main roads, and once the town passes about 160 people a downtown that grows taller (up to 7 storeys).
+- **Everyone is someone.** Tap any car or person for their name, age, job title, who they report to, where they work and live, what they're doing right now, and whether their car is insured and their tags are current. Follow keeps them in view.
+- **Visitors.** Main Street becomes a highway out of town: through traffic and out-of-towners stop at your shops and spend money.
+- **The law.** Police cars park out of sight (the corner of a lot, behind trees) and watch the traffic: speeders, red-light runners and expired tags get pulled over and ticketed (the fine is yours). No insurance is another fine, and some drivers floor it instead of pulling over. Robberies and carjackings turn into chases to the edge of town. Crashes block lanes until the police (and an ambulance, and a fire engine if a car catches fire) have dealt with them; drivers with no insurance may flee the scene. Everything shows up on the police scanner (top right): tap a call to go there.
+- **Tempers.** A few drivers are reckless: they speed, tailgate, run reds and lean on the horn, and sometimes a driver flips off the one in front.
+- **Each day ends** with the day's books (businesses, taxes, fines, upkeep, trips, crashes, arrests) and a goal to aim for next.
 - **The city grows back.** When a new or wider road cuts through, buildings in the way are set back (rebuilt smaller) where enough of them is left, and empty land along any street fills in again with new buildings facing that street, at whatever angle it runs.
-- **The city grows by itself.** It starts with three districts. Every few in-game hours a new district opens at the edge with its own streets, homes, offices, shops, parks and parking lots. More people means more cars.
 - **Everyone has somewhere to be.** People drive from home to work in the morning rush (around 8:00), run errands at midday and drive home in the evening rush (around 17:30). Each driver picks the quickest route and switches to another way when they're stuck.
 - **Wide roads.** Any road can get 2 or 3 lanes each way and turn lanes. Drivers pick their lane early, move over when there's a gap (the car behind lets them in if they're waiting), and follow the arrows painted in each lane: the kerb lane goes straight or right, the inside lane goes straight or left, and turn lanes in the middle hold the cars turning left so the rest keep moving.
 - **Real traffic rules.** Cars keep their distance, slow for turns, queue at junctions and don't block a junction they can't get out of. Plain junctions work first come, first served. Traffic lights switch between directions and end a green early when nobody is waiting. At roundabouts, entering cars give way to cars already on the ring.
-- **Gridlock meter (top right).** It rises while lots of drivers are stuck and when drivers give up. It falls again when traffic flows. At 100% the city locks up and the game ends (you can keep fixing it or start a new city). Red pulsing circles show the worst junctions.
+- **Gridlock meter (top right).** It rises while lots of drivers are stuck and when drivers give up, and falls when traffic flows. Jams cost you: people late for work, staff not in, shoppers not getting there. Red pulsing circles show the worst junctions.
 - **Day and night.** The sun rises in the east, crosses the southern sky and sets in the west, with warm sunrises and sunsets, drifting clouds, and stars and a moon at night. At night windows, headlights (lighting the road ahead), tail lights and street lights come on.
 
 ## Your tools
 
 | Tool | Key | What it does |
 |---|---|---|
+| Build | B | Tap a street to open a business or a service there (the list shows prices; some need more people first). Tap land just outside town to buy it. |
 | Road | 1 | Phone: press and hold, then drag to draw a road (a quick drag just moves the map); tap to keep going from the yellow pin. Computer: click to start, click to place; it keeps going from the end. Crossing a road makes a junction; ending near a road (even on its sidewalk) joins it. |
 | Curve | 2 | Phone: hold, then drag to draw it, then drag to bend it. Computer: click the start, click the end, move to bend, click. |
 | Lights | 3 | Click a junction to add or remove traffic lights. |
@@ -47,14 +53,16 @@ The game saves in your browser every 10 seconds and when you leave. Menu → Gra
 ## Files
 
 - `index.html`: the page (screen layout, buttons, menus)
-- `game.js`: the game (camera, tools, day and night, the gridlock meter, saving, sound)
+- `game.js`: the game (title screen, camera, tools, cards, coins, the scanner, day and night, the gridlock meter, saving, sound)
+- `life.js`: the people (names, homes, jobs, bosses, daily routines, walks, visitors) and the money (businesses, levels, goals)
+- `police.js`: police, fire and ambulances; crashes, traffic stops, robberies, carjackings, chases, road rage
+- `scenery.js`: shop signs with names, street trees, power poles and wires, hydrants, street signs, benches, bus stops, grass and wildflowers
 - `net.js`: the road network and the traffic (lanes, junction rules, lights, roundabouts, route finding, car following)
 - `city.js`: the city (street plan, districts, buildings, trips)
 - `draw.js`: everything you see (roads, curbs, sidewalks, markings, buildings with windows, trees, cars, people, lights)
 - `sky.js`: the sky (time of day, sunrise and sunset, clouds, stars and moon); it also lights the reflections
 - `assets/`: grass photo; `assets/tex/` photo textures for asphalt, sidewalks, brick, limestone, stucco, roof shingles, gravel roofs and lawns (all from Poly Haven, CC0, shrunk for the web); `assets/fonts/` Overpass, a highway-sign style typeface (SIL Open Font License, see `LICENSE.txt`)
 - `tests/`: automatic checks (see below)
-- `dig/`: the old digging game, unchanged
 
 ## Testing
 
@@ -62,6 +70,8 @@ The game saves in your browser every 10 seconds and when you leave. Menu → Gra
 - `node tests/grow.mjs [days]` lets the city grow with no help from the player and prints the gridlock meter over time.
 - `node tests/build.mjs [tries]` builds hundreds of random roads, curves and roundabouts and checks no road ever crosses another without a junction.
 - `node tests/lanes.mjs [hours]` checks wide roads: the arrows at a crossroads, left turns using the turn lane, and the same city run with plain streets and then with every avenue widened.
+- `node tests/life.mjs [days]` runs the starting town: people, jobs, trips, walks, earnings and growth.
+- `node tests/law.mjs [days]` adds a police station, fire station and hospital and checks hiding units, stops and tickets, a crash being cleared, a robbery and a chase.
 - `node tests/play.cjs [folder]` opens the game in a hidden browser, checks the tools work and saves screenshots.
 
 ## History
@@ -179,4 +189,20 @@ The owner's request: find and fix bugs, and make everything look and move more r
   - Keyboard shortcuts (tools, Space for pause) worked behind the start screen and the menu, so the city could start running unseen; now keys only work in the game itself (Esc closes the menu).
 - **Speed:** the city now draws about as many triangles as before on High (0.87 million in a test city, same as before), and about 40% more on Medium (0.9 million against 0.64), despite all the new detail. Woods outside town and parked cars use simpler models to keep it there.
 - **Tests:** sim (583 to 615 trips a day, 1 to 16 gave up; before this round 601 to 649 and 0 to 8, it varies run to run), lights everywhere (629 and 8), roundabouts everywhere (442 and 5), growth (see the balance note), build (0 crossings without a junction), lanes and browser checks all pass. The browser check "lights added where wide roads cross" failed once in about eight runs and "phone: hold then drag draws a road" once (a known timing-sensitive check, see round 8); neither could be reproduced (each run builds a different random city). The first now prints the junction's roads if it fails again. A new random-play check (60 random edits with every tool over 8 game days, then save and reload) and a scenario check (roundabout, widen into it, remove it; a one-way dead end; keep going after game over; night switch; save and reload) found no errors.
+
+### Round 10: from a sandbox to a game
+
+The owner's direction: get ready to sell it on Steam, so make it a real game, not a sandbox: start small and grow with coins earned by the townspeople's jobs, upgrade and expand a day at a time; people with names, jobs and bosses you can tap and follow; wrecks with police, fire and ambulance; police that hide and pull people over, chases after robberies and carjackings, reckless drivers and road rage; a better camera and title screen; fix the grass showing through the roads; and take the digging game out completely.
+
+- **The digging game is gone** from this game and from the repository (it can be restored from the history into its own repository at any time).
+- **Title screen:** a loading screen with a bar while the photos and fonts load (nothing pops in half-drawn), then the town circling slowly behind a green city-limit sign with the population on it, and Start / Continue, New city, Settings and Credits. Starting flies the camera down to where you left off while the signs slide in. In game, the menu button (or Esc) pauses with Resume, Settings and Save and quit to title.
+- **Camera:** the two-finger twist was backwards (the map turned against your fingers); it now turns with them, and the ground under your fingers stays under them while you pinch and twist. A flick keeps the map gliding a moment, the scroll wheel zooms smoothly, double tap zooms in. Close in, the view leans over to show the street fronts (it can't go flat top-down any more), and far out it looks down more.
+- **No more grass through the roads** when zoomed out: the depth range now follows the camera's height (it was 2 m to 9 km, too coarse far out), and the ground is drawn just behind everything on it.
+- **A small start:** a crossroads village with 10 stretches of road (Main Street, which runs out of town as a highway, and four side streets), five shops and a dozen houses, about 35 people. Older saves can't carry over (the game is different now); the first start is a new town.
+- **Coins and businesses:** diner, coffee shop, salon, gas station, auto repair, hardware store, grocery, offices, bank and supermarket, each with its own staff, opening hours, earnings and five levels; police station, fire station and hospital (upkeep, no income). Each has a name on its storefront sign. Goals give coin rewards (collect, upgrade, build a road, open a business, reach 40 people, build a police station, and so on).
+- **People:** everyone in town has a name, an age, a home address and (if working) a job title, a workplace, a boss and work hours. They drive to work (late if traffic is bad), walk to lunch, run errands, go for evening walks; you see them walk from the door to their car and from their car in through the door. Visitors pass through or stop to shop.
+- **Police, fire and ambulance:** as described above under How it plays. The police scanner lists the calls (10-50 crash, 10-80 pursuit, 10-31 robbery, 10-52 carjacking, 10-57 hit and run, stops, tickets, arrests).
+- **Looks:** car bodies are rounder (curved silhouettes, rounded noses and tails, roofs narrower than the body, glossy clear-coat paint, rounder wheels); police SUVs in black and white with light bars, ambulances, fire engines with ladders, all with flashing red and blue lights that wash over the road. Street trees, power poles with sagging wires, fire hydrants, green street-name signs on every corner, speed limit signs, bus shelters, benches, bins and planters at the shops, bollards at the gas pumps, mailbox banks at apartments, clumps of grass and Hill Country wildflowers in the fields, denser woods. Wrecks give off steam, burning cars smoke.
+- **Honest notes:** the cars are still made in code (the Sketchfab connection in this workspace still refuses its key, so no outside models could be downloaded; reconnecting it would allow licensed car models). Buildings can be entered by the people in town (they walk in and are listed as inside), and tapping a building shows who's inside; there are no walk-through 3D interiors. A Steam release will also need a desktop wrapper and Steam's own setup, which is a separate step.
+- **Tests:** new `life.mjs` (starting town: 10 roads, 17 buildings, staff for every business, trips, walks, earnings, growth after an upgrade) and `law.mjs` (police hide and run radar, a crash answered with sirens and cleared, stops and tickets, a robbery reported, nothing left blocking the road) both pass. The traffic check (597 trips a day, 11 gave up), lanes and build (0 crossings without a junction) checks pass. The browser check was updated for the new game (title screen, small town, building a police station, upgrading, tapping a driver, police heading out, all the road tools, phone gestures) and passes. The phone check first failed because it aimed at a road that was off screen now the camera leans over when zoomed in; the test now centres the camera first.
 

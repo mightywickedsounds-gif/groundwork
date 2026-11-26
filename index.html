@@ -7,7 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <title>Flowtown</title>
 <meta name="theme-color" content="#101214">
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/","./net.js":"./net.js?v=9","./city.js":"./city.js?v=9","./draw.js":"./draw.js?v=9","./sky.js":"./sky.js?v=9"}}</script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/","./net.js":"./net.js?v=10","./city.js":"./city.js?v=10","./draw.js":"./draw.js?v=10","./sky.js":"./sky.js?v=10","./life.js":"./life.js?v=10","./police.js":"./police.js?v=10","./scenery.js":"./scenery.js?v=10"}}</script>
 <style>
   @font-face { font-family:Overpass; font-weight:600; src:url(assets/fonts/overpass-600.woff2) format('woff2'); font-display:swap; }
   @font-face { font-family:Overpass; font-weight:800; src:url(assets/fonts/overpass-800.woff2) format('woff2'); font-display:swap; }
@@ -90,6 +90,127 @@
   .keys b { font-weight:800; }
   .keys span { opacity:.7; }
 
+
+  /* boot + title: the city itself is the background */
+  #boot { background:#101214; z-index:20; transition:opacity .6s ease; }
+  #boot.gone { opacity:0; pointer-events:none; }
+  .bootIn { display:flex; flex-direction:column; align-items:center; gap:22px; }
+  #loadBar { width:220px; height:8px; background:#2b2e33; border-radius:4px; overflow:hidden; }
+  #loadBar i { display:block; height:100%; width:0; background:var(--yellow); transition:width .25s ease; }
+  .logo { --bg:var(--green); --line:var(--white); align-self:flex-start; display:flex; flex-direction:column; align-items:center; padding:14px 30px 16px; border-radius:14px; box-shadow:inset 0 0 0 4px var(--bg), inset 0 0 0 7px var(--line), 0 6px 0 rgba(0,0,0,.35); }
+  .logo .lt { font-weight:800; font-size:15px; }
+  .logo .lg { font-weight:900; font-size:58px; line-height:.95; margin-top:4px; letter-spacing:-.015em; }
+  .logo .lp { font-weight:900; font-size:22px; margin-top:6px; background:var(--white); color:var(--green); padding:3px 12px 1px; border-radius:6px; }
+  #title { background:none; justify-content:flex-start; align-items:stretch; }
+  .titleCol { display:flex; flex-direction:column; gap:22px; padding:max(34px, env(safe-area-inset-top)) 0 34px max(40px, env(safe-area-inset-left)); width:400px; transform:translateX(0); transition:transform .5s cubic-bezier(.2,.8,.2,1); }
+  #title.leaving .titleCol { transform:translateX(-120%); }
+  .tbtns { display:flex; flex-direction:column; gap:10px; margin-top:auto; }
+  .tb { height:58px; border:0; border-radius:12px; background:var(--asphalt); color:var(--white); font-size:19px; font-weight:900; cursor:pointer; display:flex; align-items:center; justify-content:space-between; padding:0 20px; box-shadow:var(--drop); transition:transform .12s ease, background .12s ease; }
+  .tb:hover { background:var(--tile2); transform:translateX(6px); }
+  .tb:active { transform:translateX(6px) scale(.98); }
+  .tb.main { background:var(--yellow); color:var(--ink); height:66px; font-size:22px; }
+  .tb.main:hover { background:#ffd02a; }
+  .tb svg { width:24px; height:24px; }
+  .ver { position:fixed; right:16px; bottom:12px; font-size:12px; color:var(--white); background:var(--asphalt); padding:3px 8px 1px; border-radius:5px; }
+  body.titleUp #hud, body.titleUp #topr { transform:translateY(-160%); pointer-events:none; } body.titleUp #hint, body.titleUp #toast { display:none; }
+  body.titleUp #bar { transform:translate(-50%, 160%); pointer-events:none; }
+  #hud, #topr { transition:transform .45s cubic-bezier(.2,.8,.2,1); }
+  #bar { transition:transform .45s cubic-bezier(.2,.8,.2,1); }
+  .screen .panel { animation:pop .22s cubic-bezier(.2,.8,.2,1); }
+  @keyframes pop { from { transform:translateY(14px) scale(.97); } to { transform:none; } }
+  .panel.credits .keys { font-size:15px; }
+  #settings .seg { margin-bottom:4px; }
+  @media (max-width:760px) {
+    .titleCol { width:auto; padding:max(28px, env(safe-area-inset-top)) 18px max(22px, env(safe-area-inset-bottom)); align-items:stretch; }
+    #title .logo { align-self:center; }
+    .titleCol .tbtns { margin-top:auto; }
+    .logo .lg { font-size:46px; }
+    #title.leaving .titleCol { transform:translateY(120%); }
+  }
+
+  /* coins and goal on the guide sign */
+  #coins { display:flex; align-items:center; gap:9px; margin-top:8px; }
+  #coins b { font-size:30px; font-weight:900; line-height:1; padding-top:3px; }
+  #coins.spent b { animation:spent .5s ease; } #coins.gain b { animation:gain .5s ease; }
+  @keyframes spent { 0% { color:#ff8a80; transform:translateY(2px); } 100% { color:inherit; transform:none; } }
+  @keyframes gain { 0% { color:var(--yellow); transform:scale(1.12); } 100% { color:inherit; transform:none; } }
+  #coins b { display:inline-block; transform-origin:left center; }
+  .coin { display:inline-block; width:22px; height:22px; border-radius:50%; background:var(--yellow); box-shadow:inset 0 0 0 3px #b38a00, inset 0 0 0 6px var(--yellow), inset 0 0 0 8px #b38a00; flex:none; }
+  #goal { margin-top:10px; padding-top:9px; border-top:2px solid rgba(246,246,241,.85); font-size:12.5px; display:flex; align-items:center; gap:8px; }
+  #goal .gl { background:var(--white); color:var(--green); font-weight:900; font-size:11px; padding:3px 6px 1px; border-radius:4px; }
+  #goal #goalTxt { flex:1; font-weight:800; }
+  #goalPay { font-weight:900; color:var(--yellow); }
+  /* info card: a white sign */
+  #card { --bg:var(--white); --line:var(--ink); color:var(--ink); position:fixed; left:max(14px, env(safe-area-inset-left)); bottom:calc(max(12px, env(safe-area-inset-bottom)) + 84px); width:330px; padding:14px 16px 14px; display:none; pointer-events:auto; }
+  #card.show { display:block; animation:pop .2s cubic-bezier(.2,.8,.2,1); }
+  #card .ch { display:flex; align-items:flex-start; gap:10px; }
+  #card .ch h4 { margin:0; font-size:21px; font-weight:900; line-height:1.05; flex:1; }
+  #card .sub { font-size:12.5px; font-weight:800; opacity:.65; margin-top:3px; }
+  #card .x, .pickHead .x { width:34px; height:34px; border:0; border-radius:8px; background:var(--ink); color:var(--white); padding:8px; cursor:pointer; flex:none; }
+  .pickHead .x { background:var(--tile); }
+  #card .x svg, .pickHead .x svg { width:100%; height:100%; display:block; }
+  #card .rows, .rows { display:grid; grid-template-columns:auto 1fr; gap:5px 14px; margin-top:11px; font-size:13.5px; }
+  #card .rows span, .rows span { opacity:.62; font-weight:800; }
+  #card .rows b, .rows b { font-weight:800; }
+  #card .rows b.link { text-decoration:underline; cursor:pointer; }
+  #card .doing { margin-top:10px; background:var(--ink); color:var(--white); border-radius:7px; padding:7px 10px 5px; font-size:13.5px; font-weight:800; }
+  #card .lvl { display:flex; gap:4px; margin-top:8px; }
+  #card .lvl i { flex:1; height:7px; border-radius:2px; background:rgba(18,19,20,.15); }
+  #card .lvl i.on { background:var(--green); }
+  #card .cb { display:flex; gap:7px; margin-top:12px; }
+  #card .cb button { flex:1; height:42px; border:0; border-radius:9px; background:var(--ink); color:var(--white); font-size:14px; font-weight:900; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:7px; }
+  #card .cb button.y { background:var(--yellow); color:var(--ink); box-shadow:inset 0 0 0 2px var(--ink); }
+  #card .cb button:disabled { opacity:.35; cursor:default; }
+  #card .cb .coin { width:16px; height:16px; box-shadow:inset 0 0 0 2px #b38a00, inset 0 0 0 4px var(--yellow), inset 0 0 0 5px #b38a00; }
+  #card .staff { margin-top:10px; max-height:150px; overflow:auto; border-top:2px solid rgba(18,19,20,.12); padding-top:7px; font-size:13px; }
+  #card .staff div { display:flex; justify-content:space-between; padding:4px 0; cursor:pointer; gap:8px; }
+  #card .staff div span { opacity:.6; font-weight:800; }
+  #card .staff div i { width:8px; height:8px; border-radius:50%; background:rgba(18,19,20,.2); align-self:center; flex:none; }
+  #card .staff div i.in { background:var(--green); }
+  /* build picker */
+  .pickP { width:min(560px, 94vw); max-height:84vh; overflow:auto; }
+  .pickHead { display:flex; align-items:center; justify-content:space-between; }
+  .pickHead h3 { margin:0 !important; }
+  #pickList { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px; margin-top:12px; }
+  #pickList button { height:74px; border:0; border-radius:10px; background:var(--tile); color:var(--white); text-align:left; padding:10px 12px; cursor:pointer; display:flex; flex-direction:column; justify-content:space-between; font-size:15px; font-weight:900; }
+  #pickList button:hover { background:var(--tile2); }
+  #pickList button small { font-size:12px; font-weight:800; display:flex; align-items:center; gap:6px; opacity:.85; }
+  #pickList button small .coin { width:14px; height:14px; box-shadow:inset 0 0 0 2px #b38a00, inset 0 0 0 4px var(--yellow), inset 0 0 0 5px #b38a00; }
+  #pickList button.svc { background:#24364a; }
+  #pickList button:disabled { opacity:.38; cursor:default; }
+  #pickList button.land { grid-column:1/-1; background:var(--green); }
+  #daySum .rows { font-size:16px; gap:7px 22px; }
+  #daySum .rows span { opacity:.85; }
+  #daySum .rows b { text-align:right; }
+  #daySum .rows .tot { border-top:2px solid rgba(246,246,241,.8); padding-top:6px; font-size:19px; font-weight:900; opacity:1; }
+  @media (max-width:760px) {
+    #card { left:8px; right:8px; width:auto; bottom:calc(max(12px, env(safe-area-inset-bottom)) + 132px); padding:12px 13px; }
+    #card .staff { max-height:96px; }
+    #coins b { font-size:24px; }
+    #goal { font-size:11px; }
+  }
+
+  /* police scanner: the latest calls under the gridlock sign */
+  #scan { --bg:var(--asphalt); --line:#3a3d42; position:fixed; right:max(14px, env(safe-area-inset-right)); top:calc(max(12px, env(safe-area-inset-top)) + 96px); width:300px; padding:10px 12px 8px; display:none; }
+  #scan.show { display:block; }
+  #scan .sh { font-weight:900; font-size:12px; color:var(--yellow); display:flex; align-items:center; gap:7px; margin-bottom:4px; }
+  #scan .sh i { width:8px; height:8px; border-radius:50%; background:var(--red); }
+  #scan.ping .sh i { animation:ping 1s ease 3; }
+  @keyframes ping { 50% { background:#4a8cff; } }
+  #scanList .srow { display:flex; gap:8px; align-items:flex-start; padding:5px 0; border-top:1px solid #2e3136; cursor:pointer; font-size:12.5px; line-height:1.25; }
+  #scanList .srow:first-child { border-top:0; }
+  #scanList .srow b { flex:none; background:var(--white); color:var(--ink); font-size:10.5px; font-weight:900; padding:2px 5px 0; border-radius:3px; min-width:44px; text-align:center; }
+  #scanList .srow.c1050 b, #scanList .srow.c1080 b, #scanList .srow.c1031 b, #scanList .srow.c1052 b, #scanList .srow.c1057 b { background:var(--red); color:var(--white); }
+  #scanList .srow.cTICKET b, #scanList .srow.cSTOP b { background:var(--yellow); }
+  #scanList .srow.cCLEAR b { background:var(--green); color:var(--white); }
+  #scanList .srow:hover span { text-decoration:underline; }
+  body.titleUp #scan { display:none; }
+  @media (max-width:760px) {
+    #scan { top:auto; bottom:calc(max(12px, env(safe-area-inset-bottom)) + 124px); right:8px; left:auto; width:min(300px, 62vw); padding:7px 9px 5px; }
+    #scanList .srow:nth-child(n+3) { display:none; }
+    #scan:not(.fresh) #scanList { display:none; } #scan:not(.fresh) { width:auto; } #scan .sh { margin:0; cursor:pointer; }
+    #card.show ~ #scan { display:none; }
+  }
   @media (max-width:760px) {
     #hud { min-width:0; padding:9px 12px 10px; }
     #clock { font-size:26px; }
@@ -99,7 +220,7 @@
     .tileBtn { width:42px; height:42px; padding:10px; }
     #bar { flex-wrap:wrap; justify-content:center; width:calc(100vw - 16px); gap:5px; padding:5px; }
     #tools { gap:5px; } .sep { display:none; }
-    #tools button, #viewBtn { min-width:0; width:calc((100vw - 16px - 10px - 35px) / 8); height:54px; font-size:10px; padding:6px 2px 4px; }
+    #tools button, #viewBtn { min-width:0; width:calc((100vw - 16px - 10px - 40px) / 9); height:54px; font-size:10px; padding:6px 2px 4px; }
     #speed { width:100%; } #speed button { flex:1; height:36px; }
     #tools button kbd { display:none; }
     #tools button .lg { display:none; } #tools button .sh { display:inline; }
@@ -109,18 +230,19 @@
   @media (max-width:420px) { #stats { gap:2px 9px; } #stats b { font-size:14px; } #clock { font-size:24px; } #jam { width:126px; padding:8px 10px 10px; } #jamLbl { font-size:11px; } #jamLbl b { font-size:15px; } }
 </style>
 </head>
-<body>
+<body class="titleUp">
 <canvas id="view"></canvas>
 
 <div id="hud" class="sign">
   <div class="top"><span id="clock" class="num">06:00</span><span id="day">DAY 1</span></div>
+  <div id="coins"><i class="coin"></i><b id="sCoins" class="num">0</b></div>
   <div id="stats">
     <div><b id="sPop" class="num">0</b><span>People</span></div>
+    <div><b id="sJobs" class="num">0</b><span>Jobs</span></div>
     <div><b id="sCars" class="num">0</b><span>Cars</span></div>
     <div><b id="sFlow" class="num">100%</b><span>Flow</span></div>
-    <div><b id="sTrip" class="num">0:00</b><span>Avg trip</span></div>
   </div>
-  <div id="grow"><span id="growTxt">City growing</span><i><u id="growBar"></u></i></div>
+  <div id="goal"><span class="gl">GOAL</span><span id="goalTxt"></span><span id="goalPay" class="num"></span></div>
 </div>
 
 <div id="topr">
@@ -131,11 +253,13 @@
   <button id="menuBtn" class="tileBtn" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
 </div>
 
+<div id="scan" class="sign"><div class="sh"><i></i>SCANNER</div><div id="scanList"></div></div>
 <div id="hint"></div>
 <div id="toast" class="sign"></div>
 
 <div id="bar">
   <div id="tools">
+    <button data-tool="build" aria-label="Build"><kbd>B</kbd><svg viewBox="0 0 24 24"><path d="M4 21V10l8-6 8 6v11M9 21v-6h6v6"/></svg>Build</button>
     <button data-tool="road" aria-label="Road"><kbd>1</kbd><svg viewBox="0 0 24 24"><path d="M7 21 10 3M17 21 14 3M12 5v2M12 11v2M12 17v2"/></svg>Road</button>
     <button data-tool="curve" aria-label="Curve"><kbd>2</kbd><svg viewBox="0 0 24 24"><path d="M4 20C4 9 10 4 20 4"/><path d="M9 20C9 12.5 12.5 9 20 9"/></svg>Curve</button>
     <button data-tool="signal" aria-label="Lights"><kbd>3</kbd><svg viewBox="0 0 24 24"><rect x="8" y="2.5" width="8" height="15" rx="2"/><circle cx="12" cy="6.5" r="1.2"/><circle cx="12" cy="10" r="1.2"/><circle cx="12" cy="13.5" r="1.2"/><path d="M12 17.5V22"/></svg>Lights</button>
@@ -154,53 +278,76 @@
   </div>
 </div>
 
-<div id="start" class="screen show">
-  <div class="panel guide sign">
-    <h1>FLOWTOWN</h1>
-    <h2>Keep the city moving</h2>
-    <div class="big">The city never stops growing. Rebuild its streets with <b>roads, curves, lights, roundabouts, one-ways and extra lanes</b> before the traffic locks up.</div>
-    <div class="btns">
-      <button id="playBtn" class="main"><span>Play</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg></button>
-      <button id="newBtn" style="display:none">New city</button>
+<div id="card" class="sign"></div>
+<div id="pick" class="screen"><div class="panel dark pickP"><div class="pickHead"><h3>Build here</h3><button id="pickX" class="x" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div id="pickList"></div></div></div>
+<div id="daySum" class="screen"><div class="panel guide sign"><h1 id="dsTitle">DAY 1</h1><h2>Closing time</h2><div id="dsRows" class="rows"></div><div class="btns"><button id="dsGo" class="main">Start the next day</button></div></div></div>
+
+<div id="boot" class="screen show">
+  <div class="bootIn">
+    <div class="logo sign"><span class="lt">CITY LIMIT</span><span class="lg">FLOWTOWN</span></div>
+    <div id="loadBar"><i></i></div>
+  </div>
+</div>
+
+<div id="title" class="screen">
+  <div class="titleCol">
+    <div class="logo sign"><span class="lt">CITY LIMIT</span><span class="lg">FLOWTOWN</span><span class="lp" id="titlePop">POP 0</span></div>
+    <div class="tbtns">
+      <button id="playBtn" class="tb main"><span>Start</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg></button>
+      <button id="newBtn" class="tb" style="display:none">New city</button>
+      <button id="setBtn" class="tb">Settings</button>
+      <button id="credBtn" class="tb">Credits</button>
     </div>
   </div>
+  <div class="ver">v10</div>
 </div>
 
 <div id="menu" class="screen">
   <div class="panel dark">
+    <h3>Paused</h3>
+    <div class="btns">
+      <button id="closeBtn" class="main">Resume</button>
+      <button id="menuSetBtn">Settings</button>
+      <button id="quitBtn">Save and quit to title</button>
+    </div>
+  </div>
+</div>
+
+<div id="settings" class="screen">
+  <div class="panel dark">
     <h3>Graphics</h3>
     <div class="seg" id="qRow"><button data-q="high">High</button><button data-q="medium">Medium</button><button data-q="low">Low</button></div>
+    <h3>Sound and sky</h3>
+    <div class="seg"><button id="soundBtn">Sound on</button><button id="nightBtn">Night on</button></div>
     <h3>Controls</h3>
     <div class="keys">
       <b>Move</b><span>Drag, or W A S D</span>
       <b>Turn and tilt</b><span>Right-drag, Q E, or two fingers</span>
-      <b>Zoom</b><span>Scroll or pinch</span>
-      <b>Tools</b><span>1 to 7, Esc to drop</span>
+      <b>Zoom</b><span>Scroll, pinch or double tap</span>
+      <b>Tools</b><span>B, 1 to 7, Esc to drop</span>
+      <b>Look at</b><span>Tap a car, a person or a building</span>
       <b>Pause</b><span>Space</span>
-      <b>Traffic view</b><span>T</span>
     </div>
     <div class="btns">
-      <button id="closeBtn" class="main">Back to the city</button>
-      <button id="soundBtn">Sound on</button>
-      <button id="nightBtn">Night on</button>
-      <button id="resetBtn">New city</button>
-      <button id="digBtn">Play the digging game</button>
+      <button id="setBack" class="main">Back</button>
+      <button id="resetBtn">Start a new city</button>
     </div>
   </div>
 </div>
 
-<div id="over" class="screen">
-  <div class="panel stop sign">
-    <h1>GRIDLOCK</h1>
-    <h2>The city has locked up</h2>
-    <div class="big" id="overTxt"></div>
-    <div class="btns">
-      <button id="goOnBtn" class="main">Keep fixing it</button>
-      <button id="overNewBtn">New city</button>
+<div id="credits" class="screen">
+  <div class="panel dark credits">
+    <h3>Credits</h3>
+    <div class="keys">
+      <b>Engine</b><span>three.js (MIT)</span>
+      <b>Photos</b><span>Poly Haven (CC0)</span>
+      <b>Type</b><span>Overpass (SIL OFL)</span>
     </div>
+    <div class="btns"><button id="credBack" class="main">Back</button></div>
   </div>
 </div>
 
-<script type="module" src="game.js?v=9"></script>
+
+<script type="module" src="game.js?v=10"></script>
 </body>
 </html>
