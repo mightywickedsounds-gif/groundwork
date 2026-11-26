@@ -15,7 +15,8 @@ check('starts small: under 20 buildings', city.buildings.length < 20 && city.bui
 check('every business has staff', biz.every(b => b.biz.staff.length > 0));
 // buying the land next door brings its streets, joined to the highway (no road on top of another)
 { const n0 = net.edges.size; city.unlock(1, 0, true); city.sync(); const xs = net.crossesOthers ? 0 : 0; check('bought land has streets', net.edges.size > n0 + 6, n0 + ' -> ' + net.edges.size); const dup = [...net.edges.values()].filter(e => [...net.edges.values()].some(f => f !== e && ((f.a === e.a && f.b === e.b) || (f.a === e.b && f.b === e.a)))).length; check('no doubled roads', dup === 0, dup); }
-const dt = .1; let rep = 0, maxWalk = 0, maxCars = 0, sums = [];
+const dt = .1; let rep = 0, maxWalk = 0, maxCars = 0, sums = [], maxParked = 0, maxMovers = 0, hiddenLong = 0, backedOut = 0;
+const hidT = new Map();
 for (let i = 0; i < days * DAY / dt; i++) {
   T += dt; life.T = T;
   city.release(dt, 400); net.step(dt); life.step(dt);
@@ -24,6 +25,8 @@ for (let i = 0; i < days * DAY / dt; i++) {
   if (i === 2000) { const d = city.buildings.find(b => b.biz && b.biz.t === 'diner'); life.coins += 5000; life.upgrade(d); life.upgrade(d); city.sync(); life.sync(); }
   if (i % 50 === 0) for (const b of city.buildings) if (b.biz && b.biz.cash > 20) { life.collect(b); life.stat.collected++; }
   life.checkGoal();
+  maxParked = Math.max(maxParked, life.park.parked.size); maxMovers = Math.max(maxMovers, life.park.movers.length); backedOut += life.park.movers.filter(m => m.rev && m.s > 0 && !m.counted && (m.counted = true)).length;
+  for (const c of net.cars) if (c.hide) { const h = (hidT.get(c) || 0) + dt; hidT.set(c, h); if (h > 90) hiddenLong++; }
   maxWalk = Math.max(maxWalk, life.walkers.length); maxCars = Math.max(maxCars, net.cars.length);
   if ((rep += dt) >= DAY / 8) { rep = 0; const st = {}; for (const p of life.people.values()) st[p.state + (p.state === 'in' ? (p.at === p.home ? ':home' : p.at === p.work ? ':work' : ':other') : '')] = (st[p.state + (p.state === 'in' ? (p.at === p.home ? ':home' : p.at === p.work ? ':work' : ':other') : '')] || 0) + 1;
     console.log(`day ${(T / DAY + 1).toFixed(2)} h${life.hour().toFixed(1).padStart(5)} coins ${Math.round(life.coins)} people ${life.people.size} buildings ${city.buildings.length} cars ${net.cars.length} walkers ${life.walkers.length} goal ${life.goalI}`, JSON.stringify(st)); }
@@ -35,5 +38,8 @@ check('people drove to work', sums.length && sums[0].trips > 10, sums[0] && sums
 check('people walked', maxWalk > 0, maxWalk);
 check('businesses earned coins', sums.length && sums[0].biz > 200, sums[0] && sums[0].biz);
 check('the town grew (homes for new workers)', life.people.size > 25, life.people.size);
+check('cars park in the lots in front of businesses', maxParked >= 5 && maxMovers > 0, 'most parked ' + maxParked + ', most driving in/out at once ' + maxMovers);
+check('cars back out of their stalls when they leave', backedOut > 5, backedOut);
+check('no car left waiting unseen in the road', hiddenLong === 0, hiddenLong);
 check('no NaN', [...life.people.values()].every(p => p.state));
 console.log(fails ? fails + ' FAILED' : 'ALL PASSED'); process.exit(fails ? 1 : 0);

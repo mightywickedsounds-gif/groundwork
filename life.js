@@ -2,6 +2,7 @@
 // No drawing here (runs in Node for the tests).
 import { along, closestOnPoly, halfW, WALK_W } from './net.js';
 import { DAY, BLOCK } from './city.js';
+import { createParking } from './parking.js';
 
 const hash = (a, b, c = 0) => { let h = (a * 374761393 + b * 668265263 + c * 2147483647) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 const pickH = (list, a, b, c) => list[Math.floor(hash(a, b, c) * list.length) % list.length];
@@ -59,6 +60,7 @@ export function createLife(net, city, seed = 1) {
     day: null, dayN: 0, goalI: 0, feed: [], events: [], hireT: 0, sliceI: 0, earnT: 0, bought: 0 };
   const newDay = () => ({ biz: 0, tax: 0, fines: 0, upkeep: 0, spent: 0, trips: 0, late: 0, crashes: 0, stops: 0, arrests: 0, robberies: 0 });
   L.day = newDay();
+  L.park = createParking(net, city);   // cars in the parking lots
   const now = () => net.time;
   L.T = 0;   // the game clock (S.time); the game sets it every step
   L.hour = () => (L.T / DAY * 24) % 24;
@@ -87,6 +89,7 @@ export function createLife(net, city, seed = 1) {
       if (p.state === 'in' && !L.bmap.has(p.at)) { p.at = p.home; }
     }
     for (const b of city.buildings) if (b.biz) b.biz.staff = b.biz.staff.filter(id => { const p = L.people.get(id); return p && p.work === b.id; });
+    L.park.prune();
     L.ver++;
   };
   function bizName(b) {
@@ -199,8 +202,28 @@ export function createLife(net, city, seed = 1) {
     // drive: queue a trip; the driver walks out to the car
     p.state = 'wait'; p.why = why; p.dest = to;
     city.queue.push({ from: A, to: B, t: 0, pid: p.id, kindRoll: p.carK, colorRoll: p.carC,
-      ok: car => { car.pid = p.id; p.car = car; p.state = 'drive'; L.day.trips++; const w = [dA.door, dA.walk, dA.kerb]; ghost(p, w); drives(p, car); },
-      fail: why2 => { if (why2 === 'stranded') { p.state = 'in'; p.since = now(); p.until = now() + 40; p.blocked = why2; } else arrive(p, to, why); } });   // roads too full to pull out: they get there anyway (unseen)
+      ok: car => { car.pid = p.id; p.car = car; p.state = 'drive'; L.day.trips++; if (!pullOut(p, A, car, dA)) ghost(p, [dA.door, dA.walk, dA.kerb]); drives(p, car); },
+      fail: why2 => { if (why2 !== 'stranded') unpark(p); if (why2 === 'stranded') { p.state = 'in'; p.since = now(); p.until = now() + 40; p.blocked = why2; } else arrive(p, to, why); } });   // roads too full to pull out: they get there anyway (unseen)
+  }
+  // their car is in the building's lot: they walk out to it, it backs out and drives to the street, then the trip carries on
+  function lanePos(car) { const q = along(car.lane.pts, car.lane.cum, Math.max(0, car.s - car.len / 2)); const lat = car.lat || 0; return [q[0] - q[3] * lat, q[1] + q[2] * lat]; }
+  function pullOut(p, A, car, dA) {
+    if (!p.parked || p.parked.bid !== A.id) { unpark(p); return false; }
+    const sp = L.park.parked.get(p.parked.k); if (!sp) { p.parked = null; return false; }
+    const walkT = Math.hypot(sp.x - dA.door[0], sp.z - dA.door[1]) / 1.6 + .5;
+    car.hide = true; car.hold = true; car.aside = true;
+    const ok = L.park.leave(p.parked.k, car, walkT, () => { car.hide = false; car.hold = false; car.aside = false; }, lanePos(car));
+    if (!ok) { car.hide = false; car.hold = false; car.aside = false; p.parked = null; return false; }
+    ghost(p, [dA.door, [sp.x, sp.z]]); p.parked = null; return true;
+  }
+  function unpark(p) { if (p.parked) { L.park.free(p.parked.k); p.parked = null; } }
+  // drove in: park in the lot if there's one (and a free stall), then walk in from the car
+  function parkAndWalk(p, car, B, why) {
+    const dB = D(B); if (!dB) return false;
+    const k = L.park.arrive(car, B, p.id, (x, z) => { startWalk(p, [[x, z], dB.walk, dB.door], B.id, why); });
+    if (!k) return false;
+    p.parked = { k, bid: B.id }; p.state = 'park'; p.dest = B.id; p.why = why; p.at = B.id;
+    return true;
   }
   // a short walk drawn for someone already in their car (out of the door to the kerb)
   function ghost(p, pts) { const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])); L.walkers.push({ pid: p.id, pts, cum, s: 0, len: cum[cum.length - 1], v: 1.6, ghost: true, ph: 0 }); }
@@ -229,13 +252,14 @@ export function createLife(net, city, seed = 1) {
       if (g.car !== car) return; g.car = null;
       const to = g.dest; if (!to || to.exit || car.gave) { L.guests.delete(g.id); return; }   // out of town
       const dB = D(to); if (!dB) { L.guests.delete(g.id); return; }
-      g.at = to.id; startWalk(g, [[car.x, car.z], dB.kerb, dB.walk, dB.door], to.id, 'shop'); return;
+      g.at = to.id; if (parkAndWalk(g, car, to, 'shop')) return; startWalk(g, [[car.x, car.z], dB.kerb, dB.walk, dB.door], to.id, 'shop'); return;
     }
     const p = car.pid && L.people.get(car.pid); if (!p || p.car !== car) return;
     const to = p.dest, B = L.bmap.get(to); p.car = null;
     if (!B) { p.state = 'in'; p.at = p.home; return; }
     if (car.gave) { L.day.late++; arrive(p, to, p.why); return; }
     const dB = D(B); if (!dB) { arrive(p, to, p.why); return; }
+    if (B.biz && parkAndWalk(p, car, B, p.why)) return;
     startWalk(p, [[car.x, car.z], dB.kerb, dB.walk, dB.door], to, p.why);
   };
 
@@ -255,7 +279,7 @@ export function createLife(net, city, seed = 1) {
   function guestTrip(g, from, to) {
     g.state = 'wait'; g.dest = to;
     city.queue.push({ from, to, t: 0, pid: g.id, kindRoll: g.carK, colorRoll: g.carC,
-      ok: car => { car.pid = g.id; g.car = car; g.state = 'drive'; drives(g, car); if (L.onCarOut) L.onCarOut(car); },
+      ok: car => { car.pid = g.id; g.car = car; g.state = 'drive'; if (!from.exit) { const dA = D(from); if (dA) pullOut(g, from, car, dA); } drives(g, car); if (L.onCarOut) L.onCarOut(car); },
       fail: () => { if (to.exit) L.guests.delete(g.id); else { g.state = 'in'; g.at = to.id; g.until = now() + 60; } } });
   }
   function guests(dt) {
@@ -371,6 +395,7 @@ export function createLife(net, city, seed = 1) {
       if (w.s >= w.len) { L.walkers.splice(i, 1); if (!w.ghost) { const p = L.person(w.pid); if (p && p.walk === w) arrive(p, L.bmap.has(w.to) ? w.to : p.home, w.why); } }
     }
     guests(dt);
+    L.park.step(dt);
     L.hireT += dt; if (L.hireT > 3) { L.hireT = 0; hire(); }
     L.earnT += dt; if (L.earnT >= 1) { earn(L.earnT); L.earnT = 0; }
     // midnight: the day's books
@@ -391,6 +416,7 @@ export function createLife(net, city, seed = 1) {
     const nm = id => { const b = L.bmap.get(id); return b ? (b.biz ? b.biz.name : id === p.home ? 'home' : 'a friend\'s place') : 'somewhere'; };
     if (p.state === 'drive') return p.why === 'work' ? 'Driving to work' : p.why === 'home' ? 'Driving home' : p.why === 'lunch' ? 'Driving to lunch' : 'Driving to ' + nm(p.dest);
     if (p.state === 'walk') return p.why === 'walk' ? 'Out for a walk' : p.why === 'work' ? 'Walking to work' : p.why === 'home' ? 'Walking home' : p.why === 'lunch' ? 'Walking to lunch at ' + nm(p.walk && p.walk.to) : 'Walking to ' + nm(p.walk && p.walk.to);
+    if (p.state === 'park') return 'Parking at ' + ((L.bmap.get(p.dest) || {}).biz || { name: 'the lot' }).name;
     if (p.state === 'wait') return p.blocked ? 'Can\'t get there: no road' : 'Heading out';
     if (p.blocked) return 'Stuck: no road to get there';
     if (p.at === p.home) return 'At home';
@@ -459,7 +485,11 @@ export function createLife(net, city, seed = 1) {
   // after loading: everyone where their day says they'd be
   L.placeAll = function () {
     const h = L.hour();
-    for (const p of L.people.values()) { const sh = p.work && L.shift(p); p.state = 'in'; p.walk = p.car = null; p.at = sh && hrIn(h, sh[0], sh[1] - .3) ? p.work : p.home; if (p.at === p.work) p.workDay = L.dayNum(); }
+    L.park.parked.clear(); L.park.movers.length = 0;
+    for (const p of L.people.values()) {
+      const sh = p.work && L.shift(p); p.state = 'in'; p.walk = p.car = null; p.parked = null; p.at = sh && hrIn(h, sh[0], sh[1] - .3) ? p.work : p.home; if (p.at === p.work) p.workDay = L.dayNum();
+      if (p.at === p.work && !p.kid) { const w = L.bmap.get(p.work), hm = L.bmap.get(p.home); if (w && hm && Math.hypot(w.x - hm.x, w.z - hm.z) > 90) { const k = L.park.parkNow(w, p.id, p.carK, p.carC); if (k) p.parked = { k, bid: w.id }; } }
+    }
     L.walkers.length = 0;
   };
   // open a business (or a service) at a spot on a street

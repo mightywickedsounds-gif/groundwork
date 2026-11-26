@@ -39,5 +39,5 @@ check('crash cleared', (seen.CLEAR || 0) > 0);
 check('traffic stops and tickets', (seen.TICKET || 0) + (seen['10-80'] || 0) > 0, JSON.stringify(seen));
 check('robbery reported', seen['10-31'] > 0);
 check('a reported driver gets a unit sent after them', !reported || boloGone, reported ? reported.fn : 'nobody to report');
-check('nothing left holding the road', net.cars.filter(c => c.hold && !c.keep && !c.crashed && !c.chased).length === 0);
+check('nothing left holding the road', net.cars.filter(c => c.hold && !c.keep && !c.crashed && !c.chased && !(c.hide && life.park.movers.some(m => m.car === c))).length === 0);   // (a car waiting for its driver to back out of a stall is fine)
 console.log(fails ? fails + ' FAILED' : 'ALL PASSED'); process.exit(fails ? 1 : 0);

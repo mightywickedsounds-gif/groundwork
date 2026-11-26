@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ROAD_W, ONEWAY_W, WALK_W, LANE_W, RING_R, along, halfW, laneOff, rng, closestOnPoly } from './net.js';
+import { frame as FR, layout as LAYOUT, entries as ENTRIES } from './parking.js';
 
 
 const Y_ROAD = .03, Y_WALK = .16, Y_MARK = .045;
@@ -649,52 +650,60 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
     cm.castShadow = true; cm.receiveShadow = true; g.add(cm);
   }
   // lots: parking, parks, yards
-  const lotG = new Geo(), lines = new Geo(), parks = new Geo(), shore = new Geo(), pond = new Geo(), parked = [], lotLights = [], drive = new Geo();
+  const lotG = new Geo(), lines = new Geo(), parks = new Geo(), shore = new Geo(), pond = new Geo(), parked = [], lotLights = [], drive = new Geo(), blue = new Geo(), islands = new Geo(), curbs = [], wheelStops = [], accSigns = [], stopSigns = [];
+  const islandTrees = opt.more || (opt.more = []);
   for (const l of city.lots) {
     const x0 = l.x - l.w / 2, x1 = l.x + l.w / 2, z0 = l.z - l.d / 2, z1 = l.z + l.d / 2;
     if (l.k === 'parking') {
       // laid out in the lot's own frame (a lot in front of a building turns with it), then put in place
-      const lr = l.rot || 0, lc = Math.cos(lr), ls = Math.sin(lr), W = (x, z) => { const u = x - l.x, v = z - l.z; return [l.x + u * lc - v * ls, l.z + u * ls + v * lc]; };
+      const lr = l.rot || 0, W = FR(l).W, lay = LAYOUT(l), dyn = !!l.bid;   // (a business's lot: its cars come and go, drawn by the game)
       lotG.flat(W(x0, z0), W(x1, z0), W(x1, z1), W(x0, z1), .05);
       for (let x = x0 + 14; x < x1 - 8; x += 30) for (let z = z0 + 11.6; z < z1 - 6; z += 23.2) lotLights.push(W(x, z));
-      if (l.bid && l.w > 16) lotLights.push(W(x0 + 2, z0 + 1.5));
+      if (dyn && l.w > 16) lotLights.push(W(x0 + 2, z0 + 1.5));
       let s = Math.floor(l.seed * 1e6) || 1; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
-      let z = z0 + 1, row = 0;
-      while (z + 5.2 <= z1 - 1) {
-        const flip = row % 2;
-        for (let x = x0 + 1; x + 2.6 <= x1 - 1; x += 2.6) {
-          lines.flat(W(x, z), W(x + .1, z), W(x + .1, z + 5), W(x, z + 5), .065);
-          if (r() < l.fill) { const p = W(x + 1.3, z + 2.6); parked.push([p[0], p[1], (flip ? -1 : 1) * Math.PI / 2 + (r() - .5) * .06 - lr, r()]); }
+      const quad = (G, a, b2, c, d2, y) => G.flat(W(a[0], a[1]), W(b2[0], b2[1]), W(c[0], c[1]), W(d2[0], d2[1]), y);
+      lay.rows.forEach((row, ri) => {
+        const { z, flip } = row, head = flip ? z + 5 : z;   // the end of the stall the car noses into
+        for (const st of row.stalls) {
+          const xl = st.x - 1.3;
+          quad(lines, [xl, z], [xl + .1, z], [xl + .1, z + 5], [xl, z + 5], .065);
+          wheelStops.push([...W(st.x, head + (flip ? -.55 : .55)), -lr]);
+          if (!dyn && r() < l.fill) { const p = W(st.x, st.z); parked.push([p[0], p[1], (flip ? -1 : 1) * Math.PI / 2 + (r() - .5) * .06 - lr, r()]); }
         }
-        z += flip ? 5.2 : 5.2 + 6.4; row++;
-      }
+        if (row.stalls.length) { const xr = row.stalls[row.stalls.length - 1].x + 1.3; quad(lines, [xr - .1, z], [xr, z], [xr, z + 5], [xr - .1, z + 5], .065); }
+        // the accessible stall nearest the door: blue, with its sign
+        if (ri === 0 && row.stalls.length > 6) { const st = row.stalls[Math.floor(row.stalls.length / 2)]; quad(blue, [st.x - 1.2, z + .1], [st.x + 1.2, z + .1], [st.x + 1.2, z + 4.9], [st.x - 1.2, z + 4.9], .062); const sp = W(st.x, flip ? z + 5.4 : z - .35); accSigns.push([sp[0], sp[1], -lr]); }
+        // planted islands at the ends of the rows, with a tree
+        if (row.island) for (const xe of [row.ends[0] + 1.3, row.ends[1] - 1.3]) {
+          quad(islands, [xe - 1.2, z + .2], [xe + 1.2, z + .2], [xe + 1.2, z + 4.8], [xe - 1.2, z + 4.8], .14);
+          for (const [p0, p1] of [[[xe - 1.25, z + .15], [xe + 1.25, z + .15]], [[xe + 1.25, z + .15], [xe + 1.25, z + 4.85]], [[xe + 1.25, z + 4.85], [xe - 1.25, z + 4.85]], [[xe - 1.25, z + 4.85], [xe - 1.25, z + .15]]]) curbs.push([W(p0[0], p0[1]), W(p1[0], p1[1])]);
+          const tp = W(xe, z + 2.5); if (islandTrees) islandTrees.push([+tp[0].toFixed(2), +tp[1].toFixed(2), .5 + r() * .15, r() * .69]);
+        }
+      });
       // driveways: from the side of the lot facing the nearest street, across the sidewalk (concrete) and down a curb cut onto the road
-      if (opt.net) {
-        let best = null, bd = 90;
-        for (const e of opt.net.edges.values()) {
-          if (e.ring || !e.bb || e.bb[0] - 90 > l.x || e.bb[1] + 90 < l.x || e.bb[2] - 90 > l.z || e.bb[3] + 90 < l.z) continue;
-          const c = closestOnPoly(e.pts, e.cum, l.x, l.z); if (c.d < bd) { bd = c.d; best = { e, c }; }
+      const ents = opt.net ? ENTRIES(l, opt.net) : [];
+      for (const en of ents) {
+        const { P, n, t, L } = en, at = s2 => [P[0] + n[0] * s2, P[1] + n[1] * s2], sw = Math.max(0, L - WALK_W), w = 3.3;
+        const prof = [[0, .055], [Math.max(.1, sw), .175], [Math.max(.2, L - .45), .175], [L + .05, .04]];
+        for (let k = 0; k + 1 < prof.length; k++) {
+          const [s0, y0] = prof[k], [s1, y1] = prof[k + 1], a2 = at(s0), b2 = at(s1), w0 = k === 2 ? w + .9 : w, w1 = k >= 2 ? w + .9 : w;
+          const i = drive.v(a2[0] - t[0] * w0, y0, a2[1] - t[1] * w0), j = drive.v(a2[0] + t[0] * w0, y0, a2[1] + t[1] * w0), kk = drive.v(b2[0] + t[0] * w1, y1, b2[1] + t[1] * w1), m = drive.v(b2[0] - t[0] * w1, y1, b2[1] - t[1] * w1);
+          drive.up(i, j, kk); drive.up(i, kk, m);
         }
-        if (best) {
-          const q = along(best.e.pts, best.e.cum, best.c.s), dx = q[0] - l.x, dz = q[1] - l.z, lx = dx * lc + dz * ls, lz = -dx * ls + dz * lc;
-          const alongX = Math.abs(lx) > Math.abs(lz), sgn = alongX ? Math.sign(lx) : Math.sign(lz);
-          const n = alongX ? [lc * sgn, ls * sgn] : [-ls * sgn, lc * sgn], t = [-n[1], n[0]];
-          const half = alongX ? l.w / 2 : l.d / 2, span = alongX ? l.d : l.w, hw = halfW(best.e);
-          const spots = span > 26 ? [-(span / 2 - 5.5), span / 2 - 5.5] : [0];
-          for (const u of spots) {
-            const P = [l.x + n[0] * half + t[0] * u, l.z + n[1] * half + t[1] * u];
-            const c = closestOnPoly(best.e.pts, best.e.cum, P[0], P[1]); if (c.d - hw > 30 || c.d - hw < .8) continue;
-            const r = along(best.e.pts, best.e.cum, c.s); if (Math.abs((r[0] - P[0]) * n[0] + (r[1] - P[1]) * n[1]) < c.d * .8) continue;   // the street isn't straight out from here
-            const at = s => [P[0] + n[0] * s, P[1] + n[1] * s], L = c.d - hw, sw = Math.max(0, L - WALK_W), w = 3.3;
-            // [distance out, height]: lot edge, sidewalk's back edge, its kerb edge, the road
-            const prof = [[0, .055], [Math.max(.1, sw), .175], [Math.max(.2, L - .45), .175], [L + .05, .04]];
-            for (let k = 0; k + 1 < prof.length; k++) {
-              const [s0, y0] = prof[k], [s1, y1] = prof[k + 1], a = at(s0), b2 = at(s1), w0 = k === 2 ? w + .9 : w, w1 = k >= 2 ? w + .9 : w;
-              const i = drive.v(a[0] - t[0] * w0, y0, a[1] - t[1] * w0), j = drive.v(a[0] + t[0] * w0, y0, a[1] + t[1] * w0), kk = drive.v(b2[0] + t[0] * w1, y1, b2[1] + t[1] * w1), m = drive.v(b2[0] - t[0] * w1, y1, b2[1] - t[1] * w1);
-              drive.up(i, j, kk); drive.up(i, kk, m);
-            }
-          }
-        }
+        // a stop bar where the driveway meets the sidewalk, and a stop sign on the right going out
+        const s0 = Math.max(.1, sw - .5), a2 = at(s0); lines.flat([a2[0] - t[0] * .1 - n[0] * .25, a2[1] - t[1] * .1 - n[1] * .25], [a2[0] + t[0] * 3.1 - n[0] * .25, a2[1] + t[1] * 3.1 - n[1] * .25], [a2[0] + t[0] * 3.1 + n[0] * .25, a2[1] + t[1] * 3.1 + n[1] * .25], [a2[0] - t[0] * .1 + n[0] * .25, a2[1] - t[1] * .1 + n[1] * .25], .07);
+        const ss = at(Math.max(.1, sw - .8)); stopSigns.push([ss[0] + t[0] * 4.1, ss[1] + t[1] * 4.1, Math.atan2(n[1], -n[0])]);
+      }
+      // a curb all round, open at the driveways; a planted strip with shrubs between the lot and the street
+      const corners = [W(x0, z0), W(x1, z0), W(x1, z1), W(x0, z1)];
+      for (let k = 0; k < 4; k++) {
+        const A = corners[k], B = corners[(k + 1) % 4], len = Math.hypot(B[0] - A[0], B[1] - A[1]); if (len < .5) continue;
+        const ux = (B[0] - A[0]) / len, uz = (B[1] - A[1]) / len; let cuts = [];
+        for (const en of ents) { const pr = (en.P[0] - A[0]) * ux + (en.P[1] - A[1]) * uz, off = Math.abs((en.P[0] - A[0]) * -uz + (en.P[1] - A[1]) * ux); if (off < 1 && pr > -4 && pr < len + 4) cuts.push([pr - 3.6, pr + 3.6]); }
+        cuts.sort((p, q) => p[0] - q[0]); let s0 = 0;
+        const seg = (a2, b2) => { if (b2 - a2 > .3) curbs.push([[A[0] + ux * a2, A[1] + uz * a2], [A[0] + ux * b2, A[1] + uz * b2]]); };
+        for (const [c0, c1] of cuts) { seg(s0, Math.max(s0, c0)); s0 = Math.max(s0, c1); } seg(s0, len);
+        if (cuts.length) for (let s3 = 2; s3 < len - 1.5; s3 += 2.7) { if (cuts.some(([c0, c1]) => s3 > c0 - 1 && s3 < c1 + 1)) continue; const nx = uz, nz = -ux; shrubs.push([A[0] + ux * s3 + nx * .55, A[1] + uz * s3 + nz * .55, .45 + r() * .2]); }
       }
     } else {
       parks.flat([x0, z0], [x1, z0], [x1, z1], [x0, z1], .035);
@@ -711,6 +720,23 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
   if (pond.p.length) { const m = new THREE.Mesh(pond.build(), M.pond || (M.pond = new THREE.MeshStandardMaterial({ color: 0x2f4f4a, roughness: .04, metalness: .1 }))); m.receiveShadow = true; g.add(m); }
   if (lotG.p.length) { const m = new THREE.Mesh(lotG.build(), M.lot); m.receiveShadow = true; g.add(m); }
   if (lines.p.length) g.add(new THREE.Mesh(lines.build(), M.mark));
+  if (blue.p.length) g.add(new THREE.Mesh(blue.build(), M.accPaint || (M.accPaint = new THREE.MeshStandardMaterial({ color: 0x1f4fa0, roughness: .7, polygonOffset: true, polygonOffsetFactor: -2 }))));
+  if (islands.p.length) { const m = new THREE.Mesh(islands.build(), M.mulchIsl || (M.mulchIsl = patchy(new THREE.MeshStandardMaterial({ map: T.lawn, color: 0x7d8f52, roughness: 1 }), .4, 3))); m.receiveShadow = true; g.add(m); }
+  if (curbs.length) {   // concrete curbs round the lots and islands
+    const cm = new THREE.InstancedMesh(new THREE.BoxGeometry(1, .16, .3).translate(0, .08, 0), M.curb, curbs.length);
+    curbs.forEach(([a2, b2], i) => { const L = Math.hypot(b2[0] - a2[0], b2[1] - a2[1]); dummy.position.set((a2[0] + b2[0]) / 2, .03, (a2[1] + b2[1]) / 2); dummy.rotation.set(0, Math.atan2(-(b2[1] - a2[1]), b2[0] - a2[0]), 0); dummy.scale.set(L, 1, 1); dummy.updateMatrix(); cm.setMatrixAt(i, dummy.matrix); });
+    cm.receiveShadow = true; cm.castShadow = Q.shadows > 1; g.add(cm); dummy.scale.set(1, 1, 1);
+  }
+  if (wheelStops.length) {   // concrete wheel stops at the head of each stall
+    const wm = new THREE.InstancedMesh(new THREE.BoxGeometry(1.8, .13, .22).translate(0, .12, 0), M.curb, wheelStops.length);
+    wheelStops.forEach((q, i) => { dummy.position.set(q[0], 0, q[1]); dummy.rotation.set(0, q[2], 0); dummy.updateMatrix(); wm.setMatrixAt(i, dummy.matrix); });
+    wm.receiveShadow = true; g.add(wm);
+  }
+  for (const [list, geo, mat] of [[accSigns, M.accSignGeo || (M.accSignGeo = mergeGeometries([new THREE.CylinderGeometry(.04, .04, 2.2, 6).translate(0, 1.1, 0), new THREE.BoxGeometry(.04, .45, .32).translate(0, 2, 0)])), M.accSignMat || (M.accSignMat = new THREE.MeshStandardMaterial({ color: 0x2456b0, roughness: .5 }))],
+                                  [stopSigns, M.stopGeo || (M.stopGeo = mergeGeometries([new THREE.CylinderGeometry(.04, .04, 2.1, 6).translate(0, 1.05, 0), new THREE.CylinderGeometry(.3, .3, .04, 8).rotateZ(Math.PI / 2).translate(0, 2.05, 0)])), M.stopMat || (M.stopMat = new THREE.MeshStandardMaterial({ color: 0xb3221a, roughness: .5 }))]]) {
+    if (!list.length) continue; const im = new THREE.InstancedMesh(geo, mat, list.length);
+    list.forEach((q, i) => { dummy.position.set(q[0], .05, q[1]); dummy.rotation.set(0, q[2], 0); dummy.updateMatrix(); im.setMatrixAt(i, dummy.matrix); }); im.castShadow = Q.shadows > 1; g.add(im);
+  }
   if (parks.p.length) { const m = new THREE.Mesh(parks.build(), M.park || (M.park = patchy(new THREE.MeshStandardMaterial({ map: T.lawn, color: 0x9cb46a, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1 }), .35, 8))); m.receiveShadow = true; g.add(m); }
   // houses: a lawn, a concrete driveway to the street, a wooden privacy fence round the back yard, sometimes a pool
   const lawn = new Geo(), pool = new Geo(), deck = new Geo(), fence = [], boxes = [];

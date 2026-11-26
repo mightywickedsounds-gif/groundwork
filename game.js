@@ -544,7 +544,8 @@ function walkPos(w) {
 }
 // where a person is right now: [x, z] (in a car, on foot, or inside a building)
 function personPos(p) {
-  if (p.car && net.cars.includes(p.car)) return [p.car.x, p.car.z];
+  if (p.car && net.cars.includes(p.car) && !p.car.hide) return [p.car.x, p.car.z];
+  for (const mv of life.park.movers) if (mv.pid === p.id && !(mv.wait > 0)) { const q = life.park.pose(mv); return [q[0], q[1]]; }
   for (const u of law.units) { if (u.car && u.car.pid === p.id && net.cars.includes(u.car)) return [u.car.x, u.car.z]; if (u.state === 'hide' && u.pid === p.id && u.spot) return [u.spot.x, u.spot.z]; }
   if (p.walk) { const q = walkPos(p.walk); return [q[0], q[1]]; }
   const b = life.bmap.get(p.at); return b ? [b.x, b.z] : null;
@@ -575,7 +576,9 @@ function onTapWorld(x, z, sx, sy) {
   // people: on foot or in a car
   const r = Math.max(3.2, snapR() * .55); let best = null, bd = r;
   for (const w of life.walkers) { if (w.ghost) continue; const q = walkPos(w), d = Math.hypot(q[0] - x, q[1] - z); if (d < bd) { bd = d; best = w.pid; } }
-  for (const c of net.cars) { if (!c.pid) continue; const d = Math.max(0, Math.hypot(c.x - x, c.z - z) - c.len * .35); if (d < bd) { bd = d; best = c.pid; } }
+  for (const c of net.cars) { if (!c.pid || c.hide) continue; const d = Math.max(0, Math.hypot(c.x - x, c.z - z) - c.len * .35); if (d < bd) { bd = d; best = c.pid; } }
+  for (const sp of life.park.parked.values()) { const d = Math.max(0, Math.hypot(sp.x - x, sp.z - z) - 1.8); if (d < bd) { bd = d; best = sp.pid; } }
+  for (const mv of life.park.movers) { const q = life.park.pose(mv), d = Math.max(0, Math.hypot(q[0] - x, q[1] - z) - 1.8); if (d < bd) { bd = d; best = mv.pid; } }
   for (const u of law.units) if (u.state === 'hide' && u.spot && u.pid) { const d = Math.hypot(u.spot.x - x, u.spot.z - z) - 1.5; if (d < bd) { bd = d; best = u.pid; } }
   if (best != null && life.person(best)) { select({ k: 'p', id: best }); return; }
   const b = hitBuilding(sx, sy); if (b) { select({ k: 'b', id: b.id }); return; }
@@ -601,6 +604,7 @@ function setFollow(id) {
   if (q) flyTo({ x: q[0], z: q[1], dist: Math.min(cam.dist, 56), pitch: .5, yaw: h ? Math.atan2(-h[0], -h[1]) : cam.yaw }, .8);
 }
 function personHeading(p) {
+  for (const mv of life.park.movers) if (mv.pid === p.id && !(mv.wait > 0)) { const q = life.park.pose(mv); return [Math.cos(q[2]), -Math.sin(q[2])]; }
   if (p.car && net.cars.includes(p.car)) return [p.car.hx, p.car.hz];
   for (const u of law.units) if (u.car && u.car.pid === p.id && net.cars.includes(u.car)) return [u.car.hx, u.car.hz];
   if (p.walk) { const q = walkPos(p.walk); return [q[2], q[3]]; }
@@ -936,6 +940,7 @@ function drawCars() {
   const lit = beamMat.opacity > .02; let nb = 0;
   flashes.length = 0; let nBlob = 0;
   for (const c of net.cars) {
+    if (c.hide) continue;   // (still in its parking stall: the parked copy is drawn below)
     const look = LOOK(c), m = fleet[look], i = cnt[look]++; if (i >= m.instanceMatrix.count) continue;
     const yaw = Math.atan2(-c.hz, c.hx) + (c.spin || 0);
     dummy.position.set(c.x, 0, c.z); dummy.rotation.set(0, yaw, c.crashed ? .02 : 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix();
@@ -944,6 +949,17 @@ function drawCars() {
     m.setMatrixAt(i, dummy.matrix); m.setColorAt(i, c.type === 'bus' ? col.setRGB(.96, .6, .03, THREE.SRGBColorSpace) : c.type === 'police' || c.type === 'ems' || c.type === 'fire' ? col.setRGB(1, 1, 1) : c.type === 'truck' ? carColor((c.color * 3) % 1, col) : carColor(c.color, col));
     m.geometry.attributes.aBrake.array[i] = c.brake + 2 * (c.sig || 0) + (c.siren || c.lights ? 8 : 0);
     if (lit) { const f = c.len / 2 + 6.5; dummy.position.set(c.x + c.hx * f, .1, c.z + c.hz * f); dummy.scale.set(13, 1, 7.5); dummy.updateMatrix(); beams.setMatrixAt(nb++, dummy.matrix); }
+  }
+  // cars in the parking lots: parked, pulling in, backing out
+  const pk = life.park, putCar = (type, id, color, x, z, yaw, brake) => {
+    const look = LOOK({ type, id }), m = fleet[look]; if (!m) return; const i = cnt[look]++; if (i >= m.instanceMatrix.count) return;
+    dummy.position.set(x, 0, z); dummy.rotation.set(0, yaw, 0); dummy.updateMatrix(); m.setMatrixAt(i, dummy.matrix); m.setColorAt(i, type === 'bus' ? col.setRGB(.96, .6, .03, THREE.SRGBColorSpace) : type === 'truck' ? carColor((color * 3) % 1, col) : carColor(color, col)); m.geometry.attributes.aBrake.array[i] = brake;
+    if (nBlob < carBlobs.instanceMatrix.count) { dummy.position.set(x, .2, z); dummy.scale.set(5.6, 1, 3); dummy.updateMatrix(); carBlobs.setMatrixAt(nBlob++, dummy.matrix); dummy.scale.set(1, 1, 1); }
+  };
+  for (const sp of pk.parked.values()) if (!sp.moving) putCar(sp.type, sp.id, sp.color, sp.x, sp.z, sp.yaw, 0);
+  for (const mv of pk.movers) {
+    if (mv.wait > 0) { const sp = pk.parked.get(mv.k); if (sp) putCar(sp.type, sp.id, sp.color, sp.x, sp.z, sp.yaw, 0); continue; }
+    const q = pk.pose(mv); putCar(mv.type, mv.id, mv.color, q[0], q[1], q[2], (mv.v < 1.2 ? 1 : 0) + 2 * (mv.sig || 0));
   }
   // police parked out of sight at their spots, watching the traffic
   for (const u of law.units) {
