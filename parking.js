@@ -19,7 +19,9 @@ export function layout(l) {
     for (let x = x0 + 1, i = 0; x + STALL_W <= x1 - 1; x += STALL_W, i++) stalls.push({ x: x + STALL_W / 2, z: z + 2.6, i });
     // the ends of each row stay clear for a planted island (wider lots)
     const isl = l.w > 22 && stalls.length > 7 ? 1 : 0;
-    rows.push({ z, flip, aisle, stalls: stalls.slice(isl, stalls.length - isl), island: isl, ends: [x0 + 1, x1 - 1] });
+    let st = stalls.slice(isl, stalls.length - isl), access = null;
+    if (row === 0 && st.length > 6) { const m = Math.floor(st.length / 2); access = { x: st[m].x, ax: st[m + 1].x }; st = st.filter((_, j) => j !== m + 1); }   // the accessible stall nearest the door, and its striped aisle (nobody parks there)
+    rows.push({ z, flip, aisle, stalls: st, island: isl, ends: [x0 + 1, x1 - 1], access });
     z += flip ? ROW_GAP : ROW_GAP + AISLE; row++;
   }
   l._lay = { key: l.x + ',' + l.z + ',' + l.w + ',' + l.d + ',' + (l.rot || 0), rows, x0, x1, z0, z1 };

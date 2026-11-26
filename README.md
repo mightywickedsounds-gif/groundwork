@@ -280,3 +280,21 @@ The owner: make the way the driveway concrete joins the parking lot (and the roa
 - **Cars use it properly:** cars head for the driveway itself (they used to stop in front of the building, which on a wide lot could be past the entrance), turn in keeping to the right-hand half, and leave by the other half from the exit. Leaving, they stop at the bar with the blinker on for the way they're turning (right with the traffic, left across it).
 - **Nothing stands in the way:** bus shelters, poles, hydrants, signs and street trees are kept off every driveway (a bus shelter had been put right on one).
 - **Tests:** life (up to 26 cars parked at once, 112 backing out in two days), law and the browser check pass.
+
+### Round 18: roads and parking lots, one detail at a time
+
+The owner: an hour on the roads and parking lots, quality over quantity, one thing at a time. Each item below was looked at close up before moving on.
+
+1. **Line paint like a real US town.** Quiet house streets have no paint at all (they had a white dashed centre line, which in the US only separates lanes going the same way). Other two-way roads get a dashed yellow centre line; avenues keep their double yellow and turn lanes. Edge lines only on the bigger roads.
+2. **Gutters and curbs.** A concrete gutter strip now runs along every curb (straight stretches, round every corner and every dead end), and the curb has its own crisp top edge.
+3. **Grass strips on house streets.** Between the curb and the sidewalk on house streets there's now a strip of grass, and the street trees and street lights stand in it, the way most American suburbs look. The sidewalk is the concrete behind it; people walk on the concrete.
+4. **House driveways reach the street.** Each house's driveway now carries on across the grass strip and the sidewalk, down a cut curb onto the road. Street lights, trees, poles and hydrants are kept off every driveway (one street light had been standing in the middle of one).
+5. **Worn asphalt.** Thin black crack-sealant lines wander across the roads in places, with the odd darker square patch where the road was dug up and repaired.
+6. **Parking lot surfaces.** Oil drips where engines sit in the stalls, a slightly darker, more weathered lot surface.
+7. **Shopfront walkways.** Business lots now have a raised concrete walkway along the shop front, with a curb, and the first row of stalls faces it (cars used to nose right up to the wall).
+8. **Curb ramps at crosswalks.** A yellow warning pad (with its little raised bumps) where each crosswalk meets the corner.
+9. **Storm drains and manholes.** Drain grates in the gutter near each corner, and a manhole cover in the lane now and then.
+10. **The highway out of town is a country road.** Beyond the town's land: paved shoulders and a gravel edge, no curbs, sidewalks or street lights, with the power line alongside. When you buy that land, it turns into a town street.
+11. **Accessible parking done properly.** The blue accessible stall has its striped access aisle beside it, and nobody parks in the aisle.
+
+- **Tests:** life (cars parking and backing out), law, build, lanes and the browser check all pass.

@@ -737,7 +737,13 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
         }
         if (row.stalls.length) { const xr = row.stalls[row.stalls.length - 1].x + 1.3; quad(lines, [xr - .1, z], [xr, z], [xr, z + 5], [xr - .1, z + 5], .065); }
         // the accessible stall nearest the door: blue, with its sign
-        if (ri === 0 && row.stalls.length > 6) { const st = row.stalls[Math.floor(row.stalls.length / 2)]; quad(blue, [st.x - 1.2, z + .1], [st.x + 1.2, z + .1], [st.x + 1.2, z + 4.9], [st.x - 1.2, z + 4.9], .062); const sp = W(st.x, flip ? z + 5.4 : z - .35); accSigns.push([sp[0], sp[1], -lr]); }
+        if (row.access) {
+          const ax = row.access.x, bx = row.access.ax; quad(blue, [ax - 1.2, z + .1], [ax + 1.2, z + .1], [ax + 1.2, z + 4.9], [ax - 1.2, z + 4.9], .062);
+          const sp = W(ax, flip ? z + 5.4 : z - .35); accSigns.push([sp[0], sp[1], -lr]);
+          // the access aisle beside it: white diagonal stripes, a line down each side
+          for (const xx of [bx - 1.25, bx + 1.25]) quad(lines, [xx - .06, z], [xx + .06, z], [xx + .06, z + 5], [xx - .06, z + 5], .066);
+          for (let zz = z + .5; zz < z + 4.6; zz += .9) { const p0 = [bx - 1.2, zz], p1 = [bx + 1.2, zz + .9]; const L2 = Math.hypot(2.4, .9), nx = -.9 / L2 * .07, nz = 2.4 / L2 * .07; quad(lines, [p0[0] - nx, p0[1] - nz], [p0[0] + nx, p0[1] + nz], [p1[0] + nx, Math.min(z + 5, p1[1] + nz)], [p1[0] - nx, Math.min(z + 5, p1[1] - nz)], .066); }
+        }
         // planted islands at the ends of the rows, with a tree
         if (row.island) for (const xe of [row.ends[0] + 1.3, row.ends[1] - 1.3]) {
           quad(islands, [xe - 1.2, z + .2], [xe + 1.2, z + .2], [xe + 1.2, z + 4.8], [xe - 1.2, z + 4.8], .14);
