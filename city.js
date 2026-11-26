@@ -470,7 +470,7 @@ export function createCity(net, seed = 7) {
       tries++;
       if (!q.from.e || !q.to.e) { if (q.t < 60) keep.push(q); else { C.pending++; fail(q, 'stranded'); } continue; }
       if (net.cars.length >= maxCars) { if (q.t < 20) keep.push(q); else { C.pending++; fail(q, 'cap'); } continue; }
-      const r = net.spawn({ e: q.from.e, x: q.from.fx, z: q.from.fz }, { e: q.to.e, x: q.to.fx, z: q.to.fz }, q.kindRoll ?? Math.random(), q.colorRoll ?? Math.random());
+      const r = net.spawn(q.fromAt || { e: q.from.e, x: q.from.fx, z: q.from.fz }, q.toAt || { e: q.to.e, x: q.to.fx, z: q.to.fz }, q.kindRoll ?? Math.random(), q.colorRoll ?? Math.random());   // (at a lot: from/to its driveway)
       if (r === 'busy') { if (q.t < 60) keep.push(q); else { C.pending++; fail(q, 'busy'); } continue; }
       if (r === 'stranded') { out.stranded++; q.from.cut = (q.from.cut || 0) + 1; fail(q, 'stranded'); continue; }
       r.home = q.from.id; out.spawned++; if (q.ok) q.ok(r);

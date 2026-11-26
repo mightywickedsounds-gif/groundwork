@@ -256,3 +256,27 @@ The owner: the parking lots were just painted slabs, not connected to the road.
 
 - **Every parking lot now has a driveway** from the side facing its street: a concrete apron across the sidewalk (at sidewalk height) and a curb cut down onto the road. Lots wider than about 26 m get two entrances, one near each end. This works for the lots in front of businesses and for the older lots along the main roads, at whatever angle the street runs.
 - **Tests:** the browser check passes.
+
+### Round 16: lifelike parking lots
+
+The owner: keep working on the parking lots and how they connect to the roads, and make them more lifelike.
+
+- **Cars really use the lots now.** A driver arriving at a business (a worker, a shopper or a visitor) turns off the street into the driveway (across the road if they came from the other side, like a left turn), drives down the aisle with the blinker on and parks nose-in in the free stall nearest the door. Then they get out and walk in. When they leave, they walk back out to their car, it backs out of the stall into the aisle (slowly, brake lights on), drives to the exit, stops at the stop bar for a moment, and pulls out onto the street to carry on with the trip.
+- **Lots fill and empty with the day:** workers' cars sit there through their shift, shoppers come and go, and at night the lots are empty. Parked cars are the real cars of the people inside: tap one to see whose it is. Box trucks and buses still stop at the kerb (they don't fit a stall).
+- **The lots themselves:** a concrete curb all round (open at the driveways), concrete wheel stops at the head of every stall, a blue accessible stall with its sign near the door, planted islands with a small tree at the ends of the rows on wider lots, a strip of shrubs between the lot and the sidewalk, and at each driveway a white stop bar and a stop sign for cars going out.
+- Older lots along the main roads (the ones from the original city layout) get the curbs, wheel stops, islands and driveways too; their parked cars stay as scenery.
+- **Tests:** the life check now counts cars parking (up to 19 parked at once in the starting town) and backing out (110 in two days), and checks no car is ever left waiting unseen in the road; it passes, as do law, build and the browser check.
+
+### Round 17: proper entrances into the parking lots
+
+The owner: make the way the driveway concrete joins the parking lot (and the road) better.
+
+- **Before:** the driveway was a plain strip the same colour as the sidewalk; the road's curb and edge line ran straight across it, and the lot just stopped at a strip of grass.
+- **Now each entrance is built like a real commercial driveway:**
+  - the lot's asphalt flares out into a wide mouth, with the lot's curb curving round into it on both sides (rounded curb ends instead of a square gap);
+  - a concrete apron crosses the sidewalk, a shade darker than the sidewalk so you can see it, widening into wings towards the street, with fine scored joints;
+  - where it meets the road the curb is cut: a short sloped lip runs down into the gutter, over the road's edge line;
+  - the stop bar is across the way-out half of the mouth, with the stop sign on the right of cars leaving.
+- **Cars use it properly:** cars head for the driveway itself (they used to stop in front of the building, which on a wide lot could be past the entrance), turn in keeping to the right-hand half, and leave by the other half from the exit. Leaving, they stop at the bar with the blinker on for the way they're turning (right with the traffic, left across it).
+- **Nothing stands in the way:** bus shelters, poles, hydrants, signs and street trees are kept off every driveway (a bus shelter had been put right on one).
+- **Tests:** life (up to 26 cars parked at once, 112 backing out in two days), law and the browser check pass.

@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { along, halfW, WALK_W } from './net.js';
+import { entries as lotEntries } from './parking.js';
 
 const hash = (a, b, c = 0) => { let h = (a * 374761393 + b * 668265263 + c * 2147483647) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 const tint = (g, rgb) => { g = g.index ? g.toNonIndexed() : g; for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k); const n = g.attributes.position.count, c = new Float32Array(n * 3); for (let i = 0; i < n; i++) c.set(rgb, i * 3); g.setAttribute('color', new THREE.BufferAttribute(c, 3)); return g; };
@@ -68,6 +69,11 @@ export function buildScenery(net, city, life, Q) {
   const addR = (x, z, r, o) => { const k0 = Math.floor((x - r) / cell), k1 = Math.floor((x + r) / cell), l0 = Math.floor((z - r) / cell), l1 = Math.floor((z + r) / cell); for (let i = k0; i <= k1; i++) for (let j = l0; j <= l1; j++) { const k = (i + 2000) * 5000 + j + 2000; if (!grid.has(k)) grid.set(k, []); grid.get(k).push(o); } };
   for (const b of B) addR(b.x, b.z, Math.hypot(b.w, b.d) / 2 + (b.kind === 'house' ? 9 : 3), { x: b.x, z: b.z, hw: b.w / 2 + (b.kind === 'house' ? 3 : 1.5), hd: b.d / 2 + (b.kind === 'house' ? 3 : 1.5), r: b.rot || 0, b });
   for (const l of city.lots) addR(l.x, l.z, Math.hypot(l.w, l.d) / 2, { x: l.x, z: l.z, hw: l.w / 2 + 1, hd: l.d / 2 + 1, r: l.rot || 0 });
+  // driveways into the parking lots stay clear (from the lot, across the sidewalk, to the road)
+  for (const l of city.lots) if (l.k === 'parking') for (const en of lotEntries(l, net)) {
+    const cx = en.P[0] + en.n[0] * en.L / 2, cz = en.P[1] + en.n[1] * en.L / 2;
+    addR(cx, cz, en.L / 2 + 9, { x: cx, z: cz, hw: 7.5, hd: en.L / 2 + 1.5, r: Math.atan2(en.t[1], en.t[0]) });
+  }
   const blocked = (x, z, pad = 0) => { const L = grid.get(key(x, z)); if (!L) return false; for (const o of L) { const c = Math.cos(o.r), s = Math.sin(o.r), dx = x - o.x, dz = z - o.z, lx = dx * c + dz * s, lz = -dx * s + dz * c; if (Math.abs(lx) < o.hw + pad && Math.abs(lz) < o.hd + pad) return true; } return false; };
   const nearNode = (e, s, m) => { const A = net.nodes.get(e.a), Bn = net.nodes.get(e.b), ta = A && A.edges.size > 1 ? net.trimOf(A) : 0, tb = Bn && Bn.edges.size > 1 ? net.trimOf(Bn) : 0; return s < ta + m || s > e.len - tb - m; };
   const spot = (e, s, side, o) => { const q = along(e.pts, e.cum, s), w = halfW(e) + o; return [q[0] - q[3] * w * side, q[1] + q[2] * w * side, Math.atan2(-q[3] * side, q[2] * side), q]; };
