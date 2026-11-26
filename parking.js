@@ -12,7 +12,7 @@ export function frame(l) {
 export function layout(l) {
   if (l._lay && l._lay.key === l.x + ',' + l.z + ',' + l.w + ',' + l.d + ',' + (l.rot || 0)) return l._lay;
   const x0 = l.x - l.w / 2, x1 = l.x + l.w / 2, z0 = l.z - l.d / 2, z1 = l.z + l.d / 2, rows = [];
-  let z = z0 + 1, row = 0;
+  let z = z0 + (l.bid ? 3.2 : 1), row = 0;   // (a business's lot: a walkway along the shopfront first)
   while (z + ROW_GAP <= z1 - 1) {
     const flip = row % 2, stalls = [];
     const aisle = flip ? z - AISLE / 2 : Math.min(z1 - 1.8, z + ROW_GAP + AISLE / 2);   // where cars back out to
