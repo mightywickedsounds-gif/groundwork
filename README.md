@@ -249,3 +249,10 @@ The owner's screenshot: on a phone the scanner was a tall empty box stuck down t
 - **Fixed:** on a phone the scanner sits small in the bottom right, above the toolbar, only as tall as its calls.
 - **A close button:** a big white X on the scanner closes it, and it stays closed (even after reloading). A small radio button appears next to the menu button; a red dot on it means there's a new call. Tap it to bring the scanner back. Tapping the word Scanner still folds it down to just its title on a phone.
 - **Tests:** the browser check passes.
+
+### Round 15: driveways into the parking lots
+
+The owner: the parking lots were just painted slabs, not connected to the road.
+
+- **Every parking lot now has a driveway** from the side facing its street: a concrete apron across the sidewalk (at sidewalk height) and a curb cut down onto the road. Lots wider than about 26 m get two entrances, one near each end. This works for the lots in front of businesses and for the older lots along the main roads, at whatever angle the street runs.
+- **Tests:** the browser check passes.

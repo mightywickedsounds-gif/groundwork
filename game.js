@@ -228,7 +228,7 @@ function rebuildCity() {
   if (life) life.sync();
   if (sceneryG && sceneryG.userData.signMat) { sceneryG.userData.signMat.map.dispose(); sceneryG.userData.signMat.dispose(); }
   disposeGroup(sceneryG); sceneryG = buildScenery(net, city, life, Q); scene.add(sceneryG);
-  disposeGroup(cityG); cityG = buildCity(city, M, U, Q, { car: parkedGeo }, { wild: city.wild(), more: sceneryG.userData.trees });
+  disposeGroup(cityG); cityG = buildCity(city, M, U, Q, { car: parkedGeo }, { wild: city.wild(), more: sceneryG.userData.trees, net });
   const LL = cityG.userData.lotLights;   // parking lot lights: a glowing head and a pool of light at night
   if (LL && LL.length) {
     const gm = new THREE.InstancedMesh(new THREE.BoxGeometry(.8, .06, .4), lampGlowMat, LL.length), pm = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), poolMat, LL.length);
