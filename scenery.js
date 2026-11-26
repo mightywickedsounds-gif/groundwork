@@ -61,6 +61,24 @@ function signAtlas(list) {
   return { t, cols, rows: c.height / CH, CW, CH };
 }
 
+// every driveway (into a parking lot, or up to a house): rectangles to keep street furniture and lights off
+export function driveRects(net, city) {
+  const out = [];
+  for (const l of city.lots) if (l.k === 'parking') for (const en of lotEntries(l, net)) {
+    const cx = en.P[0] + en.n[0] * en.L / 2, cz = en.P[1] + en.n[1] * en.L / 2;
+    out.push({ x: cx, z: cz, hw: 7.5, hd: en.L / 2 + 1.5, r: Math.atan2(en.t[1], en.t[0]) });
+  }
+  for (const b of city.buildings) {
+    if (b.kind !== 'house' || !b.e) continue;
+    let fx = b.fx - b.x, fz = b.fz - b.z; const L = Math.hypot(fx, fz); if (L < 4) continue; fx /= L; fz /= L;
+    const px = -fz, pz = fx, c = Math.cos(b.rot || 0), sn = Math.sin(b.rot || 0), hp = Math.abs(px * c + pz * sn) * b.w / 2 + Math.abs(-px * sn + pz * c) * b.d / 2;
+    const o = (b.tone < .5 ? -1 : 1) * Math.max(0, hp - 2.9), t = L - halfW(b.e) - WALK_W / 2, cx = b.x + fx * t + px * o, cz = b.z + fz * t + pz * o;
+    out.push({ x: cx, z: cz, hw: 3.6, hd: WALK_W / 2 + 1.5, r: Math.atan2(pz, px) });
+  }
+  return out;
+}
+export const inRects = (rs, x, z, pad = 0) => rs.some(o => { const c = Math.cos(o.r), s = Math.sin(o.r), dx = x - o.x, dz = z - o.z, lx = dx * c + dz * s, lz = -dx * s + dz * c; return Math.abs(lx) < o.hw + pad && Math.abs(lz) < o.hd + pad; });
+
 export function buildScenery(net, city, life, Q) {
   const G = new THREE.Group(), dummy = new THREE.Object3D(), trees = [];
   const B = city.buildings;
@@ -69,11 +87,7 @@ export function buildScenery(net, city, life, Q) {
   const addR = (x, z, r, o) => { const k0 = Math.floor((x - r) / cell), k1 = Math.floor((x + r) / cell), l0 = Math.floor((z - r) / cell), l1 = Math.floor((z + r) / cell); for (let i = k0; i <= k1; i++) for (let j = l0; j <= l1; j++) { const k = (i + 2000) * 5000 + j + 2000; if (!grid.has(k)) grid.set(k, []); grid.get(k).push(o); } };
   for (const b of B) addR(b.x, b.z, Math.hypot(b.w, b.d) / 2 + (b.kind === 'house' ? 9 : 3), { x: b.x, z: b.z, hw: b.w / 2 + (b.kind === 'house' ? 3 : 1.5), hd: b.d / 2 + (b.kind === 'house' ? 3 : 1.5), r: b.rot || 0, b });
   for (const l of city.lots) addR(l.x, l.z, Math.hypot(l.w, l.d) / 2, { x: l.x, z: l.z, hw: l.w / 2 + 1, hd: l.d / 2 + 1, r: l.rot || 0 });
-  // driveways into the parking lots stay clear (from the lot, across the sidewalk, to the road)
-  for (const l of city.lots) if (l.k === 'parking') for (const en of lotEntries(l, net)) {
-    const cx = en.P[0] + en.n[0] * en.L / 2, cz = en.P[1] + en.n[1] * en.L / 2;
-    addR(cx, cz, en.L / 2 + 9, { x: cx, z: cz, hw: 7.5, hd: en.L / 2 + 1.5, r: Math.atan2(en.t[1], en.t[0]) });
-  }
+  for (const r of driveRects(net, city)) addR(r.x, r.z, Math.hypot(r.hw, r.hd) + 1, r);
   const blocked = (x, z, pad = 0) => { const L = grid.get(key(x, z)); if (!L) return false; for (const o of L) { const c = Math.cos(o.r), s = Math.sin(o.r), dx = x - o.x, dz = z - o.z, lx = dx * c + dz * s, lz = -dx * s + dz * c; if (Math.abs(lx) < o.hw + pad && Math.abs(lz) < o.hd + pad) return true; } return false; };
   const nearNode = (e, s, m) => { const A = net.nodes.get(e.a), Bn = net.nodes.get(e.b), ta = A && A.edges.size > 1 ? net.trimOf(A) : 0, tb = Bn && Bn.edges.size > 1 ? net.trimOf(Bn) : 0; return s < ta + m || s > e.len - tb - m; };
   const spot = (e, s, side, o) => { const q = along(e.pts, e.cum, s), w = halfW(e) + o; return [q[0] - q[3] * w * side, q[1] + q[2] * w * side, Math.atan2(-q[3] * side, q[2] * side), q]; };
@@ -86,7 +100,8 @@ export function buildScenery(net, city, life, Q) {
     // street trees just behind the sidewalk (on main roads and downtown; between the driveways on house streets)
     if (inTown) for (const side of [1, -1]) for (let s = 9 + hash(e.id, side) * 6; s < e.len - 6; s += (big || core ? 13 : 17) + hash(e.id, s | 0, side) * 6) {
       if (nearNode(e, s, 6)) continue;
-      const [x, z] = spot(e, s, side, WALK_W + (core ? -1.1 : 1.4));
+      const pk = e.kind === 'street' && (e.nl || 1) === 1 && !e.tl && !e.oneway && !core;   // house streets: the trees stand in the grass strip by the curb
+      const [x, z] = spot(e, s, side, pk ? .9 : WALK_W + (core ? -1.1 : 1.4));
       if (blocked(x, z, core ? 0 : 1.5)) continue;
       if (!big && !core && hash(e.id, s | 0, 9) < .35) continue;
       trees.push([+x.toFixed(2), +z.toFixed(2), core ? .55 + hash(e.id, s | 0, 3) * .15 : .62 + hash(e.id, s | 0, 3) * .3, hash(e.id, s | 0, 4) * .69]);

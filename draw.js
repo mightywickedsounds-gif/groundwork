@@ -118,7 +118,9 @@ export function makeMaterials(maxAniso = 8, U = null) {
 
 // ---------- roads + junctions + markings ----------
 export function buildRoads(net, M, opt = {}) {
-  const A = new Geo(), W = new Geo(), K = new Geo(), MK = new Geo(), MY = new Geo(), IS = new Geo();
+  const A = new Geo(), W = new Geo(), K = new Geo(), MK = new Geo(), MY = new Geo(), IS = new Geo(), GU = new Geo(), CT = new Geo();
+  const GW = .55, CW = .2;   // concrete gutter along every curb, and the curb's own top
+  const PKW = 1.45, PW = new Geo(), parkway = e => e.kind === 'street' && (e.nl || 1) === 1 && !e.tl && !e.ring && !e.oneway && Math.hypot(e.cx, e.cz) > (opt.coreR || 0);
   const nodes = net.nodes, ringCenters = new Map(), deco = [];
   for (const n of nodes.values()) if (n.ring && !ringCenters.has(n.ring)) ringCenters.set(n.ring, net.ringCenter(n.ring));
   const lamps = [];
@@ -145,8 +147,12 @@ export function buildRoads(net, M, opt = {}) {
     for (const sg of [-1, 1]) {
       if (sg === inner) continue;
       const i0 = off(c, nr, sg * hw), i1 = off(c, nr, sg * (hw + WALK_W));
-      W.strip(i0, i1, Y_WALK);
+      if (parkway(e)) {   // a house street: a grass strip (parkway) between the curb and the sidewalk
+        const g1 = off(c, nr, sg * (hw + PKW));
+        PW.strip(off(c, nr, sg * (hw + CW)), g1, Y_WALK - .012); W.strip(g1, i1, Y_WALK);
+      } else W.strip(i0, i1, Y_WALK);
       for (let k = 0; k + 1 < i0.length; k++) sg > 0 ? K.wall(i0[k + 1], i0[k], Y_ROAD - .02, Y_WALK) : K.wall(i0[k], i0[k + 1], Y_ROAD - .02, Y_WALK);
+      GU.strip(off(c, nr, sg * (hw - GW)), i0, Y_ROAD + .006); CT.strip(i0, off(c, nr, sg * (hw + CW)), Y_WALK + .004);
     }
     const cl = cumOf(c), m = cutPts(c, cl, Math.min(.8, cl.at(-1) / 3), cl.at(-1) - Math.min(.8, cl.at(-1) / 3));
     if (m.length >= 2 && cl.at(-1) > 1.5) {
@@ -160,7 +166,8 @@ export function buildRoads(net, M, opt = {}) {
           // between the turn bays: a two-way left-turn lane (solid yellow outside, dashed yellow inside, both sides)
           seg(MY, m, cm, H - .32, Pa + 1, Lm - Pb - 1, .12, true); seg(MY, m, cm, -(H - .32), Pa + 1, Lm - Pb - 1, .12, true);
         } else if (e.kind === 'avenue' || nl > 1) { line(MY, off(m, mn, -.16), .12, Y_MARK); line(MY, off(m, mn, .16), .12, Y_MARK); }
-        else dashes(MK, m, .14, 3, 5, Y_MARK, 2);
+        else if (e.kind !== 'street') dashes(MY, m, .12, 3, 6, Y_MARK, 2);   // a two-way road: dashed yellow down the middle (US style; white lines only part lanes going the same way)
+        // (a quiet residential street has no paint at all)
         for (let i = 0; i + 1 < nl; i++) { const o = (laneOff(e, i) + laneOff(e, i + 1)) / 2; seg(MK, m, cm, o, 0, Lm, .13, true); seg(MK, m, cm, -o, 0, Lm, .13, true); }
       } else if (e.ring) {   // a two-lane roundabout: dashed line between its lanes
         if (nl > 1) seg(MK, m, cm, (e.oneway || 1) * (laneOff(e, 0) + laneOff(e, 1)) / 2, 0, Lm, .13, true);
@@ -174,10 +181,10 @@ export function buildRoads(net, M, opt = {}) {
           seg(MY, m, cm, o, h0, h1); hatch(MY, m, cm, Math.min(o, edge), Math.max(o, edge), h0 + 1, h1 - 1);
         }
       }
-      line(MK, off(m, mn, -(hw - .35)), .13, Y_MARK); line(MK, off(m, mn, hw - .35), .13, Y_MARK);
+      if (e.kind !== 'street' || nl > 1 || e.oneway || e.ring) { line(MK, off(m, mn, -(hw - GW - .25)), .13, Y_MARK); line(MK, off(m, mn, hw - GW - .25), .13, Y_MARK); }   // edge lines on the bigger roads only
       if (e.oneway && !e.ring) { const dir = e.oneway; for (let s = 12; s < Lm - 22; s += 26) { const p = along(m, cm, s); for (let i = 0; i < nl; i++) { const o = dir * laneOff(e, i); arrow(MK, p[0] - p[3] * o, p[1] + p[2] * o, p[2] * dir, p[3] * dir); } } }
     }
-    if (lights) { const L = cl.at(-1); for (let s = 10, k = 0; s < L - 6; s += 34, k++) { const p = along(c, cl, s), sg = k % 2 ? 1 : -1; lamps.push([p[0] - p[3] * sg * (hw + WALK_W - .7), p[1] + p[2] * sg * (hw + WALK_W - .7), Math.atan2(p[3] * sg, -p[2] * sg)]); } }
+    if (lights) { const L = cl.at(-1); for (let s = 10, k = 0; s < L - 6; s += 34, k++) { const p = along(c, cl, s), sg = k % 2 ? 1 : -1; const lo = parkway(e) ? hw + .85 : hw + WALK_W - .7; lamps.push([p[0] - p[3] * sg * lo, p[1] + p[2] * sg * lo, Math.atan2(p[3] * sg, -p[2] * sg)]); } }
   }
   for (const e of net.edges.values()) {
     const a = nodes.get(e.a), b = nodes.get(e.b), hw = hwOf(e);
@@ -224,6 +231,8 @@ export function buildRoads(net, M, opt = {}) {
       const L = legs[0], cap = [], outer = [];
       for (let k = 0; k <= 12; k++) { const f = -Math.PI / 2 + Math.PI * k / 12, dx = -L.d[0] * Math.cos(f) + L.r[0] * Math.sin(f), dz = -L.d[1] * Math.cos(f) + L.r[1] * Math.sin(f); cap.push([L.P[0] + dx * L.hw, L.P[1] + dz * L.hw]); outer.push([L.P[0] + dx * (L.hw + WALK_W), L.P[1] + dz * (L.hw + WALK_W)]); }
       A.fan(L.P, cap, Y_ROAD); W.strip(cap, outer, Y_WALK); for (let k = 0; k + 1 < cap.length; k++) K.wall(cap[k + 1], cap[k], Y_ROAD - .02, Y_WALK);
+      const tw = (p, f) => [L.P[0] + (p[0] - L.P[0]) * f, L.P[1] + (p[1] - L.P[1]) * f];
+      GU.strip(cap.map(p => tw(p, (L.hw - GW) / L.hw)), cap, Y_ROAD + .006); CT.strip(cap, cap.map(p => tw(p, (L.hw + CW) / L.hw)), Y_WALK + .004);
       continue;
     }
     const ring = [];
@@ -246,6 +255,7 @@ export function buildRoads(net, M, opt = {}) {
         const co = off(cv, cn, out * WALK_W); co[0] = a1; co[co.length - 1] = b1;
         W.strip(cv, co, Y_WALK);
         for (let k = 0; k + 1 < cv.length; k++) K.wall(cv[k + 1], cv[k], Y_ROAD - .02, Y_WALK);
+        GU.strip(off(cv, cn, -out * GW), cv, Y_ROAD + .006); CT.strip(cv, off(cv, cn, out * CW), Y_WALK + .004);
       }
     }
     A.fan([n.x, n.z], ring, Y_ROAD - .004);
@@ -314,6 +324,9 @@ export function buildRoads(net, M, opt = {}) {
   }
   const add = (geo, mat, shadow = true) => { const m = new THREE.Mesh(geo.build(), mat); m.receiveShadow = shadow; g.add(m); return m; };
   add(A, M.asphalt); add(W, M.walk); add(K, M.curb); add(MK, M.mark); add(MY, M.markY); add(IS, M.island);
+  add(PW, M.parkway || (M.parkway = patchy(new THREE.MeshStandardMaterial({ map: M.tex.lawn, color: 0x95ab62, roughness: 1 }), .35, 5)));
+  add(GU, M.gutter || (M.gutter = patchy(new THREE.MeshStandardMaterial({ map: M.walk.map, color: 0xa39f96, roughness: .95, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }), .45, 4)));
+  add(CT, M.curbTop || (M.curbTop = patchy(new THREE.MeshStandardMaterial({ map: M.walk.map, color: 0xe4e0d6, roughness: .85, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }), .25, 3)));
   g.userData.lamps = lamps;
   return g;
 }
@@ -776,6 +789,10 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
     if (len > 1.5) {
       const side = b.tone < .5 ? -1 : 1, o = side * Math.max(0, hp - 2.9), w = 2.6;
       drive.flat(q(hf, -w, o), q(hf, w, o), q(hf + len, w, o), q(hf + len, -w, o), .055);
+      // on across the grass strip and the sidewalk to the street, with a cut curb (like the lots' driveways, smaller)
+      { const tK = hf + len + WALK_W, prof = [[hf + len, .06, w], [hf + len + .3, .177, w], [tK - .15, .177, w + .7], [tK + .45, .034, w + .7]];
+        for (let k = 0; k + 1 < prof.length; k++) { const [t0, y0, w0] = prof[k], [t1, y1, w1] = prof[k + 1], A2 = q(t0, -w0, o), B2 = q(t0, w0, o), C2 = q(t1, w1, o), D2 = q(t1, -w1, o);
+          const i = apron.v(A2[0], y0, A2[1]), j = apron.v(B2[0], y0, B2[1]), kk = apron.v(C2[0], y1, C2[1]), mm = apron.v(D2[0], y1, D2[1]); apron.up(i, j, kk); apron.up(i, kk, mm); } }
       const hc = ((b.id * 2654435761) >>> 0) / 4294967296;   // some households have a car (or two) at home
       if (len > 6.5 && hc < (Q.shadows > 1 ? .7 : .45)) {
         const two = hc < .2 && len > 6.5, yaw = Math.atan2(-fzv, fxv) + (hc < .35 ? Math.PI : 0);

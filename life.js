@@ -132,7 +132,7 @@ export function createLife(net, city, seed = 1) {
     const e = b.e; if (!e || !e.pts) return null;
     const c = closestOnPoly(e.pts, e.cum, b.fx, b.fz), q = along(e.pts, e.cum, c.s);
     let side = Math.sign((b.x - q[0]) * -q[3] + (b.z - q[1]) * q[2]) || 1;   // right of the street = +1
-    const w = halfW(e) + WALK_W * .55, sx = q[0] - q[3] * w * side, sz = q[1] + q[2] * w * side;
+    const w = halfW(e) + WALK_W * .75, sx = q[0] - q[3] * w * side, sz = q[1] + q[2] * w * side;
     let ux = b.x - sx, uz = b.z - sz; const D = Math.hypot(ux, uz) || 1; ux /= D; uz /= D;
     const r = b.rot || 0, cs = Math.cos(r), sn = Math.sin(r), lx = ux * cs + uz * sn, lz = -ux * sn + uz * cs;
     const hd = Math.min(b.w / 2 / Math.max(1e-3, Math.abs(lx)), b.d / 2 / Math.max(1e-3, Math.abs(lz)));
@@ -195,7 +195,7 @@ export function createLife(net, city, seed = 1) {
     const d = Math.hypot(A.x - B.x, A.z - B.z);
     const walkMax = p.kid ? 900 : why === 'lunch' ? 460 : why === 'walk' ? 900 : 90;   // Texas: most people drive anywhere further than next door
     if (d < walkMax) {    // close: walk
-      const pts = walkRoute(dA, dB, .5 + hash(p.id, 5, seed) * 1.6);
+      const pts = walkRoute(dA, dB, 1.75 + hash(p.id, 5, seed) * .95);   // (on the concrete: house streets have a grass strip by the curb)
       if (pts) { startWalk(p, pts, to, why); return; }
       if (p.kid) return;
     }
@@ -355,8 +355,8 @@ export function createLife(net, city, seed = 1) {
     const A = D(L.bmap.get(p.home)); if (!A) return;
     const E = [...net.edges.values()].filter(e => !e.ring && e.len > 30 && Math.hypot(e.cx - A.walk[0], e.cz - A.walk[1]) < 260); if (!E.length) return;
     const e = E[Math.floor(hash(p.id, Math.floor(now()), seed) * E.length)], s = e.len * (.2 + hash(p.id, 2, Math.floor(now())) * .6);
-    const mid = { e, s, side: hash(p.id, 3, Math.floor(now())) < .5 ? 1 : -1 }; mid.walk = swPt(e, s, mid.side, 1.4); mid.door = mid.walk;
-    const o = .5 + hash(p.id, 5, seed) * 1.6, out = walkRoute(A, mid, o), back = walkRoute(mid, A, o);
+    const mid = { e, s, side: hash(p.id, 3, Math.floor(now())) < .5 ? 1 : -1 }; mid.walk = swPt(e, s, mid.side, 2.2); mid.door = mid.walk;
+    const o = 1.75 + hash(p.id, 5, seed) * .95, out = walkRoute(A, mid, o), back = walkRoute(mid, A, o);
     if (out && back) startWalk(p, out.concat(back.slice(1)), p.home, 'walk');
   }
   function openNear(p, h, filter, maxD) {
