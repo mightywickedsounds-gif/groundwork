@@ -240,3 +240,12 @@ The owner's screenshots: from a low angle the fields looked glitched and distort
 - **The camera** doesn't go quite as low when zoomed in (it could end up skimming across the fields, which is what made the view look distorted).
 - **Tests:** the browser check passes (the drawing changes don't touch the traffic, people or police).
 
+
+### Round 14: the scanner can be closed
+
+The owner's screenshot: on a phone the scanner was a tall empty box stuck down the right side of the screen, with no way to close it.
+
+- **The bug:** a layout rule added in round 11 (moving the scanner up on computers) also applied on phones, so the scanner was pinned to both the top and the bottom of the screen and stretched into a tall empty panel.
+- **Fixed:** on a phone the scanner sits small in the bottom right, above the toolbar, only as tall as its calls.
+- **A close button:** a big white X on the scanner closes it, and it stays closed (even after reloading). A small radio button appears next to the menu button; a red dot on it means there's a new call. Tap it to bring the scanner back. Tapping the word Scanner still folds it down to just its title on a phone.
+- **Tests:** the browser check passes.

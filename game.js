@@ -1102,10 +1102,15 @@ function scanPush(f) {
   row.innerHTML = `<b>${esc(f.code)}</b><span>${esc(f.txt)}</span>`;
   row.onclick = () => { flyTo({ x: f.x, z: f.z, dist: Math.min(cam.dist, 130) }, 1); if (f.pid && life.person(f.pid)) { select({ k: 'p', id: f.pid }); } else if (f.bid) select({ k: 'b', id: f.bid }); };
   L.prepend(row); while (L.children.length > 5) L.lastChild.remove();
+  if (scanOff) { $('scanBtn').classList.add('show', 'ping'); return; }   // closed: just a dot on the radio button
   $('scan').classList.add('show', 'fresh'); $('scan').classList.remove('ping'); void $('scan').offsetWidth; $('scan').classList.add('ping');
   clearTimeout(scanPush.h); scanPush.h = setTimeout(() => $('scan').classList.remove('fresh'), 9000);   // (on a phone it folds away to its header after a while)
 }
-$('scan').querySelector('.sh').onclick = () => $('scan').classList.toggle('fresh');
+let scanOff = localStorage.getItem('flowtown.scan') === '0';
+$('scan').querySelector('.sh').onclick = e => { if (!e.target.closest('#scanX')) $('scan').classList.toggle('fresh'); };
+$('scanX').onclick = e => { e.stopPropagation(); scanOff = true; localStorage.setItem('flowtown.scan', '0'); $('scan').classList.remove('show'); $('scanBtn').classList.add('show'); $('scanBtn').classList.remove('ping'); };
+$('scanBtn').onclick = () => { scanOff = false; localStorage.setItem('flowtown.scan', '1'); $('scanBtn').classList.remove('show', 'ping'); if ($('scanList').children.length) $('scan').classList.add('show', 'fresh'); };
+if (scanOff) $('scanBtn').classList.add('show');
 // what an officer, firefighter or paramedic is doing right now
 function unitDoing(pid) {
   for (const u of law.units) {

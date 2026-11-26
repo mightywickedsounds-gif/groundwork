@@ -7,7 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <title>Flowtown</title>
 <meta name="theme-color" content="#101214">
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/","./net.js":"./net.js?v=13","./city.js":"./city.js?v=13","./draw.js":"./draw.js?v=13","./sky.js":"./sky.js?v=13","./life.js":"./life.js?v=13","./police.js":"./police.js?v=13","./scenery.js":"./scenery.js?v=13"}}</script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/","./net.js":"./net.js?v=14","./city.js":"./city.js?v=14","./draw.js":"./draw.js?v=14","./sky.js":"./sky.js?v=14","./life.js":"./life.js?v=14","./police.js":"./police.js?v=14","./scenery.js":"./scenery.js?v=14"}}</script>
 <style>
   @font-face { font-family:Overpass; font-weight:600; src:url(assets/fonts/overpass-600.woff2) format('woff2'); font-display:swap; }
   @font-face { font-family:Overpass; font-weight:800; src:url(assets/fonts/overpass-800.woff2) format('woff2'); font-display:swap; }
@@ -261,6 +261,21 @@
     #card.mini { left:8px; right:8px; width:auto; }
     body.carded #scan { display:none; }
   }
+
+  /* round 14: the scanner has a close button; closed, a small radio button brings it back (a dot when there's a new call) */
+  #scan .sh span { flex:1; }
+  #scanX { width:30px; height:30px; border:0; border-radius:7px; background:var(--white); color:var(--ink); padding:6px; cursor:pointer; flex:none; }
+  #scanX svg { width:100%; height:100%; display:block; }
+  #scanBtn { display:none; position:relative; }
+  #scanBtn.show { display:block; }
+  #scanBtn i { position:absolute; right:5px; top:5px; width:9px; height:9px; border-radius:50%; background:var(--red); display:none; box-shadow:0 0 0 2px var(--asphalt); }
+  #scanBtn.ping i { display:block; }
+  body.titleUp #scanBtn { display:none; }
+  @media (max-width:760px) {
+    #scan { top:auto !important; height:auto; max-height:40vh; overflow:hidden; }
+    #scanX { width:34px; height:34px; padding:8px; }
+    #scan:not(.fresh) { width:auto; }
+  }
 </style>
 </head>
 <body class="titleUp">
@@ -283,10 +298,11 @@
     <div id="jamLbl"><span>GRIDLOCK</span><b id="jamPct" class="num">0%</b></div>
     <div id="jamBar"><i></i></div>
   </div>
+  <button id="scanBtn" class="tileBtn" aria-label="Open the scanner"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="16" height="11" rx="2"/><path d="M8 9 16 4M8 14h4M8 17h4"/><circle cx="16" cy="15.5" r="1.6"/></svg><i></i></button>
   <button id="menuBtn" class="tileBtn" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
 </div>
 
-<div id="scan" class="sign"><div class="sh"><i></i>SCANNER</div><div id="scanList"></div></div>
+<div id="scan" class="sign"><div class="sh"><i></i><span>SCANNER</span><button id="scanX" aria-label="Close the scanner"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div id="scanList"></div></div>
 <div id="hint"></div>
 <div id="toast" class="sign"></div>
 
@@ -332,7 +348,7 @@
       <button id="credBtn" class="tb">Credits</button>
     </div>
   </div>
-  <div class="ver">v13</div>
+  <div class="ver">v14</div>
 </div>
 
 <div id="menu" class="screen">
@@ -381,6 +397,6 @@
 </div>
 
 
-<script type="module" src="game.js?v=13"></script>
+<script type="module" src="game.js?v=14"></script>
 </body>
 </html>
