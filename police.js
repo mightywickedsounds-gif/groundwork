@@ -155,7 +155,7 @@ export function createLaw(net, city, life) {
   W.step = function (dt) {
     W.t += dt;
     for (let i = later.length - 1; i >= 0; i--) if (now() >= later[i].t) { const f = later[i].fn; later.splice(i, 1); f(); }
-    W.checkT += dt; if (W.checkT > 1) { W.checkT = 0; syncUnits(); findSpots(); hourly(); }
+    W.checkT += dt; if (W.checkT > 1) { W.checkT = 0; syncUnits(); findSpots(); hourly(); bolo(); }
     for (const u of W.units) unitStep(u, dt);
     // incidents
     for (let i = W.inc.length - 1; i >= 0; i--) if (incStep(W.inc[i], dt)) W.inc.splice(i, 1);
@@ -208,6 +208,7 @@ export function createLaw(net, city, life) {
     if (!c) { u.task = null; return; }
     if (T.done) return;   // (dealt with: waiting to drive off)
     if (!alive(tg)) {   // got away (out of town) or already dealt with
+      if (T.bolo && !T.done && tg.pid && life.person(tg.pid)) W.bolo.set(tg.pid, T.bolo);   // they got home first: still on the lookout
       if (T.why !== 'stop' && !T.done) { const p = tg.pid && life.person(tg.pid); feed('10-15', `${p ? p.fn + ' ' + p.ln : 'The suspect'} got away`, c.x, c.z); }
       goHome(u); return;
     }
@@ -217,10 +218,10 @@ export function createLaw(net, city, life) {
       if (now() - T.t0 > 26) {
         const p = tg.pid && life.person(tg.pid), fines = [];
         fines.push(T.why2); if (p && !p.ins) fines.push('noins'); if (p && !p.reg && T.why2 !== 'expired') fines.push('expired');
-        let tot = 0; for (const f of fines) { tot += FINE[f]; life.fine(f); }
+        let tot = 0; for (const f of new Set(fines)) { tot += FINE[f]; life.fine(f); }
         life.day.stops++;
         const words = { speeding: 'speeding', redlight: 'running a red light', expired: 'expired tags', noins: 'no insurance', reckless: 'reckless driving' };
-        feed('TICKET', `${who(tg)}: ${fines.map(f => words[f]).join(', ')} +${tot}`, tg.x, tg.z, { pid: tg.pid, fine: tot });
+        feed('TICKET', `${who(tg)}: ${[...new Set(fines)].map(f => words[f]).join(', ')} +${tot}`, tg.x, tg.z, { pid: tg.pid, fine: tot });
         tg.hold = false; tg.aside = false; tg.chased = 0; tg.ticketed = true; tg.reckless = false; tg.slow = Math.min(tg.slow, 1);
         T.done = true; goHome(u);
       }
@@ -354,6 +355,31 @@ export function createLaw(net, city, life) {
       c.rageAt = now(); W.lastRage = now(); W.rage.push({ car: c, t: 3.5, at: L });
       W.events.push({ k: 'horn', x: c.x, z: c.z }); break;
       if (R() < .35) feed('RAGE', `${who(c)} flipped off ${who(L)} on ${life.streetName(c.lane.edge || (c.lane.in && c.lane.in.edge))}`, c.x, c.z, { pid: c.pid });
+    }
+  }
+  // ---------- reports: you tip off the police about a driver; a unit goes out after them ----------
+  W.bolo = new Map();
+  W.isUnit = pid => W.units.some(u => (u.car && u.car.pid === pid) || (u.state === 'hide' && u.pid === pid));
+  W.report = function (pid) {
+    const p = life.person(pid); if (!p) return 'gone';
+    if (W.bolo.has(pid)) return 'already';
+    if (!W.units.some(u => u.kind === 'police')) return 'nopolice';
+    const why = !p.reg ? 'expired' : !p.ins ? 'noins' : p.temper > .955 ? 'reckless' : null; if (!why) return 'clean';
+    W.bolo.set(pid, { t: now(), why });
+    const q = p.car && alive(p.car) ? [p.car.x, p.car.z] : (() => { const b = life.bmap.get(p.at); return b ? [b.x, b.z] : [0, 0]; })();
+    const what = [!p.reg && 'expired tags', !p.ins && 'no insurance', p.temper > .955 && 'reckless driving'].filter(Boolean).join(', ');
+    feed('BOLO', `Lookout for ${p.fn} ${p.ln}: ${what}`, q[0], q[1], { pid });
+    bolo(); return 'ok';
+  };
+  // the next time they're behind the wheel, the nearest free unit (from the station or its hiding spot) goes after them
+  function bolo() {
+    for (const [pid, b] of W.bolo) {
+      const p = life.person(pid);
+      if (!p || now() - b.t > DAY) { W.bolo.delete(pid); continue; }
+      const c = p.car && alive(p.car) ? p.car : null; if (!c || c.chased || c.hold || c.keep) continue;
+      const u = freeUnit('police', c.x, c.z); if (!u) continue;
+      const fromBase = u.state !== 'hide';
+      if (pursue(c, u)) { u.task.why2 = b.why; u.task.bolo = b; W.bolo.delete(pid); feed('STOP', `${fromBase ? 'A unit leaves the station' : 'A unit pulls out'} after ${p.fn} ${p.ln}`, c.x, c.z, { pid, unit: u.id }); }
     }
   }
   // test hooks

@@ -568,7 +568,26 @@ function collectAt(b) {
   const c = life.collect(b); if (!c) return;
   life.stat.collected++; burst(b.x, b.z, 50, [1, .82, .2], 4); sound.coin(); gainFx(); toast('+' + money(c));
 }
-function select(s) { sel = s; if (!s) { follow = null; $('card').classList.remove('show'); selRing.visible = false; return; } drawCard(); $('card').classList.add('show'); }
+function select(s) {
+  if (!s || !sel || s.k !== sel.k || s.id !== sel.id) setFollow(null);
+  sel = s; document.body.classList.toggle('carded', !!s);
+  if (!s) { $('card').classList.remove('show'); selRing.visible = false; return; }
+  drawCard(); $('card').classList.add('show');
+}
+// following someone: the camera swings round behind them and stays low; the card shrinks out of the way
+let followUserT = 0;
+function setFollow(id) {
+  follow = id; $('card').classList.toggle('mini', id != null);
+  if (id == null) return;
+  const p = life.person(id), q = p && personPos(p), h = p && personHeading(p);
+  if (q) flyTo({ x: q[0], z: q[1], dist: Math.min(cam.dist, 56), pitch: .5, yaw: h ? Math.atan2(-h[0], -h[1]) : cam.yaw }, .8);
+}
+function personHeading(p) {
+  if (p.car && net.cars.includes(p.car)) return [p.car.hx, p.car.hz];
+  for (const u of law.units) if (u.car && u.car.pid === p.id && net.cars.includes(u.car)) return [u.car.hx, u.car.hz];
+  if (p.walk) { const q = walkPos(p.walk); return [q[2], q[3]]; }
+  return null;
+}
 const X_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>';
 const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 function drawCard() {
@@ -577,6 +596,7 @@ function drawCard() {
     const p = life.person(sel.id); if (!p) return select(null);
     const w = p.work && life.bmap.get(p.work), boss = life.boss(p), home = life.bmap.get(p.home);
     const role = p.guest ? 'Visitor' : p.work ? life.title(p) : p.kid ? 'Student' : p.ret ? 'Retired' : 'Looking for work';
+    const bad = !p.kid && (!p.ins || !p.reg || p.temper > .955);   // something the police would want to know about
     let rows = '';
     if (w) rows += `<span>Job</span><b>${esc(life.title(p))}</b><span>Works at</span><b class="link" data-b="${w.id}">${esc(w.biz.name)}</b>`;
     if (w) rows += `<span>Reports to</span>${boss ? `<b class="link" data-p="${boss.id}">${esc(boss.fn + ' ' + boss.ln)}, ${esc(life.title(boss))}</b>` : '<b>Nobody: runs the place</b>'}`;
@@ -587,7 +607,7 @@ function drawCard() {
     if (p.temper > .955 && !p.kid) rows += `<span>Driving</span><b>Reckless</b>`; else if (p.temper > .7 && !p.kid) rows += `<span>Driving</span><b>Heavy right foot</b>`;
     C.innerHTML = `<div class="ch"><div><h4>${esc(p.fn + ' ' + p.ln)}</h4><div class="sub">${p.age} · ${esc(role)}</div></div><button class="x" data-act="close">${X_ICON}</button></div>
       <div class="doing">${esc(unitDoing(p.id) || (p.wanted && p.car ? 'Running from the police' : life.doing(p)))}</div><div class="rows">${rows}</div>
-      <div class="cb"><button data-act="follow" class="${follow === p.id ? 'y' : ''}">${follow === p.id ? 'Following' : 'Follow'}</button>${w ? `<button data-b="${w.id}">Workplace</button>` : ''}${home ? `<button data-b="${home.id}">Home</button>` : ''}</div>`;
+      <div class="cb"><button data-act="follow" class="${follow === p.id ? 'y' : ''}">${follow === p.id ? 'Stop following' : 'Follow'}</button>${bad && !law.isUnit(p.id) ? `<button data-act="report" class="rep" ${law.bolo.has(p.id) ? 'disabled' : ''}>${law.bolo.has(p.id) ? 'Reported' : 'Report'}</button>` : ''}${w && follow !== p.id ? `<button data-b="${w.id}">Workplace</button>` : ''}${home && follow !== p.id ? `<button data-b="${home.id}">Home</button>` : ''}</div>`;
     return;
   }
   const b = life.bmap.get(sel.id); if (!b) return select(null);
@@ -620,7 +640,8 @@ const hhmm = h => { h = ((h % 24) + 24) % 24; const H = Math.floor(h), m = Math.
 $('card').addEventListener('click', e => {
   const t = e.target.closest('[data-act],[data-b],[data-p]'); if (!t) return;
   if (t.dataset.act === 'close') return select(null);
-  if (t.dataset.act === 'follow') { follow = follow === sel.id ? null : sel.id; drawCard(); return; }
+  if (t.dataset.act === 'follow') { setFollow(follow === sel.id ? null : sel.id); drawCard(); return; }
+  if (t.dataset.act === 'report') { const r = law.report(sel.id); toast(r === 'ok' ? 'Reported: an officer is heading out' : r === 'nopolice' ? 'Build a police station first' : r === 'clean' ? 'Nothing to report' : 'Already reported', r !== 'ok'); drawCard(); return; }
   if (t.dataset.act === 'collect') { const b = life.bmap.get(sel.id); if (b) collectAt(b); drawCard(); return; }
   if (t.dataset.act === 'upgrade') { const b = life.bmap.get(sel.id); if (b && life.upgrade(b)) { spentFx(0); burst(b.x, b.z, 120, [.5, 1, .6], Math.max(b.w, b.d) / 2); sound.magic(); toast(b.biz.name + ': level ' + b.biz.lvl); save(); } drawCard(); return; }
   if (t.dataset.b) { const b = life.bmap.get(+t.dataset.b); if (b) { select({ k: 'b', id: b.id }); follow = null; flyTo({ x: b.x, z: b.z, dist: Math.min(cam.dist, 160) }, .9); } return; }
@@ -635,9 +656,16 @@ function selTick(dt) {
   if (sel.k === 'p') {
     const p = life.person(sel.id); if (!p) return;
     const q = personPos(p); if (!q) return;
-    const inCar = p.car && net.cars.includes(p.car), r = inCar ? 3.3 : 1;
+    const inCar = (p.car && net.cars.includes(p.car)) || law.isUnit(p.id), r = (inCar ? 3.3 : 1) * (follow === p.id ? .62 : 1);
     selRing.position.set(q[0], .45, q[1]); selRing.scale.set(r, 1, r); selRing.visible = !(p.state === 'in');
-    if (follow === p.id && !drag && !pinch) { const k = 1 - Math.exp(-dt * 4); cam.x += (q[0] - cam.x) * k; cam.z += (q[1] - cam.z) * k; placeCamera(); }
+    if (follow === p.id && !fly && !pinch) {
+      // a chase camera: a little ahead of them, swinging round behind as they turn (unless you've just turned it yourself)
+      const h = personHeading(p), lead = h && inCar ? Math.min(8, (p.car ? p.car.v : 4) * .6) : 0;
+      const k = 1 - Math.exp(-dt * 5); cam.x += (q[0] + (h ? h[0] * lead : 0) - cam.x) * k; cam.z += (q[1] + (h ? h[1] * lead : 0) - cam.z) * k;
+      followUserT -= dt;
+      if (h && followUserT <= 0 && !drag) { let d = Math.atan2(-h[0], -h[1]) - cam.yaw; d = Math.atan2(Math.sin(d), Math.cos(d)); cam.yaw += d * (1 - Math.exp(-dt * 1.6)); }
+      placeCamera();
+    }
   } else if (sel.k === 'b') {
     const b = life.bmap.get(sel.id); if (!b) return;
     selRing.position.set(b.x, .45, b.z); const r = Math.max(b.w, b.d) / 2 / 1.8 + 1.5; selRing.scale.set(r, 1, r); selRing.visible = true;
@@ -707,7 +735,7 @@ canvas.addEventListener('pointermove', e => {
     const tilting = Math.abs(my - pinch.my) > 2 * Math.abs(d - pinch.d) && Math.abs(a.y - pinch.ay - (b.y - pinch.by)) < 14;   // both fingers slide together
     cam.dist *= pinch.d / Math.max(10, d); cam.yaw += da;
     if (tilting) cam.pitch += (my - pinch.my) * .0045;
-    pinch.d = d; pinch.ang = ang; pinch.my = my; pinch.ay = a.y; pinch.by = b.y; fly = zoomTo = coast = null;
+    pinch.d = d; pinch.ang = ang; pinch.my = my; pinch.ay = a.y; pinch.by = b.y; fly = zoomTo = coast = null; if (Math.abs(da) > .002) followUserT = 4;
     placeCamera(); const g = groundAt(mx, my); if (g && pinch.g0 && !tilting) { cam.x += pinch.g0[0] - g[0]; cam.z += pinch.g0[1] - g[1]; placeCamera(); }
     if (tilting) pinch.g0 = groundAt(mx, my);
     return;
@@ -728,10 +756,14 @@ canvas.addEventListener('pointermove', e => {
     return;
   }
   if (drag.btn === 2 || (drag.btn === 0 && e.shiftKey && e.pointerType === 'mouse')) { cam.yaw -= (e.movementX || 0) * .006; cam.pitch += (e.movementY || 0) * .005; placeCamera(); return; }
+  if (follow != null && drag.moved > 6) {   // following: a drag swings the camera round them
+    const lx = drag.lx ?? drag.x0, ly = drag.ly ?? drag.y0; drag.lx = e.clientX; drag.ly = e.clientY;
+    cam.yaw -= (e.clientX - lx) * .008; cam.pitch += (e.clientY - ly) * .004; followUserT = 4; placeCamera(); return;
+  }
   if (drag.moved > 6 && drag.g0) {
     const g = groundAt(e.clientX, e.clientY);
     if (g) {
-      const mx = drag.g0[0] - g[0], mz = drag.g0[1] - g[1]; cam.x += mx; cam.z += mz; placeCamera(); if (follow) { follow = null; if (sel) drawCard(); }
+      const mx = drag.g0[0] - g[0], mz = drag.g0[1] - g[1]; cam.x += mx; cam.z += mz; placeCamera();
       // how fast the map is moving (for the glide when the finger lets go)
       const t = e.timeStamp, dt = Math.max(.004, (t - (drag.vt || drag.t0)) / 1000); drag.vt = t;
       const k = Math.min(1, dt * 18); drag.vx = (drag.vx || 0) * (1 - k) + mx / dt * k; drag.vz = (drag.vz || 0) * (1 - k) + mz / dt * k;
@@ -760,7 +792,7 @@ function up(e) {
     if (e.pointerType === 'mouse') { T.mouse = g; hoverUpdate(); }
   }
   // let go while moving: the map glides on (not after a slow, careful drag)
-  else if (drag.moved >= 10 && drag.vx !== undefined && e.timeStamp - (drag.vt || 0) < 80 && !ptrs.size) {
+  else if (follow == null && drag.moved >= 10 && drag.vx !== undefined && e.timeStamp - (drag.vt || 0) < 80 && !ptrs.size) {
     const v = Math.hypot(drag.vx, drag.vz), cap = cam.dist * 4;
     if (v > cam.dist * .25) coast = { vx: drag.vx * Math.min(1, cap / v), vz: drag.vz * Math.min(1, cap / v) };
   }
@@ -873,6 +905,7 @@ function daySummary(ev) {
     + row('Total', (s.net >= 0 ? '+' : '') + money(s.net), 'tot') + row('Trips', fmt(s.trips)) + (s.late ? row('Late for work', s.late) : '') + (s.crashes ? row('Crashes', s.crashes) : '') + (s.stops ? row('Traffic stops', s.stops) : '') + (s.arrests ? row('Arrests', s.arrests) : '') + row('People', fmt(s.people));
   S.daySpeed = S.speed || S.lastSpeed || 1; setSpeed(0); show('daySum', true); sound.coin(); save();
 }
+$('hud').addEventListener('click', () => $('hud').classList.toggle('open'));
 $('dsGo').onclick = () => { show('daySum', false); setSpeed(S.daySpeed || 1); };
 
 // ---------------- per frame drawing ----------------

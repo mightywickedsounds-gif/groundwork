@@ -17,7 +17,7 @@ const pd = put('police', 0, .4, 1), fd = put('fire', 2, .5, 1), hs = put('hospit
 check('built police, fire, hospital', pd && fd && hs, [!!pd, !!fd, !!hs].join());
 city.sync(); life.sync();
 const dt = .1, seen = {}; let maxUnits = 0, hidden = 0, sirens = 0;
-let crashed = false;
+let crashed = false, reported = null, boloGone = false;
 for (let i = 0; i < days * DAY / dt; i++) {
   T += dt; life.T = T;
   city.release(dt, 500); net.step(dt); life.step(dt); law.step(dt);
@@ -28,6 +28,8 @@ for (let i = 0; i < days * DAY / dt; i++) {
   sirens = Math.max(sirens, net.cars.filter(c => c.siren).length);
   if (i === 3000 && !crashed) { const a = net.cars.find(c => !c.keep && c.v > 3 && c.ldr); if (a) { law.crash(a, a.ldr, 'rear'); crashed = true; } }
   if (i === 6000) law.robbery();
+  if (i === 2500) { const p = [...life.people.values(), ...life.guests.values()].find(p => p.car && net.cars.includes(p.car) && (!p.reg || !p.ins)); if (p) { reported = p; console.log('  report', p.fn, p.ln, law.report(p.id)); } }
+  if (reported && !boloGone && !law.bolo.has(reported.id)) boloGone = true;
   for (const c of net.cars) if (!isFinite(c.x) || !isFinite(c.s)) throw new Error('NaN car');
 }
 console.log('feed codes', seen, 'units', law.units.map(u => u.kind + ':' + u.state), 'cars', net.cars.length);
@@ -36,5 +38,6 @@ check('a crash got a response with sirens', sirens > 0 && seen['10-50'] > 0, sir
 check('crash cleared', (seen.CLEAR || 0) > 0);
 check('traffic stops and tickets', (seen.TICKET || 0) + (seen['10-80'] || 0) > 0, JSON.stringify(seen));
 check('robbery reported', seen['10-31'] > 0);
+check('a reported driver gets a unit sent after them', !reported || boloGone, reported ? reported.fn : 'nobody to report');
 check('nothing left holding the road', net.cars.filter(c => c.hold && !c.keep && !c.crashed && !c.chased).length === 0);
 console.log(fails ? fails + ' FAILED' : 'ALL PASSED'); process.exit(fails ? 1 : 0);
