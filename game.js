@@ -1307,6 +1307,9 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
+// the version label on the title screen: the number of the game file that actually loaded (a phone holding an old copy shows the old number)
+{ const v = new URL(import.meta.url).searchParams.get('v'), el = document.querySelector('.ver'); if (v && el) el.textContent = 'v' + v; }
+
 // test hooks
 window.FT = {
   dbg() { return { tris: renderer.info.render.triangles, calls: renderer.info.render.calls, shadowOn: renderer.shadowMap.enabled, sunCast: sun.castShadow, map: !!sun.shadow.map, ms: sun.shadow.mapSize.x, bg: scene.background && scene.background.isTexture, env: !!scene.environment, cam: sun.shadow.camera.right, sunPos: sun.position.toArray().map(Math.round), q: qName, prog: renderer.info.programs.length }; },
