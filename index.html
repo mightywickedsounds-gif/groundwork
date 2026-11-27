@@ -7,7 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <title>Flowtown</title>
 <meta name="theme-color" content="#101214">
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/","./net.js":"./net.js?v=21","./city.js":"./city.js?v=21","./draw.js":"./draw.js?v=21","./sky.js":"./sky.js?v=21","./life.js":"./life.js?v=21","./police.js":"./police.js?v=21","./scenery.js":"./scenery.js?v=21","./parking.js":"./parking.js?v=21"}}</script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/","./net.js":"./net.js?v=22","./city.js":"./city.js?v=22","./draw.js":"./draw.js?v=22","./sky.js":"./sky.js?v=22","./life.js":"./life.js?v=22","./police.js":"./police.js?v=22","./scenery.js":"./scenery.js?v=22","./parking.js":"./parking.js?v=22"}}</script>
 <style>
   @font-face { font-family:Overpass; font-weight:600; src:url(assets/fonts/overpass-600.woff2) format('woff2'); font-display:swap; }
   @font-face { font-family:Overpass; font-weight:800; src:url(assets/fonts/overpass-800.woff2) format('woff2'); font-display:swap; }
@@ -192,7 +192,7 @@
   #daySum .rows b { text-align:right; }
   #daySum .rows .tot { border-top:2px solid rgba(246,246,241,.8); padding-top:6px; font-size:19px; font-weight:900; opacity:1; }
   @media (max-width:760px) {
-    #card { left:8px; right:8px; width:auto; bottom:calc(max(12px, env(safe-area-inset-bottom)) + 132px); padding:12px 13px; }
+    #card { left:8px; right:8px; width:auto; bottom:calc(max(12px, env(safe-area-inset-bottom)) + 80px); padding:12px 13px; }
     #card .staff { max-height:96px; }
     #coins b { font-size:24px; }
     #goal { font-size:11px; }
@@ -213,8 +213,13 @@
   #scanList .srow.cCLEAR b { background:var(--green); color:var(--white); }
   #scanList .srow:hover span { text-decoration:underline; }
   body.titleUp #scan { display:none; }
+  /* phones: the speed buttons sit under the gridlock sign, away from the browser's own buttons at the bottom of the screen */
+  #spdDock { position:fixed; right:max(8px, env(safe-area-inset-right)); top:calc(max(12px, env(safe-area-inset-top)) + 64px); display:none; padding:5px; background:var(--asphalt); border-radius:12px; box-shadow:var(--drop); transition:transform .45s cubic-bezier(.2,.8,.2,1); }
+  #spdDock #speed { width:auto; gap:5px; } #spdDock #speed button { flex:none; width:42px; min-width:0; height:38px; padding:0; }
+  body.titleUp #spdDock { transform:translateY(-260%); pointer-events:none; }
   @media (max-width:760px) {
-    #scan { top:auto; bottom:calc(max(12px, env(safe-area-inset-bottom)) + 124px); right:8px; left:auto; width:min(300px, 62vw); padding:7px 9px 5px; }
+    #spdDock { display:flex; }
+    #scan { top:auto; bottom:calc(max(12px, env(safe-area-inset-bottom)) + 76px); right:8px; left:auto; width:min(300px, 62vw); padding:7px 9px 5px; }
     #scanList .srow:nth-child(n+3) { display:none; }
     #scan:not(.fresh) #scanList { display:none; } #scan:not(.fresh) { width:auto; } #scan .sh { margin:0; cursor:pointer; }
     #card.show ~ #scan { display:none; }
@@ -232,8 +237,8 @@
     #speed { width:100%; } #speed button { flex:1; height:36px; }
     #tools button kbd { display:none; }
     #tools button .lg { display:none; } #tools button .sh { display:inline; }
-    #hint { bottom:calc(max(12px, env(safe-area-inset-bottom)) + 112px); font-size:12px; }
-    #lvl { bottom:calc(max(12px, env(safe-area-inset-bottom)) + 148px); }
+    #hint { bottom:calc(max(12px, env(safe-area-inset-bottom)) + 72px); font-size:12px; }
+    #lvl { bottom:calc(max(12px, env(safe-area-inset-bottom)) + 106px); }
     .panel h1 { font-size:42px; }
   }
   @media (max-width:420px) { #stats { gap:2px 9px; } #stats b { font-size:14px; } #clock { font-size:24px; } #jam { width:126px; padding:8px 10px 10px; } #jamLbl { font-size:11px; } #jamLbl b { font-size:15px; } }
@@ -311,6 +316,7 @@
   <button id="menuBtn" class="tileBtn" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
 </div>
 
+<div id="spdDock"></div>
 <div id="scan" class="sign"><div class="sh"><i></i><span>SCANNER</span><button id="scanX" aria-label="Close the scanner"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div id="scanList"></div></div>
 <div id="lvl"><button data-lv="0">Street</button><button data-lv="1">Overpass</button><button data-lv="-1">Underpass</button></div>
 <div id="hint"></div>
@@ -358,7 +364,7 @@
       <button id="credBtn" class="tb">Credits</button>
     </div>
   </div>
-  <div class="ver">v21</div>
+  <div class="ver">v22</div>
 </div>
 
 <div id="menu" class="screen">
@@ -407,6 +413,6 @@
 </div>
 
 
-<script type="module" src="game.js?v=21"></script>
+<script type="module" src="game.js?v=22"></script>
 </body>
 </html>

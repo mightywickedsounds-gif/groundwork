@@ -25,7 +25,7 @@ for (let i = 0; i < days * DAY / dt; i++) {
   if (i === 2000) { const d = city.buildings.find(b => b.biz && b.biz.t === 'diner'); life.coins += 5000; life.upgrade(d); life.upgrade(d); city.sync(); life.sync(); }
   if (i % 50 === 0) for (const b of city.buildings) if (b.biz && b.biz.cash > 20) { life.collect(b); life.stat.collected++; }
   life.checkGoal();
-  maxParked = Math.max(maxParked, life.park.parked.size); maxMovers = Math.max(maxMovers, life.park.movers.length); backedOut += life.park.movers.filter(m => m.rev && m.s > 0 && !m.counted && (m.counted = true)).length;
+  maxParked = Math.max(maxParked, life.park.parked.size); maxMovers = Math.max(maxMovers, life.park.movers.length); backedOut += life.park.movers.filter(m => m.legs && m.legs[m.li].rev && m.legs[m.li].s > m.wb + .1 && !m.counted && (m.counted = true)).length;
   for (const c of net.cars) if (c.hide) { const h = (hidT.get(c) || 0) + dt; hidT.set(c, h); if (h > 90) hiddenLong++; }
   maxWalk = Math.max(maxWalk, life.walkers.length); maxCars = Math.max(maxCars, net.cars.length);
   if ((rep += dt) >= DAY / 8) { rep = 0; const st = {}; for (const p of life.people.values()) st[p.state + (p.state === 'in' ? (p.at === p.home ? ':home' : p.at === p.work ? ':work' : ':other') : '')] = (st[p.state + (p.state === 'in' ? (p.at === p.home ? ':home' : p.at === p.work ? ':work' : ':other') : '')] || 0) + 1;

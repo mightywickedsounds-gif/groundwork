@@ -895,6 +895,8 @@ function toggleView() { S.view = !S.view; $('viewBtn').classList.toggle('on', S.
 for (const b of document.querySelectorAll('#tools button[data-tool]')) b.addEventListener('click', () => { setTool(b.dataset.tool); sound.start(); });
 // (acts on touch-down as well as click: on iPhones a tap on the pause button's icon didn't always come through as a click)
 for (const b of document.querySelectorAll('#speed button')) { const go = () => setSpeed(+b.dataset.speed); b.addEventListener('pointerdown', go); b.addEventListener('click', go); }
+// phones: the speed buttons go up under the gridlock sign (at the bottom, right above the browser's own toolbar, taps on them got lost)
+{ const mq = matchMedia('(max-width:760px)'), place = () => { const sp = $('speed'), to = mq.matches ? $('spdDock') : $('bar'); if (sp.parentNode !== to) to.appendChild(sp); }; place(); mq.addEventListener('change', place); }
 $('viewBtn').addEventListener('click', toggleView);
 const fmt = n => n >= 1e4 ? (n / 1e3).toFixed(1) + 'k' : String(n);
 const money = n => Math.floor(n).toLocaleString('en-US');

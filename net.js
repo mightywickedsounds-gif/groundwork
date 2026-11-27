@@ -138,7 +138,7 @@ export class Net {
     this.nid = 1; this.eid = 1; this.rid = 1;
     this.lanes = new Map();       // key -> lane (links and connectors)
     this.links = [];              // lanes that are roads (not junction connectors)
-    this.cars = []; this.carId = 1;
+    this.cars = []; this.carId = 1; this.blocks = new Set();
     this.ver = 0;                 // bumps on any geometry change (drawing rebuilds)
     this.stats = { arrived: 0, gaveUp: 0, spawned: 0, tripSec: 0, stranded: 0, ema: 0 };
     this.time = 0;
@@ -534,7 +534,7 @@ export class Net {
       edges: [...this.edges.values()].map(e => [e.id, e.a, e.b, +e.cx.toFixed(2), +e.cz.toFixed(2), e.oneway, e.ring, e.kind, e.nl || 1, e.tl || 0, e.lv || 0]), nid: this.nid, eid: this.eid, rid: this.rid };
   }
   load(d) {
-    this.nodes.clear(); this.edges.clear(); this.cars = [];
+    this.nodes.clear(); this.edges.clear(); this.cars = []; this.blocks = new Set();
     for (const [id, x, z, sig, ring, rc] of d.nodes) this.nodes.set(id, { id, x, z, sig: sig ? { phase: 0, t: 0, st: 'g' } : null, ring, rc: rc || null, edges: new Set() });
     for (const [id, a, b, cx, cz, oneway, ring, kind, nl, tl, lv] of d.edges) {
       if (!this.nodes.has(a) || !this.nodes.has(b)) continue;
@@ -582,7 +582,12 @@ export class Net {
     } else if (dt < 0) {       // U-turn at a dead end: swing out wide
       ctl = [ (p0[0] + p1[0]) / 2 + h0[2] * 7, (p0[1] + p1[1]) / 2 + h0[3] * 7 ];
     }
-    const M = Math.max(3, Math.ceil((dist(p0, ctl) + dist(ctl, p1)) / 1.5)); const pts = []; for (let i = 0; i <= M; i++) pts.push(qpt(p0, ctl, p1, i / M));
+    const M = Math.max(3, Math.ceil((dist(p0, ctl) + dist(ctl, p1)) / 1.5)); let pts = []; for (let i = 0; i <= M; i++) pts.push(qpt(p0, ctl, p1, i / M));
+    if (Math.abs(cr) <= .08 && dt < 0) {   // U-turn: round a loop as wide as the road allows (a car can't turn on the spot)
+      const h = [h0[2], h0[3]], rt = [-h[1], h[0]], m = lerp2(p0, p1, .5), R = Math.max(dist(p0, p1) / 2 + .2, 2.6), c = [m[0] + h[0] * 2.4, m[1] + h[1] * 2.4];
+      const P = (a, b) => [c[0] + rt[0] * a + h[0] * b, c[1] + rt[1] * a + h[1] * b];
+      pts = [p0]; bez(p0, h, P(R, 0), h, pts); bez(P(R, 0), h, P(0, R), [-rt[0], -rt[1]], pts); bez(P(0, R), [-rt[0], -rt[1]], P(-R, 0), [-h[0], -h[1]], pts); bez(P(-R, 0), [-h[0], -h[1]], p1, [-h[0], -h[1]], pts);
+    }
     const cum = cumOf(pts), len = cum[cum.length - 1];
     const ang = Math.atan2(cr, dt), turn = Math.abs(ang) < .5 ? 0 : ang > 0 ? 1 : 2;  // 0 straight, 1 right, 2 left
     const chord = dist(p0, p1), R = Math.abs(ang) > .1 ? chord / (2 * Math.sin(Math.abs(ang) / 2)) : 1e3;
@@ -718,7 +723,8 @@ export class Net {
       car.oldRoute = null;
     }
     this.cars = this.cars.filter(c => c.route);
-    for (const l of this.lanes.values()) { l.cars = l.cars.filter(c => c.route); if (l.conn) l.busy = l.cars.length; }
+    for (const l of this.lanes.values()) { l.cars = l.cars.filter(c => c.route && !c.blk); if (l.conn) l.busy = l.cars.length; }
+    for (const b of this.blocks) { const l = this.lanes.get(b.key); if (l) { b.lane = l; b.s = Math.min(b.s, l.len); l.cars.push(b); } else this.blocks.delete(b); }   // (stand-ins in the lot keep their place in the road)
     this.built = this.ver;
   }
 
@@ -775,12 +781,37 @@ export class Net {
     }
     return out;
   }
+  // a parking lot's driveway (`at.lot`: its kerb point K): for each direction the lane nearest the lot, so cars turn
+  // straight in (or out) from the right lane. A trip ends a little before the driveway (room to turn in) and starts a little past it
+  lotSpots(at, dest) {
+    const e = at.e, K = at.lot, out = [];
+    if (!e || !e.lanes || !K) return out;
+    const near = new Map();
+    for (const l of e.lanes) {
+      if (l.pk) continue;
+      const c = closestOnPoly(l.pts, l.cum, K[0], K[1]), b = near.get(l.dir);
+      if (!b || c.d < b.d) near.set(l.dir, { l, d: c.d, s: c.s });
+    }
+    const dmin = Math.min(...[...near.values()].map(b => b.d));
+    for (const { l, d, s } of near.values()) {
+      const far = d > dmin + 1;   // across the road (a left turn in or out over the other lanes)
+      const pre = dest ? (far ? 6 : 5) : 6.5, q = along(l.pts, l.cum, s), right = (K[0] - q[0]) * -q[3] + (K[1] - q[1]) * q[2] > 0;
+      out.push({ lane: l, s: Math.max(1.5, Math.min(l.len - 1.5, dest ? s - pre : s + pre)), sig: right ? 2 : 1 });
+    }
+    return out;
+  }
+  // a stand-in holding a place in a lane (a car turning in or out of a lot): traffic stops behind it like behind a car
+  block(lane, s, len = 4.6) {
+    const b = { blk: true, hold: true, keep: true, aside: false, v: 0, id: -1, route: [], key: lane.key, lane, s, len, x: 0, z: 0 };
+    lane.cars.push(b); this.blocks.add(b); return b;
+  }
+  unblock(b) { if (!b) return; const l = b.lane, i = l.cars.indexOf(b); if (i >= 0) l.cars.splice(i, 1); this.blocks.delete(b); }
   // try to start a trip. from/to: {e, x, z}. Returns car or a failure string.
   spawn(from, to, kindRoll = Math.random(), colorRoll = Math.random(), force = null) {
     if (this.built !== this.ver) this.rebuild();
     let acc = 0, ty = TYPES[0]; for (const t of TYPES) { acc += t.share; if (kindRoll < acc) { ty = t; break; } }
     if (force) ty = SVC_TYPES[force];
-    const A = this.spotOn(from.e, from.x, from.z).filter(a => !a.lane.cars.some(o => Math.abs(o.s - a.s) < ty.len + 6)), B = this.spotOn(to.e, to.x, to.z);
+    const A = (from.lot ? this.lotSpots(from, false) : this.spotOn(from.e, from.x, from.z)).filter(a => !a.lane.cars.some(o => Math.abs(o.s - a.s) < ty.len + 6)), B = to.lot ? this.lotSpots(to, true) : this.spotOn(to.e, to.x, to.z);
     if (!A.length) return 'busy';
     if (!B.length) return 'stranded';
     let best = null;
@@ -794,7 +825,8 @@ export class Net {
     const temper = .92 + ((colorRoll * 7919) % 1) * .16;
     const car = { id: this.carId++, lane: best.a.lane, s: best.a.s, v: 0, len: ty.len, w: ty.w, type: ty.k, slow: (ty.slow || 1) * temper, acc: ty.acc || 1,
       dest: best.b.lane, destKey: best.b.lane.key, destS: best.b.s, route: best.r, ri: 0, granted: null, wait: 0, stuck: 0, born: this.time,
-      color: colorRoll, arrT: 0, x: 0, z: 0, hx: 1, hz: 0, rerouteT: 0, brake: 0, sig: 1, lat: 1.6, latT: 0, prev: null, side: null };   // pulls out from the kerb
+      color: colorRoll, arrT: 0, x: 0, z: 0, hx: 1, hz: 0, rerouteT: 0, brake: 0, sig: 1, lat: from.lot ? 0 : 1.6, latV: 0, latT: 0, prev: null, side: null,   // pulls out from the kerb
+      lotIn: !!to.lot, lotOut: !!from.lot, lotSig: best.b.sig || 0 };   // (to or from a parking lot: the lot's own driving takes over at the driveway)
     best.a.lane.cars.push(car); this.cars.push(car); this.stats.spawned++;
     return car;
   }
@@ -869,7 +901,9 @@ export class Net {
       } else if (s.st === 'y' && s.t > 3) { s.st = 'a'; s.t = 0; }
       else if (s.st === 'a' && s.t > 1.5) { s.st = 'g'; s.t = 0; s.phase = (s.phase + 1) % s.groups; }
     }
-    for (const l of this.lanes.values()) { if (l.cars.length > 1) l.cars.sort((a, b) => b.s - a.s); l.inc = 0; l.mq = null; }
+    for (const l of this.lanes.values()) { if (l.cars.length > 1) l.cars.sort((a, b) => b.s - a.s); l.inc = 0; l.mq = null; l.vis = null; }
+    // a car still easing over after a lane change is mostly in its old lane: the cars there keep behind it too
+    for (const car of this.cars) if (car.side && !car.side.conn && Math.abs(car.lat || 0) > 1.2) (car.side.vis || (car.side.vis = [])).push(car);
     // drivers who need to move over; once they have waited a moment, the car behind lets them in
     for (const car of this.cars) {
       const B = car.route[car.ri + 1]; car.chgTo = B && !B.conn && !car.lane.conn ? B : null;
@@ -916,6 +950,10 @@ export class Net {
       if (car.aside) v0 = Math.min(v0, 2.5);
       let li = idx - 1; while (li >= 0 && lane.cars[li].aside && !car.aside) li--;   // a car pulled over to the side: drive on past it
       if (li >= 0) { const L = lane.cars[li]; gap = L.s - L.len - car.s; lv = L.v; car.gw = 'leader'; car.ldr = L; } else { car.gw = 'free'; car.ldr = null; }
+      if (lane.vis && !car.aside) for (const o of lane.vis) {
+        if (o === car) continue;
+        const g = this.mapS(o.lane, o.s, lane) - o.len - car.s; if (g > -1 && g < gap) { gap = Math.max(0, g); lv = o.v; car.gw = 'vis'; }
+      }
       if (lane.mq) for (const q of lane.mq) {   // let a waiting driver in from the next lane
         if (q.id === car.id) continue;
         const g = q.s - q.len - car.s; if (g > .5 && g < 30 && g < gap) { gap = g; lv = 0; car.gw = 'let'; }
@@ -997,27 +1035,35 @@ export class Net {
     for (const car of done) this.remove(car);
     // empty lanes drift back to free flow
     for (const l of this.lanes.values()) if (!l.cars.length) l.spd += (l.vmax - l.spd) * Math.min(1, dt * .05);
-    // world positions for drawing: the body sits between its front and rear wheels (so it swings through turns)
+    // world positions for drawing. The front wheels follow the lane (plus any sideways offset: changing lanes, pulling
+    // out from or in to the kerb, pulling over); the rear wheels are pulled along behind them like a real car's, so the
+    // body turns smoothly through every bend, lane change and hand-over and never slides sideways or snaps round
     for (const car of this.cars) {
-      const f = this.posAt(car, car.s - car.len * .2), r = this.posAt(car, car.s - car.len * .8);
-      let hx = f[0] - r[0], hz = f[1] - r[1]; const L = Math.hypot(hx, hz);
-      if (L > .3) { hx /= L; hz /= L; } else { hx = f[2]; hz = f[3]; }
-      car.x = (f[0] + r[0]) / 2; car.z = (f[1] + r[1]) / 2; car.hx = hx; car.hz = hz;
+      // pulling in at the end of a trip (not into a lot: the lot's driving takes over at the driveway)
+      if (car.lane === car.dest && car.destS - car.s < 14 && !car.lane.conn && !car.keep && !car.lotIn) car.latT = 1.5;
+      const want = car.aside ? (car.lane.conn ? .6 : 2.1) : (car.latT || 0);
+      if (car.lat || want || car.latV) {   // eases across (no faster than the car could steer at its speed)
+        const w = 1.7, cap = .15 + .3 * car.v;
+        car.latV = Math.max(-cap, Math.min(cap, (car.latV || 0) + (w * w * (want - car.lat) - 2 * w * (car.latV || 0)) * dt));
+        car.lat += car.latV * dt;
+        if (Math.abs(car.lat - want) < .01 && Math.abs(car.latV) < .03) { car.lat = want; car.latV = 0; }
+      }
+      const wb = car.len * .6, g = this.posAt(car, car.s - car.len * .2), lat = car.lat || 0;
+      const gx = g[0] - g[3] * lat, gz = g[1] + g[2] * lat;
+      if (car.rx === undefined || Math.hypot(car.rx - gx, car.rz - gz) > wb * 2.5) { car.rx = gx - g[2] * wb; car.rz = gz - g[3] * wb; }   // (new, or moved by an edit)
+      let hx = gx - car.rx, hz = gz - car.rz; const L = Math.hypot(hx, hz);
+      if (L > 1e-3) { hx /= L; hz /= L; } else { hx = g[2]; hz = g[3]; }
+      car.rx = gx - hx * wb; car.rz = gz - hz * wb;
+      car.x = (gx + car.rx) / 2; car.z = (gz + car.rz) / 2; car.hx = hx; car.hz = hz;
       // up a ramp or down into a cutting: height, and the nose up or down with the slope
       const yf = this.hAt(car, car.s - car.len * .2), yr = this.hAt(car, car.s - car.len * .8);
       car.y = (yf + yr) / 2; car.pitch = yf === yr ? 0 : Math.atan2(yf - yr, car.len * .6);
-      // pulling in at the end of a trip
-      if (car.lane === car.dest && car.destS - car.s < 14 && !car.lane.conn && !car.keep) car.latT = 1.5;
-      const want = car.aside ? (car.lane.conn ? .6 : 2.1) : (car.latT || 0);
-      if (car.lat || want) {   // drifting across: after a lane change, pulling out, pulling in
-        const d = car.lat - want, r2 = Math.sign(d) * Math.min(Math.abs(d), dt * (car.aside ? 1.6 : want ? .9 : 1.5)); car.lat -= r2; if (Math.abs(car.lat) < .01) car.lat = 0;
-        car.x += -hz * car.lat; car.z += hx * car.lat;
-        const k = Math.max(-.3, Math.min(.3, -(r2 / dt) / Math.max(3, car.v))); let qx = hx - hz * k, qz = hz + hx * k; const Q = Math.hypot(qx, qz) || 1; car.hx = qx / Q; car.hz = qz / Q;
-      }
       // blinkers: moving over, turning at the junction ahead, pulling out (left) or in (right)
       let sg = 0;
       if (car.hold && car.crashed) sg = 3;   // hazard lights
       else if (car.latT || car.aside) sg = 2;
+      else if (car.side && Math.abs(car.lat) > .4) sg = car.lat < 0 ? 2 : 1;   // still easing over after a lane change
+      else if (car.lotIn && car.lane === car.dest && car.destS - car.s < 35) sg = car.lotSig;   // about to turn in to a lot
       else if (car.lat > .3 && car.born > this.time - 6 && car.s < 20) sg = 1;
       else if (car.chgTo) sg = car.chgTo.off > car.lane.off ? 2 : 1;
       else {
@@ -1032,7 +1078,7 @@ export class Net {
   posAt(car, s) {
     const l = car.lane;
     if (s >= 0 || (!car.prev && !car.side)) return along(l.pts, l.cum, s);
-    if (car.side) return along(car.side.pts, car.side.cum, this.mapS(l, s, car.side));
+    if (car.side) { const q = along(l.pts, l.cum, 0); return [q[0] + q[2] * s, q[1] + q[3] * s, q[2], q[3]]; }   // (just moved over: straight back from the start of this lane; the sideways offset puts it where it was)
     const p = car.prev; return along(p.pts, p.cum, p.len + s);
   }
   // road height under a lane at s (0 at junctions and on ordinary roads)
@@ -1067,6 +1113,12 @@ export class Net {
   }
 }
 
+// a cubic curve from pose a (heading ha) to pose b (heading hb), points appended to out
+function bez(a, ha, b, hb, out) {
+  const ch = Math.hypot(b[0] - a[0], b[1] - a[1]); if (ch < .05) return;
+  const k = ch * .55, p1 = [a[0] + ha[0] * k, a[1] + ha[1] * k], p2 = [b[0] - hb[0] * k, b[1] - hb[1] * k], n = Math.max(3, Math.ceil(ch / .6));
+  for (let i = 1; i <= n; i++) { const t = i / n, m = 1 - t; out.push([m * m * m * a[0] + 3 * m * m * t * p1[0] + 3 * m * t * t * p2[0] + t * t * t * b[0], m * m * m * a[1] + 3 * m * m * t * p1[1] + 3 * m * t * t * p2[1] + t * t * t * b[1]]); }
+}
 // ray/ray: p + t*d = q + u*e -> [t, u]
 function segLine(p, d, q, e) {
   const den = d[0] * e[1] - d[1] * e[0]; if (Math.abs(den) < 1e-6) return null;

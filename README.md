@@ -332,3 +332,19 @@ The owner's phone screenshot after building a gas station: it looked buggy (yell
 
 The owner: the title screen still said v18 after the update. The label in the corner was typed into the page by hand and never updated (the game itself was version 20). It now shows the version of the game file the phone actually loaded, so it always matches, and if a phone is still holding an old copy it shows the old number.
 
+
+### Round 22: cars drive like cars, and the pause button on phones
+
+The owner's phone screenshots: cars cut diagonally across the avenue into and out of the parking lots, sat crooked across the lanes, looked like they were following a set path, cars seemed to appear out of nowhere in the lots, and the pause button still didn't work.
+
+What was wrong (measured frame by frame over 25 minutes of play before fixing anything): cars slid sideways about 25,000 times (mostly pulling away from the kerb and changing lanes), snapped round about 4,000 times, jumped up to 3 m when moving into a turn lane, and the cars in the lots turned up to 75 degrees in one frame and flipped right round when they took over from the car on the road.
+
+- **The car body follows its wheels.** The front wheels follow the lane; the rear wheels are pulled along behind like a real car's. The body now turns smoothly through every bend, lane change and turn, and never slides sideways or snaps round. Changing lanes, pulling out from the kerb and pulling over ease in and out, no faster than the car could steer at its speed (no more cars crabbing sideways while standing still).
+- **A car still easing over into the next lane is still in the way.** Cars in the lane it is leaving keep behind it until it has really moved over (they used to drive through it).
+- **Dead-end U-turns** swing out as wide as the road allows instead of pivoting on the spot.
+- **Turning into a lot.** A car heading for a business with a parking lot now stops in the right lane for its driveway: the lane on the lot's side (a right turn in), or the inside lane from across the road (a left turn in, waiting for a gap in the oncoming traffic). It signals, slows, and turns in on a real curve, the cars behind it waiting while it turns. In the lot it keeps right, rounds the corner into the aisle and noses into a stall. It used to stop wherever its trip ended (often on the far side of the avenue) and drive in a straight line across every lane.
+- **Leaving a lot.** The car backs out with its rear swinging away from the exit, stops, pulls forward along the aisle, stops at the stop bar, waits until nothing is coming, and pulls out on a curve into the right lane, handing over to the traffic at the speed it is going. It used to back out on straight lines and cut across the road.
+- **Cars in a lot don't drive through each other.** One waits for another that is right in front of it.
+- **Deeper lots have a drive-through lane** in line with each driveway, so cars can reach the rows at the back (they used to drive through the parked cars).
+- **Pause on phones.** The pause, 1x, 2x and 4x buttons were at the very bottom of the screen, right above the browser's own toolbar, where taps get lost on iPhone. On phones they now sit in their own dock under the gridlock sign. (In a phone-sized test browser the button already worked, so the bottom edge of the screen was the likely cause.)
+- **Tests:** a new frame-by-frame check of how every car moves. After the changes it finds no jumps or flips, and the only snaps left are under 4 degrees a frame (cars on tight turns). The life test now checks the new lot driving. Life, law, lanes, bridge, build and the browser check pass; trips across town take about the same time as before.
