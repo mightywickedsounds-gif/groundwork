@@ -94,7 +94,7 @@ export function buildScenery(net, city, life, Q) {
   const P = {}; for (const k of Object.keys(PROPS)) P[k] = [];
   const wires = [];
   for (const e of net.edges.values()) {
-    if (e.ring || e.len < 20) continue;
+    if (e.ring || e.lv || e.len < 20) continue;
     const inTown = city.inCity(e.cx, e.cz), big = e.kind === 'avenue' || (e.nl || 1) > 1, hw = halfW(e);
     const mid = along(e.pts, e.cum, e.len / 2), core = Math.hypot(mid[0], mid[1]) < (city.coreR || 0);
     // street trees just behind the sidewalk (on main roads and downtown; between the driveways on house streets)
@@ -132,7 +132,7 @@ export function buildScenery(net, city, life, Q) {
     const s = e.a === n.id ? net.trimOf(n) + 1 : e.len - net.trimOf(n) - 1, q = along(e.pts, e.cum, s), w = halfW(e) + WALK_W - .4;
     P.blade.push([q[0] - q[3] * w, q[1] + q[2] * w, Math.atan2(-q[3], q[2])]);
   }
-  // in front of the shops: benches, bins, planters; bollards at the gas stations; mailbox banks at the apartments
+  // in front of the shops: benches, bins, planters; mailbox banks at the apartments (gas station posts stand at the pumps: draw.js)
   for (const b of B) {
     if (!b.e) continue;
     let fx = b.fx - b.x, fz = b.fz - b.z; const L = Math.hypot(fx, fz) || 1; fx /= L; fz /= L;
@@ -143,7 +143,6 @@ export function buildScenery(net, city, life, Q) {
       const w = Math.min(b.w, b.d) * .4, p1 = at(-w, 1.8), p2 = at(w * .6, 1.6), p3 = at(w, 1.4);
       if (!blocked(p1[0], p1[1], -1.2)) P.bench.push([p1[0], p1[1], yaw]); if (!blocked(p2[0], p2[1], -1.2)) P.bin.push([p2[0], p2[1], 0]); if (!blocked(p3[0], p3[1], -1.2)) P.planter.push([p3[0], p3[1], yaw]);
     }
-    if (b.biz && b.biz.t === 'gas') for (const a of [-4, -1.5, 1.5, 4]) { const p = at(a, 4.5); P.bollard.push([p[0], p[1], 0]); }
     if (b.kind === 'apt') { const p = at(-Math.min(b.w, b.d) * .35, 2.4); if (!blocked(p[0], p[1], -1)) P.mailboxes.push([p[0], p[1], yaw]); }
   }
   // instance the props
@@ -167,8 +166,14 @@ export function buildScenery(net, city, life, Q) {
       let fx = b.fx - b.x, fz = b.fz - b.z; const L = Math.hypot(fx, fz) || 1; fx /= L; fz /= L;
       const c = Math.cos(b.rot || 0), s = Math.sin(b.rot || 0), ax = fx * c + fz * s, az = -fx * s + fz * c, alongX = Math.abs(ax) >= Math.abs(az), sg = alongX ? Math.sign(ax) || 1 : Math.sign(az) || 1;
       const n = alongX ? [c * sg, s * sg] : [-s * sg, c * sg], t = [-n[1], n[0]], hf = (alongX ? b.w : b.d) / 2, hwid = (alongX ? b.d : b.w) / 2;
-      const big = b.kind === 'big', W = Math.min(hwid * 1.6, big ? 18 : b.biz.t === 'hospital' ? 14 : 10), H = W * A.CH / A.CW * 1.1, y = big ? b.h - H / 2 - .6 : Math.min(b.h - .4 - H / 2, 3.25 + .5 + H / 2);
-      const cx = b.x + n[0] * (hf + .12), cz = b.z + n[1] * (hf + .12), k = pos.length / 3;
+      const big = b.kind === 'big';
+      let W = Math.min(hwid * 1.6, big ? 18 : b.biz.t === 'hospital' ? 14 : 10), H = W * A.CH / A.CW * 1.1;
+      // the sign goes on the wall between the shopfront canopy and the roof (seen from above, a canopy in front hides
+      // anything lower): smaller if the band is narrow, and up on the canopy's front edge if there's no room at all
+      const awnTop = big ? 4.6 : 3.45, b0 = awnTop + .25, b1 = b.h - .35, onAwn = b1 - b0 < .75;
+      if (onAwn) { H = Math.min(H, .9); W = H * A.CW / A.CH / 1.1; } else if (b1 - b0 < H) { H = b1 - b0; W = H * A.CW / A.CH / 1.1; }
+      const y = onAwn ? awnTop + H / 2 + .02 : b0 + (b1 - b0 - H) * (big ? .65 : .5) + H / 2, out = onAwn ? hf + (big ? 3.5 : 2.4) - .1 : hf + .12;
+      const cx = b.x + n[0] * out, cz = b.z + n[1] * out, k = pos.length / 3;
       for (const [a, v] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { pos.push(cx + t[0] * a * W / 2 * -1, y + v * H / 2, cz + t[1] * a * W / 2 * -1); nor.push(n[0], 0, n[1]); }
       const u0 = (i % A.cols) / A.cols, u1 = u0 + 1 / A.cols, v1 = 1 - Math.floor(i / A.cols) / A.rows, v0 = v1 - 1 / A.rows;
       uv.push(u0, v0, u1, v0, u1, v1, u0, v1); idx.push(k, k + 1, k + 2, k, k + 2, k + 3);

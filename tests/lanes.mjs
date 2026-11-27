@@ -1,7 +1,7 @@
 // Multi-lane roads and turn lanes: node tests/lanes.mjs [hours]
 // 1) a single crossroads of wide roads: lane arrows are right, left turns use the turn lane
 // 2) the same city run twice (same random numbers): plain streets vs. wide avenues with turn lanes
-import { Net, rng } from '../net.js';
+import { Net, rng, halfW } from '../net.js';
 import { createCity, DAY } from '../city.js';
 let fails = 0;
 const check = (name, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + name + (info ? '  ' + info : '')); if (!ok) fails++; };
@@ -76,18 +76,29 @@ function run(wide) {
   const s = net.stats;
   return { changed, lights, buildingsCleared: gone, arrived: s.arrived, gaveUp: s.gaveUp, avgTrip: +(s.tripSec / s.arrived).toFixed(1), stuckMax, carSecsInTurnLanes: Math.round(pk * dt), carSecsInInnerLanes: Math.round(multi * dt), stepMaxMs: +maxMs.toFixed(1) };
 }
-// ---- 3) widening every road to 3 lanes + turn lanes keeps the city: buildings set back, empty street land grows back ----
+// ---- 3) widening every road as far as the Lanes tool allows: it stops short of the buildings, nothing is knocked down ----
 {
   const R = rng(5); const orig = Math.random; Math.random = R;
   const net = new Net(), city = createCity(net, 7);
   for (let i = 0; i < 3; i++) { const d = city.nextDistrict(); city.unlock(d[0], d[1]); }
   city.sync(); const b0 = city.buildings.length;
-  for (const e of [...net.edges.values()]) { if (!net.edges.has(e.id) || e.ring) continue; for (let k = 0; k < 5 && !(e.nl === 3 && e.tl === 1); k++) net.cycleLanes(e.id); }
+  let wider = 0, capped = 0;
+  for (const e of [...net.edges.values()]) {
+    if (!net.edges.has(e.id) || e.ring) continue;
+    for (let k = 0; k < 5; k++) {
+      const room = city.maxHalfW(net.roadChain(e)), nx = net.nextLanes(e, room), w0 = halfW(e);
+      if (halfW({ ...e, nl: nx[0], tl: nx[1] }) <= w0) { if (nx.capped) capped++; break; }
+      net.cycleLanes(e.id, room); wider++;
+    }
+  }
   const gone = city.sync().filter(g => !g.lot).length, b1 = city.buildings.length;
-  check('widening every road sets buildings back instead of clearing them all', city.cutBack > 20 && b1 > b0 * .3, `${b0} buildings, ${gone} cleared, ${city.cutBack} set back`);
+  check('widening every road as far as it fits knocks no building down', gone === 0 && b1 === b0 && wider > 20, `${b0} buildings, ${gone} cleared, ${wider} widenings, ${capped} roads stopped short by buildings`);
+  check('some roads are stopped short by the buildings beside them', capped > 0, `${capped}`);
+  // a road drawn straight through the town still clears what's in its way (and nothing is cut down to a sliver)
+  { const d = city.nextDistrict(); city.unlock(d[0], d[1], true); city.sync(); }   // bought land: streets, nothing built yet
   for (let i = 0; i < DAY / .1; i++) city.regrow(.1);
   const b2 = city.buildings.length;
-  check('empty street land grows back within a day', b2 > b1 && b2 >= b0 * .8, `${b0} at the start, ${b1} after widening, ${b2} a day later`);
+  check('empty street land grows', b2 > b1 + 10, `${b1} after widening, ${b2} a day later`);
   // nothing regrown sits on a road or on another building
   const ov = (a, b) => { const ax = [Math.cos(a.rot || 0), Math.sin(a.rot || 0)], bx = [Math.cos(b.rot || 0), Math.sin(b.rot || 0)], axs = [ax, [-ax[1], ax[0]], bx, [-bx[1], bx[0]]], d = [b.x - a.x, b.z - a.z];
     for (const n of axs) { const ra = a.w / 2 * Math.abs(ax[0] * n[0] + ax[1] * n[1]) + a.d / 2 * Math.abs(-ax[1] * n[0] + ax[0] * n[1]), rb = b.w / 2 * Math.abs(bx[0] * n[0] + bx[1] * n[1]) + b.d / 2 * Math.abs(-bx[1] * n[0] + bx[0] * n[1]); if (Math.abs(d[0] * n[0] + d[1] * n[1]) > ra + rb - .05) return false; } return true; };

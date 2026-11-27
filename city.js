@@ -88,6 +88,38 @@ export function createCity(net, seed = 7) {
     b.x = +nb.x.toFixed(2); b.z = +nb.z.toFixed(2); b.w = +w.toFixed(2); b.d = +d.toFixed(2);
     return true;
   }
+  // ---- how wide a road may get without touching what stands beside it ----
+  // a building keeps this much clear past the back of the sidewalk (a house keeps a front yard); a business keeps its own lot
+  const CLEAR = { house: 3, lot: .3, other: .8 };
+  // distance from a point to a rectangle (centre, half sizes, angle)
+  const rectDist = (px, pz, x, z, hw, hd, rot) => { const c = Math.cos(rot), s = Math.sin(rot), dx = px - x, dz = pz - z, lx = dx * c + dz * s, lz = -dx * s + dz * c; return Math.max(Math.abs(lx) - hw, Math.abs(lz) - hd); };   // (square reach, like the clearing test in sync)
+  // the widest carriageway (half width, kerb to centre) these road pieces could have before a building or a business's lot would be in the way
+  C.maxHalfW = function (edges) {
+    let best = Infinity;
+    const things = [];
+    for (const b of C.buildings) things.push([b.x, b.z, b.w / 2, b.d / 2, b.rot || 0, b.kind === 'house' ? CLEAR.house : CLEAR.other]);
+    for (const l of C.lots) if (l.bid) things.push([l.x, l.z, l.w / 2, l.d / 2, l.rot || 0, CLEAR.lot]);
+    for (const e of edges) {
+      const [x0, x1, z0, z1] = e.bb;
+      for (const [x, z, hw, hd, rot, cl] of things) {
+        const R = Math.hypot(hw, hd) + 40; if (x < x0 - R || x > x1 + R || z < z0 - R || z > z1 + R) continue;
+        for (let i = 0; i < e.pts.length; i++) { const p = e.pts[i]; const d = rectDist(p[0], p[1], x, z, hw, hd, rot) - WALK_W - cl; if (d < best) best = d; }
+      }
+    }
+    return best;
+  };
+  // the buildings a planned road (centreline pts, half width hw) would have to clear
+  C.inTheWay = function (pts, hw) {
+    if (!pts || pts.length < 2) return [];
+    let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; for (const p of pts) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); }
+    const out = [];
+    for (const b of C.buildings) {
+      const R = Math.hypot(b.w, b.d) / 2 + hw + 12; if (b.x < x0 - R || b.x > x1 + R || b.z < z0 - R || b.z > z1 + R) continue;
+      const need = hw + ROAD_CLEAR - ROAD_W / 2 - .8;   // (the same reach as sync's clearing)
+      if (pts.some(p => rectDist(p[0], p[1], b.x, b.z, b.w / 2, b.d / 2, b.rot || 0) < need)) out.push(b);
+    }
+    return out;
+  };
   function addBuilding(b) {
     b.id = C.bid++; C.buildings.push(b); return b;
   }
@@ -270,7 +302,7 @@ export function createCity(net, seed = 7) {
     let cut = 0;
     C.buildings = C.buildings.filter(b => {
       if (!hitsRoad(b.x, b.z, b.w / 2, b.d / 2, b.rot || 0, ROAD_CLEAR - .8)) return true;
-      if (cutBack(b, ROAD_CLEAR - .5, 6, .35)) { cut++; return true; }   // rebuilt smaller, set back from the road
+      // (buildings used to be cut down to a sliver here; a real road either clears a building or keeps its distance)
       gone.push(b); return false;
     });
     C.cutBack = cut;
@@ -280,7 +312,7 @@ export function createCity(net, seed = 7) {
     C.lots = C.lots.filter(l => (!l.bid || ids.has(l.bid)) && (!hitsRoad(l.x, l.z, l.w / 2, l.d / 2, l.rot || 0, ROAD_CLEAR - .8) || cutBack(l, ROAD_CLEAR - .5, 8, .3) || (gone.push({ lot: l }), false)));
     // street for every building: a spatial hash of road samples
     const cell = 25, grid = new Map(), key = (x, z) => (Math.floor(x / cell) + 1000) * 4000 + Math.floor(z / cell) + 1000;
-    for (const e of net.edges.values()) { if (e.ring) continue; const seen = new Set(); for (const p of e.pts) { const k = key(p[0], p[1]); if (seen.has(k)) continue; seen.add(k); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(e); } }
+    for (const e of net.edges.values()) { if (e.ring || e.lv) continue; const seen = new Set(); for (const p of e.pts) { const k = key(p[0], p[1]); if (seen.has(k)) continue; seen.add(k); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(e); } }
     for (const b of C.buildings) {
       let best = null, bd = 48;
       const cx = Math.floor(b.fx / cell), cz = Math.floor(b.fz / cell);
@@ -348,7 +380,7 @@ export function createCity(net, seed = 7) {
   }
   // one try at new growth along a random street. resi: homes only (businesses are the player's)
   function tryGrow(resi = false, R = Math.random) {
-    const E = [...net.edges.values()].filter(e => !e.ring && e.len > 30); if (!E.length) return null;
+    const E = [...net.edges.values()].filter(e => !e.ring && !e.lv && e.len > 30); if (!E.length) return null;
     const e = E[(R() * E.length) | 0];
     const mid = along(e.pts, e.cum, e.len / 2); if (!inCity(mid[0], mid[1])) return null;
     const sg = R() < .5 ? 1 : -1, zone = zoneAt(e, mid), q = R();
@@ -382,7 +414,7 @@ export function createCity(net, seed = 7) {
     sAt = Math.max(s0 + fw / 2 + 1, Math.min(s1 - fw / 2 - 1, sAt));
     // set back behind a parking lot (downtown: up to the sidewalk, no lot)
     const core = zoneAt(e, along(e.pts, e.cum, sAt)) === 'core', t = extra.biz && extra.biz.t;
-    const gap = core ? 1 : kind === 'big' ? 26 : ({ gas: 12, auto: 12, police: 14, fire: 11, hospital: 18 })[t] || 14;
+    const gap = core ? 1 : kind === 'big' ? 26 : ({ gas: 30, auto: 12, police: 14, fire: 11, hospital: 18 })[t] || 14;   // (a gas station sits back behind its pumps)
     for (const ds of [0, -6, 6, -12, 12, -20, 20]) {
       const s = sAt + ds; if (s - fw / 2 < s0 || s + fw / 2 > s1) continue;
       for (const g of core ? [gap] : [gap, 8]) {
@@ -423,7 +455,7 @@ export function createCity(net, seed = 7) {
     const space = c.d - halfW(e) - WALK_W - b.w / 2 - 1.5; if (space < 6.2) return null;
     const D = Math.min(space, 32), mid = b.w / 2 + .6 + D / 2;
     for (const L of [b.d + 8, b.d + 3, b.d]) {
-      const lot = { k: 'parking', x: +(b.x - ax[0] * mid).toFixed(2), z: +(b.z - ax[1] * mid).toFixed(2), w: +L.toFixed(2), d: +D.toFixed(2), rot: +(r + Math.PI / 2).toFixed(4), fill: +(.3 + hash(b.id, 3, seed) * .5).toFixed(2), seed: +hash(b.id, 4, seed).toFixed(4), bid: b.id };
+      const lot = { ...(b.biz && b.biz.t === 'gas' ? { fuel: 1 } : {}), k: 'parking', x: +(b.x - ax[0] * mid).toFixed(2), z: +(b.z - ax[1] * mid).toFixed(2), w: +L.toFixed(2), d: +D.toFixed(2), rot: +(r + Math.PI / 2).toFixed(4), fill: +(.3 + hash(b.id, 3, seed) * .5).toFixed(2), seed: +hash(b.id, 4, seed).toFixed(4), bid: b.id };
       const me = { x: lot.x, z: lot.z, hw: L / 2, hd: D / 2, r: lot.rot };
       if (hitsRoad(lot.x, lot.z, L / 2, D / 2, lot.rot, ROAD_CLEAR - .8)) continue;
       if (C.buildings.some(o => o !== b && Math.abs(o.x - lot.x) < 90 && Math.abs(o.z - lot.z) < 90 && overlap(me, rectOf(o), .3))) continue;
@@ -488,6 +520,7 @@ export function createCity(net, seed = 7) {
     C.unlocked = d.unlocked; C.bid = d.bid; C.seed = d.seed;
     C.buildings = d.b.map(a => ({ id: a[0], x: a[1], z: a[2], w: a[3], d: a[4], h: a[5], kind: a[6], res: a[7], jobs: a[8], roof: a[9], face: a[10], fx: a[11], fz: a[12], tone: a[13], chunk: a[14], rot: a[15] || 0, lw: a[16] || 0, ld: a[17] || 0, ...(a[18] ? { biz: { t: a[18][0], name: a[18][1], lvl: a[18][2], cash: a[18][3] } } : {}) }));
     C.trees = d.t; C.lots = d.l; seenVer = -1; C.ver++;
+    const gas = new Set(C.buildings.filter(b => b.biz && b.biz.t === 'gas').map(b => b.id)); for (const l of C.lots) if (l.bid && gas.has(l.bid)) l.fuel = 1;   // (saves from before pumps)
   };
   return C;
 }

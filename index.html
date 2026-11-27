@@ -7,7 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <title>Flowtown</title>
 <meta name="theme-color" content="#101214">
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/","./net.js":"./net.js?v=18","./city.js":"./city.js?v=18","./draw.js":"./draw.js?v=18","./sky.js":"./sky.js?v=18","./life.js":"./life.js?v=18","./police.js":"./police.js?v=18","./scenery.js":"./scenery.js?v=18","./parking.js":"./parking.js?v=18"}}</script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/","./net.js":"./net.js?v=20","./city.js":"./city.js?v=20","./draw.js":"./draw.js?v=20","./sky.js":"./sky.js?v=20","./life.js":"./life.js?v=20","./police.js":"./police.js?v=20","./scenery.js":"./scenery.js?v=20","./parking.js":"./parking.js?v=20"}}</script>
 <style>
   @font-face { font-family:Overpass; font-weight:600; src:url(assets/fonts/overpass-600.woff2) format('woff2'); font-display:swap; }
   @font-face { font-family:Overpass; font-weight:800; src:url(assets/fonts/overpass-800.woff2) format('woff2'); font-display:swap; }
@@ -47,6 +47,9 @@
 
   /* asphalt dock: tools + speed */
   #bar { position:fixed; left:50%; bottom:max(12px, env(safe-area-inset-bottom)); transform:translateX(-50%); display:flex; gap:6px; align-items:stretch; padding:6px; background:var(--asphalt); border-radius:16px; box-shadow:var(--drop); }
+  /* taps: no double-tap zoom delay, no grey flash; icons never take the tap themselves (the button does) */
+  button { touch-action:manipulation; -webkit-tap-highlight-color:transparent; -webkit-user-select:none; user-select:none; }
+  button svg, button svg * { pointer-events:none; }
   #tools, #speed { display:flex; gap:6px; }
   .sep { width:2px; background:#33363b; margin:6px 2px; border-radius:1px; }
   #tools button, #viewBtn, #speed button { position:relative; height:58px; min-width:66px; padding:8px 8px 6px; border:0; border-radius:11px; background:var(--tile); color:var(--white); cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; font-size:12px; font-weight:800; }
@@ -61,6 +64,11 @@
 
   #hint { position:fixed; left:50%; bottom:calc(max(12px, env(safe-area-inset-bottom)) + 80px); transform:translateX(-50%); background:var(--asphalt); color:var(--white); font-size:13px; padding:7px 12px 5px; border-radius:8px; white-space:nowrap; pointer-events:none; box-shadow:var(--drop); }
   #hint:empty { display:none; }
+  /* Road / Curve: street level, over or under */
+  #lvl { position:fixed; left:50%; bottom:calc(max(12px, env(safe-area-inset-bottom)) + 118px); transform:translateX(-50%); display:none; gap:4px; padding:4px; background:var(--asphalt); border-radius:10px; box-shadow:var(--drop); }
+  #lvl.show { display:flex; }
+  #lvl button { border:0; border-radius:7px; background:var(--tile); color:var(--white); font:800 12px var(--font); padding:7px 11px 5px; cursor:pointer; }
+  #lvl button.on { background:var(--yellow); color:var(--ink); }
   #hint.bad { background:var(--red); }
   #toast { text-transform:uppercase; --bg:var(--white); --line:var(--ink); position:fixed; left:50%; top:18%; transform:translateX(-50%); color:var(--ink); font-size:18px; font-weight:900; padding:12px 18px 9px; display:none; pointer-events:none; white-space:nowrap; }
   #toast.show { display:block; }
@@ -112,7 +120,7 @@
   .tb.main:hover { background:#ffd02a; }
   .tb svg { width:24px; height:24px; }
   .ver { position:fixed; right:16px; bottom:12px; font-size:12px; color:var(--white); background:var(--asphalt); padding:3px 8px 1px; border-radius:5px; }
-  body.titleUp #hud, body.titleUp #topr { transform:translateY(-160%); pointer-events:none; } body.titleUp #hint, body.titleUp #toast { display:none; }
+  body.titleUp #hud, body.titleUp #topr { transform:translateY(-160%); pointer-events:none; } body.titleUp #hint, body.titleUp #toast, body.titleUp #lvl { display:none; }
   body.titleUp #bar { transform:translate(-50%, 160%); pointer-events:none; }
   #hud, #topr { transition:transform .45s cubic-bezier(.2,.8,.2,1); }
   #bar { transition:transform .45s cubic-bezier(.2,.8,.2,1); }
@@ -225,6 +233,7 @@
     #tools button kbd { display:none; }
     #tools button .lg { display:none; } #tools button .sh { display:inline; }
     #hint { bottom:calc(max(12px, env(safe-area-inset-bottom)) + 112px); font-size:12px; }
+    #lvl { bottom:calc(max(12px, env(safe-area-inset-bottom)) + 148px); }
     .panel h1 { font-size:42px; }
   }
   @media (max-width:420px) { #stats { gap:2px 9px; } #stats b { font-size:14px; } #clock { font-size:24px; } #jam { width:126px; padding:8px 10px 10px; } #jamLbl { font-size:11px; } #jamLbl b { font-size:15px; } }
@@ -303,6 +312,7 @@
 </div>
 
 <div id="scan" class="sign"><div class="sh"><i></i><span>SCANNER</span><button id="scanX" aria-label="Close the scanner"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div id="scanList"></div></div>
+<div id="lvl"><button data-lv="0">Street</button><button data-lv="1">Overpass</button><button data-lv="-1">Underpass</button></div>
 <div id="hint"></div>
 <div id="toast" class="sign"></div>
 
@@ -397,6 +407,6 @@
 </div>
 
 
-<script type="module" src="game.js?v=18"></script>
+<script type="module" src="game.js?v=20"></script>
 </body>
 </html>
