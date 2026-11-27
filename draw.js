@@ -940,13 +940,14 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
       }
       lay.rows.forEach((row, ri) => {
         const { z, flip } = row, head = flip ? z + 5 : z;   // the end of the stall the car noses into
-        for (const st of row.stalls) {
-          const xl = st.x - 1.3;
+        row.stalls.forEach((st, j) => {
+          const xl = st.x - 1.3, nx = row.stalls[j + 1];
           quad(lines, [xl, z], [xl + .1, z], [xl + .1, z + 5], [xl, z + 5], .065);
+          if (nx && nx.x - st.x > 6) quad(lines, [st.x + 1.2, z], [st.x + 1.3, z], [st.x + 1.3, z + 5], [st.x + 1.2, z + 5], .065);   // (the end of the stalls beside a drive-through lane)
           wheelStops.push([...W(st.x, head + (flip ? -.55 : .55)), -lr]);
           if (r() < .7) { const sp = W(st.x + (r() - .5) * .8, head + (flip ? -1.2 : 1.2) + (r() - .5) * .8); stains.push([sp[0], sp[1], .9 + r() * 1.1, r() * 6.3, .35 + r() * .45]); }   // drips where engines sit
           if (!dyn && r() < l.fill) { const p = W(st.x, st.z); parked.push([p[0], p[1], (flip ? -1 : 1) * Math.PI / 2 + (r() - .5) * .06 - lr, r()]); }
-        }
+        });
         if (row.stalls.length) { const xr = row.stalls[row.stalls.length - 1].x + 1.3; quad(lines, [xr - .1, z], [xr, z], [xr, z + 5], [xr - .1, z + 5], .065); }
         // the accessible stall nearest the door: blue, with its sign
         if (row.access) {

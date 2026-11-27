@@ -201,18 +201,17 @@ export function createLife(net, city, seed = 1) {
     }
     // drive: queue a trip; the driver walks out to the car
     p.state = 'wait'; p.why = why; p.dest = to;
-    city.queue.push({ from: A, to: B, t: 0, pid: p.id, kindRoll: p.carK, colorRoll: p.carC, toAt: B.biz ? L.park.gate(B) : null, fromAt: p.parked && p.parked.bid === A.id ? L.park.gate(A) : null,
+    city.queue.push({ from: A, to: B, t: 0, pid: p.id, kindRoll: p.carK, colorRoll: p.carC, toAt: B.biz ? L.park.gate(B, p.id) : null, fromAt: p.parked && p.parked.bid === A.id ? L.park.gate(A, p.id + 1) : null,
       ok: car => { car.pid = p.id; p.car = car; p.state = 'drive'; L.day.trips++; if (!pullOut(p, A, car, dA)) ghost(p, [dA.door, dA.walk, dA.kerb]); drives(p, car); },
       fail: why2 => { if (why2 !== 'stranded') unpark(p); if (why2 === 'stranded') { p.state = 'in'; p.since = now(); p.until = now() + 40; p.blocked = why2; } else arrive(p, to, why); } });   // roads too full to pull out: they get there anyway (unseen)
   }
   // their car is in the building's lot: they walk out to it, it backs out and drives to the street, then the trip carries on
-  function lanePos(car) { const q = along(car.lane.pts, car.lane.cum, Math.max(0, car.s - car.len / 2)); const lat = car.lat || 0; return [q[0] - q[3] * lat, q[1] + q[2] * lat]; }
   function pullOut(p, A, car, dA) {
     if (!p.parked || p.parked.bid !== A.id) { unpark(p); return false; }
     const sp = L.park.parked.get(p.parked.k); if (!sp) { p.parked = null; return false; }
     const walkT = Math.hypot(sp.x - dA.door[0], sp.z - dA.door[1]) / 1.6 + .5;
     car.hide = true; car.hold = true; car.aside = true;
-    const ok = L.park.leave(p.parked.k, car, walkT, () => { car.hide = false; car.hold = false; car.aside = false; }, lanePos(car));
+    const ok = car.lotOut && L.park.leave(p.parked.k, car, walkT, () => { car.hide = false; car.hold = false; car.aside = false; });
     if (!ok) { car.hide = false; car.hold = false; car.aside = false; p.parked = null; return false; }
     ghost(p, [dA.door, [sp.x, sp.z]]); p.parked = null; return true;
   }
@@ -278,7 +277,7 @@ export function createLife(net, city, seed = 1) {
   };
   function guestTrip(g, from, to) {
     g.state = 'wait'; g.dest = to;
-    city.queue.push({ from, to, t: 0, pid: g.id, kindRoll: g.carK, colorRoll: g.carC, toAt: !to.exit && to.biz ? L.park.gate(to) : null, fromAt: !from.exit && g.parked && g.parked.bid === from.id ? L.park.gate(from) : null,
+    city.queue.push({ from, to, t: 0, pid: g.id, kindRoll: g.carK, colorRoll: g.carC, toAt: !to.exit && to.biz ? L.park.gate(to, g.id) : null, fromAt: !from.exit && g.parked && g.parked.bid === from.id ? L.park.gate(from, g.id + 1) : null,
       ok: car => { car.pid = g.id; g.car = car; g.state = 'drive'; if (!from.exit) { const dA = D(from); if (dA) pullOut(g, from, car, dA); } drives(g, car); if (L.onCarOut) L.onCarOut(car); },
       fail: () => { if (to.exit) L.guests.delete(g.id); else { g.state = 'in'; g.at = to.id; g.until = now() + 60; } } });
   }
