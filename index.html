@@ -7,7 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <title>Flowtown</title>
 <meta name="theme-color" content="#101214">
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/","./net.js":"./net.js?v=19","./city.js":"./city.js?v=19","./draw.js":"./draw.js?v=19","./sky.js":"./sky.js?v=19","./life.js":"./life.js?v=19","./police.js":"./police.js?v=19","./scenery.js":"./scenery.js?v=19","./parking.js":"./parking.js?v=19"}}</script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/","./net.js":"./net.js?v=20","./city.js":"./city.js?v=20","./draw.js":"./draw.js?v=20","./sky.js":"./sky.js?v=20","./life.js":"./life.js?v=20","./police.js":"./police.js?v=20","./scenery.js":"./scenery.js?v=20","./parking.js":"./parking.js?v=20"}}</script>
 <style>
   @font-face { font-family:Overpass; font-weight:600; src:url(assets/fonts/overpass-600.woff2) format('woff2'); font-display:swap; }
   @font-face { font-family:Overpass; font-weight:800; src:url(assets/fonts/overpass-800.woff2) format('woff2'); font-display:swap; }
@@ -47,6 +47,9 @@
 
   /* asphalt dock: tools + speed */
   #bar { position:fixed; left:50%; bottom:max(12px, env(safe-area-inset-bottom)); transform:translateX(-50%); display:flex; gap:6px; align-items:stretch; padding:6px; background:var(--asphalt); border-radius:16px; box-shadow:var(--drop); }
+  /* taps: no double-tap zoom delay, no grey flash; icons never take the tap themselves (the button does) */
+  button { touch-action:manipulation; -webkit-tap-highlight-color:transparent; -webkit-user-select:none; user-select:none; }
+  button svg, button svg * { pointer-events:none; }
   #tools, #speed { display:flex; gap:6px; }
   .sep { width:2px; background:#33363b; margin:6px 2px; border-radius:1px; }
   #tools button, #viewBtn, #speed button { position:relative; height:58px; min-width:66px; padding:8px 8px 6px; border:0; border-radius:11px; background:var(--tile); color:var(--white); cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; font-size:12px; font-weight:800; }
@@ -404,6 +407,6 @@
 </div>
 
 
-<script type="module" src="game.js?v=19"></script>
+<script type="module" src="game.js?v=20"></script>
 </body>
 </html>

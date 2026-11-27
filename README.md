@@ -317,3 +317,14 @@ The owner's phone screenshots: widening a road to 3 lanes knocked buildings down
 - **Smaller fixes from the screenshots:** shop signs no longer sit behind the shopfront canopy (they fit the wall above it, or stand on the canopy's front edge if there's no room); the black crack-sealant lines on the roads are thinner and rarer (they looked like squiggles); back-yard fences stop short of any road built across the yard.
 - **Tests:** new `tests/bridge.mjs` (over- and underpasses), `tests/lanes.mjs` now checks that widening every road as far as it fits knocks no building down; the other checks and the browser check pass.
 
+### Round 20: a real gas station, and the pause button on iPhone
+
+The owner's phone screenshot after building a gas station: it looked buggy (yellow posts standing in the parking spaces, the name hidden behind the canopy, no pumps), and the pause button didn't respond to taps.
+
+- **Gas stations have a forecourt.** A new gas station sits back from the street behind a canopy on columns, with pump islands underneath (two pumps each, a coloured top to match the canopy band), yellow posts guarding the island ends, and now and then a car filling up. Its parking is one row of spaces along the shop front. (Gas stations built before this keep their old lot, but their stray yellow posts are gone.)
+- **The yellow posts** used to be placed 4.5 m out from the shop wall, which put them in the middle of the parking spaces. They now stand only at the pumps.
+- **The shop's name** goes on the wall above the shopfront canopy, or on the canopy's front edge when the building is too low (that was round 19; this screenshot was from before it).
+- **No lot light through the canopy**, and back-yard fences of the houses next door no longer run across a parking lot or another building.
+- **Pause on iPhone:** the speed buttons now act the moment they're touched (not only on a full "click"), their icons can't take the tap away from the button, and taps no longer wait for a possible double-tap zoom. Also: closing the menu no longer un-pauses a game that was paused before the menu was opened.
+- **Tests:** life, law, lanes, bridge and the browser check pass.
+

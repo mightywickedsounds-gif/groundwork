@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ROAD_W, ONEWAY_W, WALK_W, LANE_W, RING_R, along, halfW, laneOff, rng, closestOnPoly, edgeH, FLAT } from './net.js';
-import { frame as FR, layout as LAYOUT, entries as ENTRIES } from './parking.js';
+import { frame as FR, layout as LAYOUT, entries as ENTRIES, pumpZone } from './parking.js';
 
 
 const Y_ROAD = .03, Y_WALK = .16, Y_MARK = .045;
@@ -918,15 +918,19 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
     cm.castShadow = true; cm.receiveShadow = true; g.add(cm);
   }
   // lots: parking, parks, yards
+  const fuel = [], bollards = [];
   const lotG = new Geo(), lines = new Geo(), parks = new Geo(), shore = new Geo(), pond = new Geo(), parked = [], lotLights = [], drive = new Geo(), stains = [], apron = new Geo(), joints = new Geo(), blue = new Geo(), islands = new Geo(), curbs = [], wheelStops = [], accSigns = [], stopSigns = [];
   const islandTrees = opt.more || (opt.more = []);
+  // rectangles a back-yard fence must not cross: parking lots and buildings other than houses
+  const solids = [...city.lots.filter(l => l.k === 'parking').map(l => [l.x, l.z, l.w / 2 + .3, l.d / 2 + .3, l.rot || 0]), ...B.filter(b => b.kind !== 'house').map(b => [b.x, b.z, b.w / 2 + .3, b.d / 2 + .3, b.rot || 0])];
+  const inRect = ([x, z, hw, hd, r], px, pz) => { if (Math.abs(px - x) > hw + hd || Math.abs(pz - z) > hw + hd) return false; const c = Math.cos(r), s = Math.sin(r), dx = px - x, dz = pz - z; return Math.abs(dx * c + dz * s) < hw && Math.abs(-dx * s + dz * c) < hd; };
   for (const l of city.lots) {
     const x0 = l.x - l.w / 2, x1 = l.x + l.w / 2, z0 = l.z - l.d / 2, z1 = l.z + l.d / 2;
     if (l.k === 'parking') {
       // laid out in the lot's own frame (a lot in front of a building turns with it), then put in place
       const lr = l.rot || 0, W = FR(l).W, lay = LAYOUT(l), dyn = !!l.bid;   // (a business's lot: its cars come and go, drawn by the game)
       lotG.flat(W(x0, z0), W(x1, z0), W(x1, z1), W(x0, z1), .05);
-      for (let x = x0 + 14; x < x1 - 8; x += 30) for (let z = z0 + 11.6; z < z1 - 6; z += 23.2) lotLights.push(W(x, z));
+      const pz0 = pumpZone(l); for (let x = x0 + 14; x < x1 - 8; x += 30) for (let z = z0 + 11.6; z < z1 - 6; z += 23.2) if (!pz0 || z < pz0[0] - 1) lotLights.push(W(x, z));   // (none through a gas station's canopy)
       if (dyn && l.w > 16) lotLights.push(W(x0 + 2, z0 + 1.5));
       let s = Math.floor(l.seed * 1e6) || 1; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
       const quad = (G, a, b2, c, d2, y) => G.flat(W(a[0], a[1]), W(b2[0], b2[1]), W(c[0], c[1]), W(d2[0], d2[1]), y);
@@ -959,6 +963,26 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
           const tp = W(xe, z + 2.5); if (islandTrees) islandTrees.push([+tp[0].toFixed(2), +tp[1].toFixed(2), .5 + r() * .15, r() * .69]);
         }
       });
+      // a gas station's forecourt: pump islands under a canopy on columns, yellow posts guarding the island ends
+      const pz = pumpZone(l);
+      if (pz) {
+        const cw = Math.min(30, l.w - 6), cx = l.x, zc = (pz[0] + pz[1]) / 2, cd = Math.min(13, pz[1] - pz[0] - .4), yaw = -lr;
+        const box = (w, h, d, x, y, z, rgb) => { const p = W(x, z), g2 = paint(new THREE.BoxGeometry(w, h, d), rgb); g2.rotateY(yaw); g2.translate(p[0], y, p[1]); fuel.push(g2); };
+        const n = Math.max(1, Math.floor(cw / 8.5)), band = FUEL_BAND[Math.floor((l.seed || 0) * 97) % FUEL_BAND.length];
+        box(cw, .5, cd, cx, 5.55, zc, [.93, .93, .91]);                          // the canopy roof
+        for (const sd of [-1, 1]) box(cw + .1, .75, .08, cx, 5.45, zc + sd * cd / 2, band);   // its coloured fascia front and back
+        for (const sd of [-1, 1]) box(.08, .75, cd + .1, cx + sd * cw / 2, 5.45, zc, band);
+        box(cw - .4, .02, cd - .4, cx, 5.09, zc, [.98, .98, .95]);                // the lit underside
+        for (let k = 0; k < n; k++) {
+          const ix = cx + (k - (n - 1) / 2) * (cw / n);
+          box(1.3, .18, 5.6, ix, .14, zc, [.72, .71, .68]);                        // the raised island
+          box(.45, 5, .45, ix, 2.6, zc, [.9, .9, .88]);                            // a column through it
+          for (const dz of [-1.7, 1.7]) { box(.75, 1.75, .55, ix, 1.1, zc + dz, [.95, .95, .93]); box(.77, .32, .57, ix, 1.85, zc + dz, band); box(.5, .5, .04, ix + .4, 1.25, zc + dz, [.08, .09, .1]); }   // two pumps: body, coloured top, screen
+          for (const dz of [-2.95, 2.95]) { const p = W(ix, zc + dz); bollards.push([p[0], p[1]]); }
+          // now and then a car at the pump
+          for (const sd of [-1, 1]) if (r() < .35) { const p = W(ix + sd * 2.2, zc + (r() - .5) * 1.5); parked.push([p[0], p[1], Math.PI / 2 - lr + (r() < .5 ? 0 : Math.PI), r()]); }
+        }
+      }
       // driveways: from the side of the lot facing the nearest street, across the sidewalk (concrete) and down a curb cut onto the road
       const ents = opt.net ? ENTRIES(l, opt.net) : [];
       for (const en of ents) {
@@ -1038,6 +1062,11 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
     curbs.forEach(([a2, b2], i) => { const L = Math.hypot(b2[0] - a2[0], b2[1] - a2[1]); dummy.position.set((a2[0] + b2[0]) / 2, .03, (a2[1] + b2[1]) / 2); dummy.rotation.set(0, Math.atan2(-(b2[1] - a2[1]), b2[0] - a2[0]), 0); dummy.scale.set(L, 1, 1); dummy.updateMatrix(); cm.setMatrixAt(i, dummy.matrix); });
     cm.receiveShadow = true; cm.castShadow = Q.shadows > 1; g.add(cm); dummy.scale.set(1, 1, 1);
   }
+  if (fuel.length) { const m = new THREE.Mesh(mergeGeometries(fuel), M.fuel || (M.fuel = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .55, metalness: .1 }))); m.castShadow = true; m.receiveShadow = true; g.add(m); }
+  if (bollards.length) {   // steel posts filled with concrete, painted yellow
+    const bm = new THREE.InstancedMesh(new THREE.CylinderGeometry(.11, .11, 1, 8).translate(0, .5, 0), M.bollard || (M.bollard = new THREE.MeshStandardMaterial({ color: 0xd9b422, roughness: .5 })), bollards.length);
+    bollards.forEach((q, i) => { dummy.position.set(q[0], .2, q[1]); dummy.rotation.set(0, 0, 0); dummy.updateMatrix(); bm.setMatrixAt(i, dummy.matrix); }); bm.castShadow = Q.shadows > 1; g.add(bm);
+  }
   if (wheelStops.length) {   // concrete wheel stops at the head of each stall
     const wm = new THREE.InstancedMesh(new THREE.BoxGeometry(1.8, .13, .22).translate(0, .12, 0), M.curb, wheelStops.length);
     wheelStops.forEach((q, i) => { dummy.position.set(q[0], 0, q[1]); dummy.rotation.set(0, q[2], 0); dummy.updateMatrix(); wm.setMatrixAt(i, dummy.matrix); });
@@ -1078,7 +1107,8 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
       const rear = Math.max(4, Math.min(16, (b.ld || 30) - 7 - hf * 2)), bk = hf + rear, half = b.lw / 2;
       lawn.flat(q(-bk, -half), q(-bk, half), q(hf + Math.max(0, len), half), q(hf + Math.max(0, len), -half), .03);
       // (a fence stops short of any road built across the yard since: it never runs over a sidewalk or into a bridge wall)
-      const clearOf = (x, z) => { const h = opt.net && opt.net.nearestEdge(x, z, 30); return !h || h.d > halfW(h.e) + WALK_W + .4; };
+      // (...or across a parking lot or another building put up next door)
+      const clearOf = (x, z) => { const h = opt.net && opt.net.nearestEdge(x, z, 30); if (h && h.d <= halfW(h.e) + WALK_W + .4) return false; return !solids.some(q => inRect(q, x, z)); };
       const seg = (t0, s0, t1, s1) => {
         const a = [b.x + fxv * -t0 + px * s0, b.z + fzv * -t0 + pz * s0], e2 = [b.x + fxv * -t1 + px * s1, b.z + fzv * -t1 + pz * s1], L = Math.hypot(e2[0] - a[0], e2[1] - a[1]), ang = Math.atan2(-(e2[1] - a[1]), e2[0] - a[0]);
         const n = Math.max(1, Math.ceil(L / 2.5)); let run = -1;
@@ -1183,6 +1213,7 @@ function fenceMaterial() {
 const PAINT = [[.92, .92, .9], [.06, .06, .07], [.62, .63, .65], [.35, .36, .38], [.92, .92, .9], [.06, .06, .07], [.62, .63, .65], [.1, .16, .32], [.55, .06, .06], [.16, .2, .26], [.8, .78, .7], [.2, .28, .22], [.74, .48, .12], [.4, .1, .12]];
 export function carColor(r, col) { const n = PAINT.length, c = PAINT[((Math.floor(r * n) % n) + n) % n]; return col.setRGB(c[0], c[1], c[2], THREE.SRGBColorSpace); }   // (any number in, never out of range)
 const GLASS = [.04, .05, .06], BODY = [1, 1, 1], DARK = [.07, .07, .075], HEAD = [1, 1, .95], TAIL = [.5, .05, .04], AMBER = [.9, .45, .05], CHROME = [.55, .56, .58];
+const FUEL_BAND = [[.75, .1, .08], [.08, .25, .55], [.1, .45, .2], [.9, .55, .05]];   // gas station canopy colours (no real brands)
 function paint(g, rgb, light = 0) {
   if (g.index) g = g.toNonIndexed();
   for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k);

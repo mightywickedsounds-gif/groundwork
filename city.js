@@ -414,7 +414,7 @@ export function createCity(net, seed = 7) {
     sAt = Math.max(s0 + fw / 2 + 1, Math.min(s1 - fw / 2 - 1, sAt));
     // set back behind a parking lot (downtown: up to the sidewalk, no lot)
     const core = zoneAt(e, along(e.pts, e.cum, sAt)) === 'core', t = extra.biz && extra.biz.t;
-    const gap = core ? 1 : kind === 'big' ? 26 : ({ gas: 12, auto: 12, police: 14, fire: 11, hospital: 18 })[t] || 14;
+    const gap = core ? 1 : kind === 'big' ? 26 : ({ gas: 30, auto: 12, police: 14, fire: 11, hospital: 18 })[t] || 14;   // (a gas station sits back behind its pumps)
     for (const ds of [0, -6, 6, -12, 12, -20, 20]) {
       const s = sAt + ds; if (s - fw / 2 < s0 || s + fw / 2 > s1) continue;
       for (const g of core ? [gap] : [gap, 8]) {
@@ -455,7 +455,7 @@ export function createCity(net, seed = 7) {
     const space = c.d - halfW(e) - WALK_W - b.w / 2 - 1.5; if (space < 6.2) return null;
     const D = Math.min(space, 32), mid = b.w / 2 + .6 + D / 2;
     for (const L of [b.d + 8, b.d + 3, b.d]) {
-      const lot = { k: 'parking', x: +(b.x - ax[0] * mid).toFixed(2), z: +(b.z - ax[1] * mid).toFixed(2), w: +L.toFixed(2), d: +D.toFixed(2), rot: +(r + Math.PI / 2).toFixed(4), fill: +(.3 + hash(b.id, 3, seed) * .5).toFixed(2), seed: +hash(b.id, 4, seed).toFixed(4), bid: b.id };
+      const lot = { ...(b.biz && b.biz.t === 'gas' ? { fuel: 1 } : {}), k: 'parking', x: +(b.x - ax[0] * mid).toFixed(2), z: +(b.z - ax[1] * mid).toFixed(2), w: +L.toFixed(2), d: +D.toFixed(2), rot: +(r + Math.PI / 2).toFixed(4), fill: +(.3 + hash(b.id, 3, seed) * .5).toFixed(2), seed: +hash(b.id, 4, seed).toFixed(4), bid: b.id };
       const me = { x: lot.x, z: lot.z, hw: L / 2, hd: D / 2, r: lot.rot };
       if (hitsRoad(lot.x, lot.z, L / 2, D / 2, lot.rot, ROAD_CLEAR - .8)) continue;
       if (C.buildings.some(o => o !== b && Math.abs(o.x - lot.x) < 90 && Math.abs(o.z - lot.z) < 90 && overlap(me, rectOf(o), .3))) continue;
@@ -520,6 +520,7 @@ export function createCity(net, seed = 7) {
     C.unlocked = d.unlocked; C.bid = d.bid; C.seed = d.seed;
     C.buildings = d.b.map(a => ({ id: a[0], x: a[1], z: a[2], w: a[3], d: a[4], h: a[5], kind: a[6], res: a[7], jobs: a[8], roof: a[9], face: a[10], fx: a[11], fz: a[12], tone: a[13], chunk: a[14], rot: a[15] || 0, lw: a[16] || 0, ld: a[17] || 0, ...(a[18] ? { biz: { t: a[18][0], name: a[18][1], lvl: a[18][2], cash: a[18][3] } } : {}) }));
     C.trees = d.t; C.lots = d.l; seenVer = -1; C.ver++;
+    const gas = new Set(C.buildings.filter(b => b.biz && b.biz.t === 'gas').map(b => b.id)); for (const l of C.lots) if (l.bid && gas.has(l.bid)) l.fuel = 1;   // (saves from before pumps)
   };
   return C;
 }

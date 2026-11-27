@@ -132,7 +132,7 @@ export function buildScenery(net, city, life, Q) {
     const s = e.a === n.id ? net.trimOf(n) + 1 : e.len - net.trimOf(n) - 1, q = along(e.pts, e.cum, s), w = halfW(e) + WALK_W - .4;
     P.blade.push([q[0] - q[3] * w, q[1] + q[2] * w, Math.atan2(-q[3], q[2])]);
   }
-  // in front of the shops: benches, bins, planters; bollards at the gas stations; mailbox banks at the apartments
+  // in front of the shops: benches, bins, planters; mailbox banks at the apartments (gas station posts stand at the pumps: draw.js)
   for (const b of B) {
     if (!b.e) continue;
     let fx = b.fx - b.x, fz = b.fz - b.z; const L = Math.hypot(fx, fz) || 1; fx /= L; fz /= L;
@@ -143,7 +143,6 @@ export function buildScenery(net, city, life, Q) {
       const w = Math.min(b.w, b.d) * .4, p1 = at(-w, 1.8), p2 = at(w * .6, 1.6), p3 = at(w, 1.4);
       if (!blocked(p1[0], p1[1], -1.2)) P.bench.push([p1[0], p1[1], yaw]); if (!blocked(p2[0], p2[1], -1.2)) P.bin.push([p2[0], p2[1], 0]); if (!blocked(p3[0], p3[1], -1.2)) P.planter.push([p3[0], p3[1], yaw]);
     }
-    if (b.biz && b.biz.t === 'gas') for (const a of [-4, -1.5, 1.5, 4]) { const p = at(a, 4.5); P.bollard.push([p[0], p[1], 0]); }
     if (b.kind === 'apt') { const p = at(-Math.min(b.w, b.d) * .35, 2.4); if (!blocked(p[0], p[1], -1)) P.mailboxes.push([p[0], p[1], yaw]); }
   }
   // instance the props

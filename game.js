@@ -893,7 +893,8 @@ function toast(msg, bad = false) { const t = $('toast'); t.textContent = msg; t.
 function setSpeed(v) { if (v) S.lastSpeed = v; S.speed = v; for (const b of document.querySelectorAll('#speed button')) b.classList.toggle('on', +b.dataset.speed === v); }
 function toggleView() { S.view = !S.view; $('viewBtn').classList.toggle('on', S.view); if (overlay) overlay.visible = S.view; paintOverlay(); }
 for (const b of document.querySelectorAll('#tools button[data-tool]')) b.addEventListener('click', () => { setTool(b.dataset.tool); sound.start(); });
-for (const b of document.querySelectorAll('#speed button')) b.addEventListener('click', () => setSpeed(+b.dataset.speed));
+// (acts on touch-down as well as click: on iPhones a tap on the pause button's icon didn't always come through as a click)
+for (const b of document.querySelectorAll('#speed button')) { const go = () => setSpeed(+b.dataset.speed); b.addEventListener('pointerdown', go); b.addEventListener('click', go); }
 $('viewBtn').addEventListener('click', toggleView);
 const fmt = n => n >= 1e4 ? (n / 1e3).toFixed(1) + 'k' : String(n);
 const money = n => Math.floor(n).toLocaleString('en-US');
@@ -1216,7 +1217,7 @@ const sound = (() => {
 // screens: the title (the city slowly circling behind it), pause, settings, credits
 let settingsFrom = null;
 const show = (id, v) => $(id).classList.toggle('show', v);
-function showMenu(v) { show('menu', v); if (v) { S.menuSpeed = S.speed; setSpeed(0); } else setSpeed(S.menuSpeed || 1); }
+function showMenu(v) { show('menu', v); if (v) { S.menuSpeed = S.speed; setSpeed(0); } else setSpeed(S.menuSpeed ?? 1); }   // (paused before the menu: still paused after)
 $('menuBtn').onclick = () => showMenu(true);
 $('closeBtn').onclick = () => showMenu(false);
 $('menuSetBtn').onclick = () => { show('menu', false); settingsFrom = 'menu'; show('settings', true); };

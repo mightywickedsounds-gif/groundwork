@@ -13,7 +13,8 @@ export function layout(l) {
   if (l._lay && l._lay.key === l.x + ',' + l.z + ',' + l.w + ',' + l.d + ',' + (l.rot || 0)) return l._lay;
   const x0 = l.x - l.w / 2, x1 = l.x + l.w / 2, z0 = l.z - l.d / 2, z1 = l.z + l.d / 2, rows = [];
   let z = z0 + (l.bid ? 3.2 : 1), row = 0;   // (a business's lot: a walkway along the shopfront first)
-  while (z + ROW_GAP <= z1 - 1) {
+  const fuel = pumpZone(l);   // a gas station: one row of stalls by the shop, the pumps under a canopy beyond
+  while (z + ROW_GAP <= z1 - 1 && !(fuel && row >= 1)) {
     const flip = row % 2, stalls = [];
     const aisle = flip ? z - AISLE / 2 : Math.min(z1 - 1.8, z + ROW_GAP + AISLE / 2);   // where cars back out to
     for (let x = x0 + 1, i = 0; x + STALL_W <= x1 - 1; x += STALL_W, i++) stalls.push({ x: x + STALL_W / 2, z: z + 2.6, i });
@@ -28,6 +29,9 @@ export function layout(l) {
   Object.defineProperty(l, '_lay', { enumerable: false, writable: true, value: l._lay });   // (never saved)
   return l._lay;
 }
+// a gas station's forecourt: the strip of the lot (in its own frame, z from..to) left for the pump canopy, or null
+export const PUMP_FROM = 3.2 + 5.2 + 6.4;
+export function pumpZone(l) { const z0 = l.z - l.d / 2, z1 = l.z + l.d / 2; return l.fuel && z1 - z0 - PUMP_FROM >= 11 ? [z0 + PUMP_FROM, z1 - .8] : null; }
 // where a lot meets its street: the side facing the nearest road, one or two driveways across the sidewalk
 export function entries(l, net) {
   let best = null, bd = 90;
