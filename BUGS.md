@@ -36,7 +36,7 @@
 | browser check (play.cjs) | 23 pass | 23 pass |
 | soak (new, 120 actions each at desktop and phone size) | n/a (its first run found the crash B5) | all pass: no page errors, no broken positions, save/reload keeps the town, GPU objects flat (105 down to about 90) |
 | page errors while taking screenshots | none (only the test browser's own "GPU stall" notes) | none |
-| frame time in the test browser (software drawing, not a phone measure) | phone 664 ms, desktop 791 ms | phone 664 ms, desktop see screenshots log |
+| frame time in the test browser (software drawing, not a phone measure) | phone 664 ms, desktop 791 ms | phone 689 ms, desktop 872 ms (about 4 % and 10 % slower here: the lamp glows and the busier lots; worth checking on a real phone) |
 
 ## The bugs
 
