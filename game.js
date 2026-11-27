@@ -6,7 +6,7 @@ import { createLife, BIZ, BUILD_ORDER, MAX_LVL, COST, lvlMul, upCost } from './l
 import { createLaw, aCar } from './police.js';
 import { makeMaterials, CLOUD, cloudUniforms, buildRoads, buildCity, vehicleGeos, vehicleMaterial, makeFleet, staticCarGeo, carColor, personGeo, personMaterial, lampGeo, signalGeo, buildSignals, hwOf, beamMaterial } from './draw.js';
 import { makeSky } from './sky.js';
-import { buildScenery } from './scenery.js';
+import { buildScenery, driveRects, inRects } from './scenery.js';
 
 const $ = id => document.getElementById(id);
 let titleUp = true;   // the title screen is up (the camera circles the town)
@@ -191,9 +191,18 @@ function disposeGroup(g) { if (!g) return; scene.remove(g); g.traverse(o => { if
 let sigLamps = [], lampMesh = null, glowMesh = null, poolMesh = null;
 function rebuildRoads() {
   if (net.built !== net.ver) net.rebuild();
-  disposeGroup(roadsG); roadsG = buildRoads(net, M, { lights: true }); scene.add(roadsG);
+  disposeGroup(roadsG); roadsG = buildRoads(net, M, { lights: true, coreR: city ? city.coreR : 0, rural: e => city && !city.inCity(e.cx, e.cz) && !city.inCity(e.pts[0][0], e.pts[0][1]) && !city.inCity(e.pts[e.pts.length - 1][0], e.pts[e.pts.length - 1][1]) }); scene.add(roadsG);
   // street lights
-  disposeGroup(lampsG); lampsG = new THREE.Group(); const L = roadsG.userData.lamps;
+  buildLamps();
+  // traffic lights and stop signs
+  rebuildSignals();
+  buildOverlay();
+  seenNet = net.ver;
+}
+// street lights (none standing in a driveway)
+function buildLamps() {
+  if (!roadsG) return;
+  disposeGroup(lampsG); lampsG = new THREE.Group(); const DR = city ? driveRects(net, city) : [], L = roadsG.userData.lamps.filter(l => !inRects(DR, l[0], l[1], .4));
   if (L.length) {
     const pm = new THREE.InstancedMesh(lampGeo(), M.pole, L.length); pm.castShadow = Q.shadows > 1;
     glowMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(.3, .06, .62), lampGlowMat, L.length);
@@ -207,7 +216,8 @@ function rebuildRoads() {
     lampsG.add(pm, glowMesh, poolMesh);
   }
   scene.add(lampsG);
-  // traffic lights and stop signs
+}
+function rebuildSignals() {
   disposeGroup(sigG); const SG = buildSignals(net, M); sigG = SG.group; sigLamps = SG.lamps;
   if (sigLamps.length) {
     lampMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(.13, 8, 6), new THREE.MeshBasicMaterial({ toneMapped: false }), sigLamps.length);
@@ -215,8 +225,6 @@ function rebuildRoads() {
     sigG.add(lampMesh);
   } else lampMesh = null;
   scene.add(sigG);
-  buildOverlay();
-  seenNet = net.ver;
 }
 const poolMat = (() => {
   const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d'); const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
@@ -240,6 +248,7 @@ function rebuildCity() {
   city.buildings.forEach((b, i) => { dummy.position.set(b.x, b.kind === 'house' ? .09 : .07, b.z); dummy.rotation.set(0, -(b.rot || 0), 0); dummy.scale.set(b.w + 5, 1, b.d + 5); dummy.updateMatrix(); contactB.setMatrixAt(i, dummy.matrix); });
   dummy.scale.set(1, 1, 1); scene.add(contactB);
   scene.add(cityG); seenCity = city.ver;
+  buildLamps();
   const b = city.bounds(); camBox = { x0: b.x0 - 250, x1: b.x1 + 250, z0: b.z0 - 250, z1: b.z1 + 250 };
 }
 const lampGlowMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0, toneMapped: false });

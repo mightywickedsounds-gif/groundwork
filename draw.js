@@ -101,12 +101,20 @@ export function makeMaterials(maxAniso = 8, U = null) {
   const asphaltMap = photo('asphalt', A), walkMap = photo('walk', A), lotMap = photo('asphalt', A);
   asphaltMap.repeat.set(.85, .85); lotMap.repeat.set(1.1, 1.1);
   const M = {
-    asphalt: patchy(new THREE.MeshStandardMaterial({ map: asphaltMap, roughness: .9, metalness: 0, color: 0x9a9a9a }), .35, 22),
+    asphalt: patchy(new THREE.MeshStandardMaterial({ map: asphaltMap, roughness: .9, metalness: 0, color: 0x9a9a9a }), .35, 22,
+      // the wear of a real street: wiggly black crack sealant in places, darker square repair patches here and there
+      `{ float zone = smoothstep(.5, .72, pn1(vPw / 46. + 9.));
+         vec2 cq = vPw / 5.3 + 2.1; float cn = pn1(cq), ce = .02;
+         float cg = length(vec2(pn1(cq + vec2(ce, 0.)) - pn1(cq - vec2(ce, 0.)), pn1(cq + vec2(0., ce)) - pn1(cq - vec2(0., ce)))) / (2. * ce) / 5.3;   // slope per metre
+         float cr = (1. - smoothstep(.025, .05, abs(cn - .5) / max(cg, .02))) * step(.35, pn1(vPw / 3.1 + 7.)) * step(.025, cg);   // a line about 5 cm wide wherever the noise crosses the middle
+         diffuseColor.rgb *= 1. - cr * zone * .62;
+         vec2 cc = floor(vPw / 13.), ff = fract(vPw / 13.); float hh = ph1(cc + 4.);
+         if (hh > .9) { float r = step(.12 + hh * .1, ff.x) * step(ff.x, .62 + hh * .2) * step(.2, ff.y) * step(ff.y, .55 + hh * .3); diffuseColor.rgb *= 1. - r * (.16 + (hh - .9) * 1.2); } }`),
     walk: patchy(new THREE.MeshStandardMaterial({ map: walkMap, roughness: .95, color: 0xffffff }), .25, 9),
     curb: new THREE.MeshStandardMaterial({ color: 0xb4b1a8, roughness: .9 }),
     mark: patchy(new THREE.MeshStandardMaterial({ color: 0xe6e5df, roughness: .65, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), .3, 2.5),   // paint a little worn
     markY: patchy(new THREE.MeshStandardMaterial({ color: 0xe2b53a, roughness: .65, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), .3, 2.5),
-    lot: patchy(new THREE.MeshStandardMaterial({ map: lotMap, roughness: .9, color: 0xb4b2ae }), .3, 16),
+    lot: patchy(new THREE.MeshStandardMaterial({ map: lotMap, roughness: .9, color: 0xa6a4a0 }), .4, 9),
     island: new THREE.MeshStandardMaterial({ color: 0x5d7a3a, roughness: 1 }),
     pole: new THREE.MeshStandardMaterial({ color: 0x3b3e42, roughness: .5, metalness: .6 }),
     tex: { brick: photo('brick', A), stone: photo('stone', A), stucco: photo('stucco', A), gravel: photo('gravel', A), shingle: photo('shingle', A), lawn: photo('lawn', A) },
@@ -118,7 +126,9 @@ export function makeMaterials(maxAniso = 8, U = null) {
 
 // ---------- roads + junctions + markings ----------
 export function buildRoads(net, M, opt = {}) {
-  const A = new Geo(), W = new Geo(), K = new Geo(), MK = new Geo(), MY = new Geo(), IS = new Geo();
+  const A = new Geo(), W = new Geo(), K = new Geo(), MK = new Geo(), MY = new Geo(), IS = new Geo(), GU = new Geo(), CT = new Geo(), TP = new Geo(), SH = new Geo(), GR = new Geo(), inlets = [], holes = [];
+  const GW = .55, CW = .2;   // concrete gutter along every curb, and the curb's own top
+  const PKW = 1.45, PW = new Geo(), parkway = e => e.kind === 'street' && (e.nl || 1) === 1 && !e.tl && !e.ring && !e.oneway && Math.hypot(e.cx, e.cz) > (opt.coreR || 0);
   const nodes = net.nodes, ringCenters = new Map(), deco = [];
   for (const n of nodes.values()) if (n.ring && !ringCenters.has(n.ring)) ringCenters.set(n.ring, net.ringCenter(n.ring));
   const lamps = [];
@@ -142,11 +152,20 @@ export function buildRoads(net, M, opt = {}) {
     const nr = normals(c);
     if (ends) for (const [i, t] of [[0, ends[0]], [c.length - 1, ends[1]]]) { const L = Math.hypot(t[0], t[1]); if (L > 1e-6) nr[i] = [-t[1] / L, t[0] / L]; }   // exact ends: no slivers where pieces meet
     A.strip(off(c, nr, -hw), off(c, nr, hw), Y_ROAD);
+    const rural = opt.rural && opt.rural(e);   // out of town: a country road (gravel shoulders, no curb, no sidewalk)
+    if (rural) for (const sg of [-1, 1]) {
+      SH.strip(off(c, nr, sg * hw), off(c, nr, sg * (hw + 1.8)), Y_ROAD - .012);
+      GR.strip(off(c, nr, sg * (hw + 1.8)), off(c, nr, sg * (hw + 3.2)), Y_ROAD - .018);
+    }
     for (const sg of [-1, 1]) {
-      if (sg === inner) continue;
+      if (sg === inner || rural) continue;
       const i0 = off(c, nr, sg * hw), i1 = off(c, nr, sg * (hw + WALK_W));
-      W.strip(i0, i1, Y_WALK);
+      if (parkway(e)) {   // a house street: a grass strip (parkway) between the curb and the sidewalk
+        const g1 = off(c, nr, sg * (hw + PKW));
+        PW.strip(off(c, nr, sg * (hw + CW)), g1, Y_WALK - .012); W.strip(g1, i1, Y_WALK);
+      } else W.strip(i0, i1, Y_WALK);
       for (let k = 0; k + 1 < i0.length; k++) sg > 0 ? K.wall(i0[k + 1], i0[k], Y_ROAD - .02, Y_WALK) : K.wall(i0[k], i0[k + 1], Y_ROAD - .02, Y_WALK);
+      GU.strip(off(c, nr, sg * (hw - GW)), i0, Y_ROAD + .006); CT.strip(i0, off(c, nr, sg * (hw + CW)), Y_WALK + .004);
     }
     const cl = cumOf(c), m = cutPts(c, cl, Math.min(.8, cl.at(-1) / 3), cl.at(-1) - Math.min(.8, cl.at(-1) / 3));
     if (m.length >= 2 && cl.at(-1) > 1.5) {
@@ -160,7 +179,8 @@ export function buildRoads(net, M, opt = {}) {
           // between the turn bays: a two-way left-turn lane (solid yellow outside, dashed yellow inside, both sides)
           seg(MY, m, cm, H - .32, Pa + 1, Lm - Pb - 1, .12, true); seg(MY, m, cm, -(H - .32), Pa + 1, Lm - Pb - 1, .12, true);
         } else if (e.kind === 'avenue' || nl > 1) { line(MY, off(m, mn, -.16), .12, Y_MARK); line(MY, off(m, mn, .16), .12, Y_MARK); }
-        else dashes(MK, m, .14, 3, 5, Y_MARK, 2);
+        else if (e.kind !== 'street') dashes(MY, m, .12, 3, 6, Y_MARK, 2);   // a two-way road: dashed yellow down the middle (US style; white lines only part lanes going the same way)
+        // (a quiet residential street has no paint at all)
         for (let i = 0; i + 1 < nl; i++) { const o = (laneOff(e, i) + laneOff(e, i + 1)) / 2; seg(MK, m, cm, o, 0, Lm, .13, true); seg(MK, m, cm, -o, 0, Lm, .13, true); }
       } else if (e.ring) {   // a two-lane roundabout: dashed line between its lanes
         if (nl > 1) seg(MK, m, cm, (e.oneway || 1) * (laneOff(e, 0) + laneOff(e, 1)) / 2, 0, Lm, .13, true);
@@ -174,10 +194,16 @@ export function buildRoads(net, M, opt = {}) {
           seg(MY, m, cm, o, h0, h1); hatch(MY, m, cm, Math.min(o, edge), Math.max(o, edge), h0 + 1, h1 - 1);
         }
       }
-      line(MK, off(m, mn, -(hw - .35)), .13, Y_MARK); line(MK, off(m, mn, hw - .35), .13, Y_MARK);
+      if (e.kind !== 'street' || nl > 1 || e.oneway || e.ring) { line(MK, off(m, mn, -(hw - GW - .25)), .13, Y_MARK); line(MK, off(m, mn, hw - GW - .25), .13, Y_MARK); }   // edge lines on the bigger roads only
       if (e.oneway && !e.ring) { const dir = e.oneway; for (let s = 12; s < Lm - 22; s += 26) { const p = along(m, cm, s); for (let i = 0; i < nl; i++) { const o = dir * laneOff(e, i); arrow(MK, p[0] - p[3] * o, p[1] + p[2] * o, p[2] * dir, p[3] * dir); } } }
     }
-    if (lights) { const L = cl.at(-1); for (let s = 10, k = 0; s < L - 6; s += 34, k++) { const p = along(c, cl, s), sg = k % 2 ? 1 : -1; lamps.push([p[0] - p[3] * sg * (hw + WALK_W - .7), p[1] + p[2] * sg * (hw + WALK_W - .7), Math.atan2(p[3] * sg, -p[2] * sg)]); } }
+    // storm drain grates in the gutter near each end, manhole covers down the lanes now and then
+    if (!e.ring && !rural && cl.at(-1) > 24) {
+      const Lc = cl.at(-1), hsh = (k) => { const v = Math.sin(e.id * 12.9898 + k * 78.233) * 43758.5453; return v - Math.floor(v); };
+      for (const sg of [-1, 1]) { if (sg === inner) continue; for (const s of [3.2, Lc - 3.2]) { const p = along(c, cl, s); inlets.push([p[0] - p[3] * sg * (hw - .32), p[1] + p[2] * sg * (hw - .32), Math.atan2(-p[3], p[2])]); } }
+      for (let s = 14 + hsh(1) * 20; s < Lc - 10; s += 48 + hsh(s) * 30) { const p = along(c, cl, s), o = (hsh(s + 3) < .5 ? -1 : 1) * (e.oneway ? 0 : laneOff(e, 0)); holes.push([p[0] - p[3] * o, p[1] + p[2] * o, hsh(s + 5) * 6.28]); }
+    }
+    if (lights && !rural) { const L = cl.at(-1); for (let s = 10, k = 0; s < L - 6; s += 34, k++) { const p = along(c, cl, s), sg = k % 2 ? 1 : -1; const lo = parkway(e) ? hw + .85 : hw + WALK_W - .7; lamps.push([p[0] - p[3] * sg * lo, p[1] + p[2] * sg * lo, Math.atan2(p[3] * sg, -p[2] * sg)]); } }
   }
   for (const e of net.edges.values()) {
     const a = nodes.get(e.a), b = nodes.get(e.b), hw = hwOf(e);
@@ -204,7 +230,7 @@ export function buildRoads(net, M, opt = {}) {
     if (x && x[0] > 0 && x[1] > 0 && x[0] < lim && x[1] < lim) ctl = [P1[0] + d1[0] * x[0], P1[1] + d1[1] * x[0]];
     else if (!x || d1[0] * d2[0] + d1[1] * d2[1] < -.98) ctl = [(P1[0] + P2[0]) / 2, (P1[1] + P2[1]) / 2];   // straight on
     const into = (e1.oneway === 1 && e1.b === n.id) || (e1.oneway === -1 && e1.a === n.id);
-    piece(quad(P1, ctl, P2, Math.max(6, Math.ceil(n.trim * 1.6))), { oneway: e1.oneway ? (into ? 1 : -1) : 0, kind: e1.kind, nl: e1.nl, tl: e1.tl }, hwOf(e1), 0, false, [0, 0], [d1, [-d2[0], -d2[1]]]);
+    piece(quad(P1, ctl, P2, Math.max(6, Math.ceil(n.trim * 1.6))), { oneway: e1.oneway ? (into ? 1 : -1) : 0, kind: e1.kind, nl: e1.nl, tl: e1.tl, cx: e1.cx, cz: e1.cz, pts: e1.pts, id: e1.id }, hwOf(e1), 0, false, [0, 0], [d1, [-d2[0], -d2[1]]]);
     elbow.add(n.id);
   }
   // junction patches
@@ -223,7 +249,10 @@ export function buildRoads(net, M, opt = {}) {
     if (legs.length === 1) {       // dead end: round cap
       const L = legs[0], cap = [], outer = [];
       for (let k = 0; k <= 12; k++) { const f = -Math.PI / 2 + Math.PI * k / 12, dx = -L.d[0] * Math.cos(f) + L.r[0] * Math.sin(f), dz = -L.d[1] * Math.cos(f) + L.r[1] * Math.sin(f); cap.push([L.P[0] + dx * L.hw, L.P[1] + dz * L.hw]); outer.push([L.P[0] + dx * (L.hw + WALK_W), L.P[1] + dz * (L.hw + WALK_W)]); }
+      if (opt.rural && opt.rural(L.e)) { A.fan(L.P, cap, Y_ROAD); continue; }
       A.fan(L.P, cap, Y_ROAD); W.strip(cap, outer, Y_WALK); for (let k = 0; k + 1 < cap.length; k++) K.wall(cap[k + 1], cap[k], Y_ROAD - .02, Y_WALK);
+      const tw = (p, f) => [L.P[0] + (p[0] - L.P[0]) * f, L.P[1] + (p[1] - L.P[1]) * f];
+      GU.strip(cap.map(p => tw(p, (L.hw - GW) / L.hw)), cap, Y_ROAD + .006); CT.strip(cap, cap.map(p => tw(p, (L.hw + CW) / L.hw)), Y_WALK + .004);
       continue;
     }
     const ring = [];
@@ -246,6 +275,17 @@ export function buildRoads(net, M, opt = {}) {
         const co = off(cv, cn, out * WALK_W); co[0] = a1; co[co.length - 1] = b1;
         W.strip(cv, co, Y_WALK);
         for (let k = 0; k + 1 < cv.length; k++) K.wall(cv[k + 1], cv[k], Y_ROAD - .02, Y_WALK);
+        GU.strip(off(cv, cn, -out * GW), cv, Y_ROAD + .006); CT.strip(cv, off(cv, cn, out * CW), Y_WALK + .004);
+        // where a crosswalk meets this corner: a curb ramp with a yellow warning pad (one for each leg's crossing)
+        if (n.edges.size >= 3 && !n.ring) for (const [Lg, sgn] of [[L, 1], [N, -1]]) {
+          if (Lg.e.ring) continue;
+          const zc = [Lg.P[0] - Lg.d[0] * 2.1, Lg.P[1] - Lg.d[1] * 2.1];
+          let bi = -1, bd = 1e9;
+          for (let k = 0; k < cv.length; k++) { const dx = cv[k][0] - zc[0], dz = cv[k][1] - zc[1], along2 = Math.abs(dx * Lg.d[0] + dz * Lg.d[1]), side = (dx * Lg.r[0] + dz * Lg.r[1]) * sgn; if (side > 0 && along2 < bd) { bd = along2; bi = k; } }
+          if (bi < 0 || bd > 1.6) continue;
+          const p = cv[bi], nn = [cn[bi][0] * out, cn[bi][1] * out], tg = [-nn[1], nn[0]], c0 = [p[0] + nn[0] * .32, p[1] + nn[1] * .32], c1 = [p[0] + nn[0] * .95, p[1] + nn[1] * .95];
+          TP.flat([c0[0] - tg[0] * .7, c0[1] - tg[1] * .7], [c0[0] + tg[0] * .7, c0[1] + tg[1] * .7], [c1[0] + tg[0] * .7, c1[1] + tg[1] * .7], [c1[0] - tg[0] * .7, c1[1] - tg[1] * .7], Y_WALK + .008);
+        }
       }
     }
     A.fan([n.x, n.z], ring, Y_ROAD - .004);
@@ -314,6 +354,26 @@ export function buildRoads(net, M, opt = {}) {
   }
   const add = (geo, mat, shadow = true) => { const m = new THREE.Mesh(geo.build(), mat); m.receiveShadow = shadow; g.add(m); return m; };
   add(A, M.asphalt); add(W, M.walk); add(K, M.curb); add(MK, M.mark); add(MY, M.markY); add(IS, M.island);
+  add(PW, M.parkway || (M.parkway = patchy(new THREE.MeshStandardMaterial({ map: M.tex.lawn, color: 0x95ab62, roughness: 1 }), .35, 5)));
+  if (SH.p.length) add(SH, M.shoulder || (M.shoulder = patchy(new THREE.MeshStandardMaterial({ map: M.asphalt.map, color: 0x8a8884, roughness: .95 }), .5, 6)));
+  if (GR.p.length) add(GR, M.gravelEdge || (M.gravelEdge = patchy(new THREE.MeshStandardMaterial({ map: M.tex.gravel, color: 0xb8ae98, roughness: 1 }), .5, 3)));
+  if (TP.p.length) add(TP, M.tactile || (M.tactile = (() => {   // truncated domes: a grid of little bumps on yellow
+    const S = 64, cv2 = document.createElement('canvas'); cv2.width = cv2.height = S; const g2 = cv2.getContext('2d'); g2.fillStyle = '#d9a514'; g2.fillRect(0, 0, S, S);
+    for (let y = 4; y < S; y += 8) for (let x = 4; x < S; x += 8) { g2.fillStyle = '#f0c232'; g2.beginPath(); g2.arc(x, y, 2.4, 0, 7); g2.fill(); g2.fillStyle = 'rgba(0,0,0,.25)'; g2.beginPath(); g2.arc(x + .8, y + .8, 2.4, 0, 7); g2.fill(); g2.fillStyle = '#f2c436'; g2.beginPath(); g2.arc(x - .3, y - .3, 2.1, 0, 7); g2.fill(); }
+    const t = new THREE.CanvasTexture(cv2); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(5, 5); t.colorSpace = THREE.SRGBColorSpace;
+    return new THREE.MeshStandardMaterial({ map: t, roughness: .8, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }); })()));
+  add(GU, M.gutter || (M.gutter = patchy(new THREE.MeshStandardMaterial({ map: M.walk.map, color: 0xa39f96, roughness: .95, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }), .45, 4)));
+  add(CT, M.curbTop || (M.curbTop = patchy(new THREE.MeshStandardMaterial({ map: M.walk.map, color: 0xe4e0d6, roughness: .85, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }), .25, 3)));
+  // the grates and covers: small textured plates just above the road
+  const plate = (list, w, dd, key, draw) => {
+    if (!list.length) return;
+    if (!M[key]) { const S = 64, cv = document.createElement('canvas'); cv.width = cv.height = S; draw(cv.getContext('2d'), S); const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; M[key] = new THREE.MeshStandardMaterial({ map: t, roughness: .55, metalness: .5, transparent: true, alphaTest: .4, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }); }
+    const im = new THREE.InstancedMesh(new THREE.PlaneGeometry(w, dd).rotateX(-Math.PI / 2), M[key], list.length), dm = new THREE.Object3D();
+    list.forEach((q, i) => { dm.position.set(q[0], Y_ROAD + .012, q[1]); dm.rotation.set(0, q[2], 0); dm.updateMatrix(); im.setMatrixAt(i, dm.matrix); });
+    im.receiveShadow = true; g.add(im);
+  };
+  plate(inlets, 1.05, .55, 'grateMat', (g2, S) => { g2.fillStyle = '#3d3b38'; g2.fillRect(0, 0, S, S); g2.fillStyle = '#121212'; for (let x = 6; x < S - 4; x += 7) g2.fillRect(x, 8, 3.5, S - 16); g2.strokeStyle = '#5a5751'; g2.lineWidth = 3; g2.strokeRect(2, 2, S - 4, S - 4); });
+  plate(holes, 1.3, 1.3, 'holeMat', (g2, S) => { g2.clearRect(0, 0, S, S); g2.fillStyle = '#4a4742'; g2.beginPath(); g2.arc(S / 2, S / 2, S / 2 - 1, 0, 7); g2.fill(); g2.strokeStyle = '#2e2c29'; g2.lineWidth = 2; for (let r2 = 8; r2 < S / 2 - 3; r2 += 6) { g2.beginPath(); g2.arc(S / 2, S / 2, r2, 0, 7); g2.stroke(); } for (let a = 0; a < 8; a++) { g2.beginPath(); g2.moveTo(S / 2, S / 2); g2.lineTo(S / 2 + Math.cos(a * .785) * (S / 2 - 3), S / 2 + Math.sin(a * .785) * (S / 2 - 3)); g2.stroke(); } });
   g.userData.lamps = lamps;
   return g;
 }
@@ -650,7 +710,7 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
     cm.castShadow = true; cm.receiveShadow = true; g.add(cm);
   }
   // lots: parking, parks, yards
-  const lotG = new Geo(), lines = new Geo(), parks = new Geo(), shore = new Geo(), pond = new Geo(), parked = [], lotLights = [], drive = new Geo(), apron = new Geo(), joints = new Geo(), blue = new Geo(), islands = new Geo(), curbs = [], wheelStops = [], accSigns = [], stopSigns = [];
+  const lotG = new Geo(), lines = new Geo(), parks = new Geo(), shore = new Geo(), pond = new Geo(), parked = [], lotLights = [], drive = new Geo(), stains = [], apron = new Geo(), joints = new Geo(), blue = new Geo(), islands = new Geo(), curbs = [], wheelStops = [], accSigns = [], stopSigns = [];
   const islandTrees = opt.more || (opt.more = []);
   for (const l of city.lots) {
     const x0 = l.x - l.w / 2, x1 = l.x + l.w / 2, z0 = l.z - l.d / 2, z1 = l.z + l.d / 2;
@@ -662,17 +722,28 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
       if (dyn && l.w > 16) lotLights.push(W(x0 + 2, z0 + 1.5));
       let s = Math.floor(l.seed * 1e6) || 1; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
       const quad = (G, a, b2, c, d2, y) => G.flat(W(a[0], a[1]), W(b2[0], b2[1]), W(c[0], c[1]), W(d2[0], d2[1]), y);
+      if (dyn) {   // the walkway along the shopfront: raised concrete with a curb on the parking side
+        quad(apron, [x0, z0], [x1, z0], [x1, z0 + 2.6], [x0, z0 + 2.6], .15);
+        curbs.push([W(x0, z0 + 2.62), W(x1, z0 + 2.62)]);
+      }
       lay.rows.forEach((row, ri) => {
         const { z, flip } = row, head = flip ? z + 5 : z;   // the end of the stall the car noses into
         for (const st of row.stalls) {
           const xl = st.x - 1.3;
           quad(lines, [xl, z], [xl + .1, z], [xl + .1, z + 5], [xl, z + 5], .065);
           wheelStops.push([...W(st.x, head + (flip ? -.55 : .55)), -lr]);
+          if (r() < .7) { const sp = W(st.x + (r() - .5) * .8, head + (flip ? -1.2 : 1.2) + (r() - .5) * .8); stains.push([sp[0], sp[1], .9 + r() * 1.1, r() * 6.3, .35 + r() * .45]); }   // drips where engines sit
           if (!dyn && r() < l.fill) { const p = W(st.x, st.z); parked.push([p[0], p[1], (flip ? -1 : 1) * Math.PI / 2 + (r() - .5) * .06 - lr, r()]); }
         }
         if (row.stalls.length) { const xr = row.stalls[row.stalls.length - 1].x + 1.3; quad(lines, [xr - .1, z], [xr, z], [xr, z + 5], [xr - .1, z + 5], .065); }
         // the accessible stall nearest the door: blue, with its sign
-        if (ri === 0 && row.stalls.length > 6) { const st = row.stalls[Math.floor(row.stalls.length / 2)]; quad(blue, [st.x - 1.2, z + .1], [st.x + 1.2, z + .1], [st.x + 1.2, z + 4.9], [st.x - 1.2, z + 4.9], .062); const sp = W(st.x, flip ? z + 5.4 : z - .35); accSigns.push([sp[0], sp[1], -lr]); }
+        if (row.access) {
+          const ax = row.access.x, bx = row.access.ax; quad(blue, [ax - 1.2, z + .1], [ax + 1.2, z + .1], [ax + 1.2, z + 4.9], [ax - 1.2, z + 4.9], .062);
+          const sp = W(ax, flip ? z + 5.4 : z - .35); accSigns.push([sp[0], sp[1], -lr]);
+          // the access aisle beside it: white diagonal stripes, a line down each side
+          for (const xx of [bx - 1.25, bx + 1.25]) quad(lines, [xx - .06, z], [xx + .06, z], [xx + .06, z + 5], [xx - .06, z + 5], .066);
+          for (let zz = z + .5; zz < z + 4.6; zz += .9) { const p0 = [bx - 1.2, zz], p1 = [bx + 1.2, zz + .9]; const L2 = Math.hypot(2.4, .9), nx = -.9 / L2 * .07, nz = 2.4 / L2 * .07; quad(lines, [p0[0] - nx, p0[1] - nz], [p0[0] + nx, p0[1] + nz], [p1[0] + nx, Math.min(z + 5, p1[1] + nz)], [p1[0] - nx, Math.min(z + 5, p1[1] - nz)], .066); }
+        }
         // planted islands at the ends of the rows, with a tree
         if (row.island) for (const xe of [row.ends[0] + 1.3, row.ends[1] - 1.3]) {
           quad(islands, [xe - 1.2, z + .2], [xe + 1.2, z + .2], [xe + 1.2, z + 4.8], [xe - 1.2, z + 4.8], .14);
@@ -742,6 +813,14 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
   if (pond.p.length) { const m = new THREE.Mesh(pond.build(), M.pond || (M.pond = new THREE.MeshStandardMaterial({ color: 0x2f4f4a, roughness: .04, metalness: .1 }))); m.receiveShadow = true; g.add(m); }
   if (lotG.p.length) { const m = new THREE.Mesh(lotG.build(), M.lot); m.receiveShadow = true; g.add(m); }
   if (lines.p.length) g.add(new THREE.Mesh(lines.build(), M.mark));
+  if (stains.length) {   // oil drips in the stalls: soft dark irregular spots
+    if (!M.stainTex) { const S = 128, cv = document.createElement('canvas'); cv.width = cv.height = S; const g2 = cv.getContext('2d'); let s = 7; const rr = () => (s = (s * 16807) % 2147483647) / 2147483647;
+      for (let i = 0; i < 26; i++) { const x = S / 2 + (rr() - .5) * S * .45, y = S / 2 + (rr() - .5) * S * .3, rad = 6 + rr() * 22, gr = g2.createRadialGradient(x, y, 0, x, y, rad); gr.addColorStop(0, 'rgba(0,0,0,.5)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); g2.fillStyle = gr; g2.fillRect(0, 0, S, S); }
+      M.stainTex = new THREE.CanvasTexture(cv); }
+    const sm = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), M.stain || (M.stain = new THREE.MeshBasicMaterial({ color: 0x000000, map: M.stainTex, transparent: true, depthWrite: false, opacity: .55, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })), stains.length);
+    stains.forEach((q, i) => { dummy.position.set(q[0], .056, q[1]); dummy.rotation.set(0, q[3], 0); dummy.scale.set(q[2] * 1.4, 1, q[2]); dummy.updateMatrix(); sm.setMatrixAt(i, dummy.matrix); });
+    sm.renderOrder = 1; g.add(sm); dummy.scale.set(1, 1, 1);
+  }
   if (apron.p.length) { const m = new THREE.Mesh(apron.build(), M.apron || (M.apron = patchy(new THREE.MeshStandardMaterial({ map: M.walk.map, color: 0xd9d4c8, roughness: .9, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }), .35, 3))); m.receiveShadow = true; g.add(m); }
   if (joints.p.length) g.add(new THREE.Mesh(joints.build(), M.joint || (M.joint = new THREE.MeshStandardMaterial({ color: 0x8c8981, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }))));
   if (blue.p.length) g.add(new THREE.Mesh(blue.build(), M.accPaint || (M.accPaint = new THREE.MeshStandardMaterial({ color: 0x1f4fa0, roughness: .7, polygonOffset: true, polygonOffsetFactor: -2 }))));
@@ -776,6 +855,10 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
     if (len > 1.5) {
       const side = b.tone < .5 ? -1 : 1, o = side * Math.max(0, hp - 2.9), w = 2.6;
       drive.flat(q(hf, -w, o), q(hf, w, o), q(hf + len, w, o), q(hf + len, -w, o), .055);
+      // on across the grass strip and the sidewalk to the street, with a cut curb (like the lots' driveways, smaller)
+      { const tK = hf + len + WALK_W, prof = [[hf + len, .06, w], [hf + len + .3, .177, w], [tK - .15, .177, w + .7], [tK + .45, .034, w + .7]];
+        for (let k = 0; k + 1 < prof.length; k++) { const [t0, y0, w0] = prof[k], [t1, y1, w1] = prof[k + 1], A2 = q(t0, -w0, o), B2 = q(t0, w0, o), C2 = q(t1, w1, o), D2 = q(t1, -w1, o);
+          const i = apron.v(A2[0], y0, A2[1]), j = apron.v(B2[0], y0, B2[1]), kk = apron.v(C2[0], y1, C2[1]), mm = apron.v(D2[0], y1, D2[1]); apron.up(i, j, kk); apron.up(i, kk, mm); } }
       const hc = ((b.id * 2654435761) >>> 0) / 4294967296;   // some households have a car (or two) at home
       if (len > 6.5 && hc < (Q.shadows > 1 ? .7 : .45)) {
         const two = hc < .2 && len > 6.5, yaw = Math.atan2(-fzv, fxv) + (hc < .35 ? Math.PI : 0);
