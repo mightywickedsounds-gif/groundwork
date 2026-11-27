@@ -2,34 +2,41 @@
 
 ## Scorecard
 
-- **Found: 26. Fixed: 24. Left: 2.**
+- **Found: 25. Fixed: 23. Left: 2.**
   - Crash: 1 found, 1 fixed.
-  - Broken: 6 found, 6 fixed.
-  - Looks wrong: 12 found, 11 fixed, 1 partly (tiny phones).
-  - Minor: 7 found, 6 fixed, 1 left (leftover unused names in the code, harmless).
-- **Where they were found:** the new soak test, which plays the game by itself (2); the code checker ESLint (2); the existing tests (1); screenshots and layout checks (11); the owner's screenshots and notes (5); reading the code (5).
+  - Broken: 3 found, 3 fixed.
+  - Looks wrong: 14 found, 13 fixed, 1 left (B25, tool buttons on the smallest phones).
+  - Minor: 7 found, 6 fixed, 1 partly (B24, a few harmless unused names left in the code).
+- **Where they were found:**
+  - reading the code: 10
+  - screenshots and the layout check: 7
+  - the owner's notes and screenshot: 4
+  - the ESLint code checker: 2
+  - the new soak test (the game playing itself): 1
+  - the existing tests: 1
 - **Bugs I probably missed:** around 10 to 20. I'm least confident about:
   - touch gestures on a real iPhone (the tests only fake touches);
-  - real phone frame rates and heat (the test browser draws in software, about 2 frames a second);
-  - rare traffic standoffs at busy driveways next to junctions;
-  - police chases, crashes and fires on screen (the soak test triggers them only by chance);
+  - real phone speed and heat (the test browser draws in software, at about 2 frames a second);
+  - rare standoffs at busy driveways right next to junctions;
+  - police chases, crashes and fires on screen (the soak test only sets them off by chance);
   - very old saves.
-- **Thoroughness: 6 out of 10.** The simulation, saving and the phone layout were checked with real tests and a self-playing soak test. Everything visual was judged from software-rendered screenshots, and nothing ran on a real phone or GPU.
+- **Thoroughness: 6 out of 10.** The simulation, saving and the phone layout were checked with real tests and a self-playing soak test, but everything visual was judged from software-rendered screenshots, and nothing ran on a real phone or GPU.
 
 ## Numbers: before (round 22) and after (round 23)
 
 | Test | Before | After |
 |---|---|---|
 | bridge | 18 pass, 0 fail | 18 pass, 0 fail |
-| life | 12 pass, **1 fail** (a car left waiting unseen in the road, happened on some runs) | 13 pass, 0 fail (6 runs out of 6) |
+| life | 12 pass, **1 fail** (a car left waiting unseen in the road; on some runs) | 13 pass, 0 fail (and 6 runs out of 6 in a row) |
 | law | 8 pass | 8 pass |
 | lanes | 16 pass | 16 pass |
-| build | 0 crossings without a junction, 105 trips done | 0 crossings without a junction |
-| sim (one day, 3 districts) | 589-647 trips, 1-7 drivers gave up (3 runs of the old code) | 591-619 trips, 4-9 gave up (random: this test only runs the road code, unchanged except the blinker delay) |
-| grow (4 days) | peak gridlock 94 %, 43 gave up | see README round 23 |
-| browser check (play.cjs) | 23 pass | see README round 23 |
-| soak (new) | n/a | see README round 23 |
-| frame time in the test browser (software drawing) | phone 664 ms, desktop 791 ms | similar (not a real phone measure) |
+| build | 0 crossings without a junction | 0 crossings without a junction |
+| sim (one day, 3 districts; random, so several runs) | old code: 589-647 trips done, 1-7 drivers gave up | 591-619 trips, 3-9 gave up |
+| grow (4 days; random) | old code: 43, 77, 82 drivers gave up (3 runs) | 63 gave up |
+| browser check (play.cjs) | 23 pass | 23 pass |
+| soak (new, 120 actions each at desktop and phone size) | n/a (its first run found the crash B5) | all pass: no page errors, no broken positions, save/reload keeps the town, GPU objects flat (105 down to about 90) |
+| page errors while taking screenshots | none (only the test browser's own "GPU stall" notes) | none |
+| frame time in the test browser (software drawing, not a phone measure) | phone 664 ms, desktop 791 ms | phone 664 ms, desktop see screenshots log |
 
 ## The bugs
 
