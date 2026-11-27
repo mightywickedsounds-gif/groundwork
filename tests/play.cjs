@@ -64,17 +64,32 @@ const TYPES = { js: 'text/javascript', mjs: 'text/javascript', jpg: 'image/jpeg'
     const n = [...FT.net.nodes.values()].find(n => n.edges.size === 4 && !n.ring && !n.sig && [...n.edges].every(id => FT.net.edges.get(id).kind === 'avenue'))
       || [...FT.net.nodes.values()].find(n => n.edges.size === 4 && !n.ring && !n.sig);
     if (!n) return null;
-    const es = [...n.edges].map(id => FT.net.edges.get(id));
+    const es = [...n.edges].map(id => FT.net.edges.get(id)), b0 = FT.city.buildings.length;
     FT.setTool('lanes');
-    for (const e of es) for (let k = 0; k < 5 && !(e.nl === 2 && e.tl === 1); k++) { const q = FT.along(e.pts, e.cum, e.len / 2); FT.hover(q[0], q[1]); FT.click(q[0], q[1]); }
-    return [n.x, n.z, n.id, es.map(e => [e.nl, e.tl])];
+    // each leg: tap until it's as wide as the buildings beside it allow (it never knocks one down)
+    const want = es.map(e => FT.net.maxStep(e, FT.city.maxHalfW(FT.net.roadChain(e))));
+    es.forEach((e, i) => { for (let k = 0; k < 5 && !(e.nl === want[i][0] && e.tl === want[i][1]); k++) { const q = FT.along(e.pts, e.cum, e.len / 2); FT.hover(q[0], q[1]); FT.click(q[0], q[1]); } });
+    const got = es.map(e => [e.nl, e.tl]), lost = b0 - FT.city.buildings.length;
+    // then the whole crossroads to 2 lanes + turn lanes regardless (as if the land were clear) for the lights rule
+    for (const e of es) for (let k = 0; k < 5 && !(e.nl === 2 && e.tl === 1); k++) FT.net.cycleLanes(e.id);
+    return [n.x, n.z, n.id, got, want, lost];
   });
-  check('lanes tool widens roads', av && av[3].every(([nl, tl]) => nl === 2 && tl === 1), JSON.stringify(av));
+  check('lanes tool widens each road as far as the buildings allow, knocking none down', av && av[3].every((g, i) => g[0] === av[4][i][0] && g[1] === av[4][i][1]) && av[5] === 0 && av[3].some(g => g[0] > 1 || g[1]), JSON.stringify(av));
   check('lights added where wide roads cross', await p.evaluate(id => !!FT.net.nodes.get(id).sig, av[2]), await p.evaluate(id => { const n = FT.net.nodes.get(id); return n ? JSON.stringify({ deg: n.edges.size, ring: n.ring, legs: [...n.edges].map(e => { const f = FT.net.edges.get(e); return [f.kind, f.nl, f.tl]; }) }) : 'node gone'; }, av[2]));
   await p.evaluate(() => FT.step(90));
   check('cars use the extra lanes', await p.evaluate(() => FT.net.cars.some(c => c.lane.li > 0 || c.lane.pk)));
   await shot('lanes', { x: av[0] + 10, z: av[1] + 25, dist: 95, yaw: .5, pitch: .78 }, 10);
   await shot('lanes-top', { x: av[0], z: av[1], dist: 140, yaw: 0, pitch: 1.35 }, 10);
+  // an overpass over Main Street with the Road tool on Overpass, and an underpass
+  const br = await p.evaluate(() => {
+    FT.setTool('road'); FT.setLv(1); FT.click(-20, -330); FT.hover(-20, 160); FT.click(-20, 160);
+    FT.setLv(-1); FT.click(250, -300); FT.hover(250, 200); FT.click(250, 200); FT.setLv(0); FT.setTool('road');
+    return [...FT.net.edges.values()].filter(e => e.lv).map(e => e.lv);
+  });
+  check('overpass and underpass built with the Road tool', br.includes(1) && br.includes(-1), JSON.stringify(br));
+  check('no road crosses another without a junction or a bridge', await p.evaluate(() => !FT.net.crossesOthers([...FT.net.edges.values()])));
+  await shot('overpass', { x: -20, z: -50, dist: 110, yaw: .9, pitch: .45 }, 10);
+  await shot('underpass', { x: 250, z: -100, dist: 140, yaw: 3.0, pitch: .7 }, 10);
   const s2 = await st(); check('traffic still flows after edits', s2.arrived > s1.arrived, JSON.stringify(s2));
   await shot('roundabout', { x: j[0], z: j[1], dist: 110, yaw: .3, pitch: 1.0 }, 10);
   await p.evaluate(() => FT.toggleView());

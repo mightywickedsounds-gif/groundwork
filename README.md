@@ -26,16 +26,18 @@ Play it here (from `main`, once merged): https://mightywickedsounds-gif.github.i
 | Tool | Key | What it does |
 |---|---|---|
 | Build | B | Tap a street to open a business or a service there (the list shows prices; some need more people first). Tap land just outside town to buy it. |
-| Road | 1 | Phone: press and hold, then drag to draw a road (a quick drag just moves the map); tap to keep going from the yellow pin. Computer: click to start, click to place; it keeps going from the end. Crossing a road makes a junction; ending near a road (even on its sidewalk) joins it. |
+| Road | 1 | Phone: press and hold, then drag to draw a road (a quick drag just moves the map); tap to keep going from the yellow pin. Computer: click to start, click to place; it keeps going from the end. Crossing a road makes a junction; ending near a road (even on its sidewalk) joins it. While Road or Curve is picked, a small switch above the toolbar chooses **Street**, **Overpass** or **Underpass** (see below). |
 | Curve | 2 | Phone: hold, then drag to draw it, then drag to bend it. Computer: click the start, click the end, move to bend, click. |
 | Lights | 3 | Click a junction to add or remove traffic lights. |
 | Round | 4 | Tap a junction, a bend or any stretch of road to put a roundabout there. It sizes itself to fit and clears the buildings in the way. A road drawn through a roundabout joins it. |
 | One-way | 5 | Click a road: two-way, then one way, then the other way. |
-| Lanes | 6 | Click a road (the stretch between two junctions) to step it through: 1 lane + turn lanes, 2 lanes, 2 lanes + turn lanes, 3 lanes + turn lanes, back to 1 lane. Wider roads set back or clear the buildings in the way; the street fills back in later. Where wide roads cross, traffic lights go up by themselves (remove them with Lights if you like). |
+| Lanes | 6 | Click a road (the stretch between two junctions) to step it through: 1 lane + turn lanes, 2 lanes, 2 lanes + turn lanes, 3 lanes + turn lanes, back to 1 lane. A road only gets as wide as the buildings beside it allow: when the next step wouldn't fit it goes back to 1 lane instead of knocking anything down, and the hint says the most that fits there. Where wide roads cross, traffic lights go up by themselves (remove them with Lights if you like). |
 | Remove | 7 | Click a road to remove it, or the middle of a roundabout to turn it back into a junction. |
 | Traffic view | T | One band per direction of each road, green (moving) to red (jammed). |
 
-Any road you build through buildings or trees clears them.
+Any road you build through buildings or trees clears them (the hint says how many before you place it). Buildings are never cut down to a sliver: a building either keeps its distance from the road or is cleared.
+
+**Overpasses and underpasses.** Pick Overpass (or Underpass) on the switch above the toolbar, then draw the road across the roads you want to cross. It joins streets only at its two ends; in between it climbs onto an embankment and over the street on a bridge deck (or drops into a cutting between retaining walls and runs under the street through a short tunnel). The ramps are realistic: level for 16 m by each junction, then about 100 m of 8 % slope each way, so it needs a long run-up (the hint says so if it's too short). It can't cross another bridge at the same level, can't run along on top of another road, and no road can join it on its ramps. It costs four times as much as a street.
 
 ## Controls
 
@@ -61,7 +63,7 @@ The game saves in your browser every 10 seconds and when you leave. Menu → Gra
 - `city.js`: the city (street plan, districts, buildings, trips)
 - `draw.js`: everything you see (roads, curbs, sidewalks, markings, buildings with windows, trees, cars, people, lights)
 - `sky.js`: the sky (time of day, sunrise and sunset, clouds, stars and moon); it also lights the reflections
-- `assets/`: grass photo; `assets/tex/` photo textures for asphalt, sidewalks, brick, limestone, stucco, roof shingles, gravel roofs and lawns (all from Poly Haven, CC0, shrunk for the web); `assets/fonts/` Overpass, a highway-sign style typeface (SIL Open Font License, see `LICENSE.txt`)
+- `assets/`: grass photo; `assets/tex/` photo textures for asphalt, brick, limestone, stucco, roof shingles, gravel roofs and lawns (all from Poly Haven, CC0, shrunk for the web); `assets/fonts/` Overpass, a highway-sign style typeface (SIL Open Font License, see `LICENSE.txt`)
 - `tests/`: automatic checks (see below)
 
 ## Testing
@@ -69,7 +71,8 @@ The game saves in your browser every 10 seconds and when you leave. Menu → Gra
 - `node tests/sim.mjs [districts] [hours]` runs the traffic with no browser and reports trips, stuck cars and why they're stuck. `MODE=sig` puts lights on every junction, `MODE=ring` makes every junction a roundabout.
 - `node tests/grow.mjs [days]` lets the city grow with no help from the player and prints the gridlock meter over time.
 - `node tests/build.mjs [tries]` builds hundreds of random roads, curves and roundabouts and checks no road ever crosses another without a junction.
-- `node tests/lanes.mjs [hours]` checks wide roads: the arrows at a crossroads, left turns using the turn lane, and the same city run with plain streets and then with every avenue widened.
+- `node tests/lanes.mjs [hours]` checks wide roads: the arrows at a crossroads, left turns using the turn lane, widening every road as far as it fits without knocking a building down, and the same city run with plain streets and then with every avenue widened.
+- `node tests/bridge.mjs` checks over- and underpasses: crossing without junctions, the rules (too short, over nothing, a street into a ramp), cars driving over and under, saving.
 - `node tests/life.mjs [days]` runs the starting town: people, jobs, trips, walks, earnings and growth.
 - `node tests/law.mjs [days]` adds a police station, fire station and hospital and checks hiding units, stops and tickets, a crash being cleared, a robbery and a chase.
 - `node tests/play.cjs [folder]` opens the game in a hidden browser, checks the tools work and saves screenshots.
@@ -298,3 +301,19 @@ The owner: an hour on the roads and parking lots, quality over quantity, one thi
 11. **Accessible parking done properly.** The blue accessible stall has its striped access aisle beside it, and nobody parks in the aisle.
 
 - **Tests:** life (cars parking and backing out), law, build, lanes and the browser check all pass.
+
+### Round 19: wider roads that stop at the buildings, overpasses and underpasses, real sidewalks and trees
+
+The owner's phone screenshots: widening a road to 3 lanes knocked buildings down (one store lost its whole parking lot), roads came right up to buildings, the sidewalks and trees looked fake. Plus: add overpasses and underpasses, done realistically.
+
+- **The Lanes tool knows how wide a road can get.** Before widening, it measures the room between the road and every building (and every business's own parking lot) along that stretch. Each building keeps a clear gap behind the sidewalk (a house keeps 3 m of front yard, a business keeps its lot). If the next step doesn't fit, the road goes back to 1 lane instead; the hint shows "most here: 2 lanes" and the message says "no room for more". Widening never removes a building now.
+- **No more shrunken buildings.** A road drawn close to a building used to cut the building down into a thin sliver. Now a building either keeps its distance or (if the new road really runs through it) is cleared, and the hint tells you how many before you place the road.
+- **Overpasses.** A road that climbs on an embankment held up by concrete panel walls (like Texas highway ramps), crosses the street on a bridge deck with beams underneath and abutments at each end, with concrete barriers along both edges. Cars drive up, over and down, tilting with the slope.
+- **Underpasses.** A road that drops into a cutting between retaining walls (with a coping and a parapet at street level), passes under the street through a short tunnel (dark inside, a concrete face over each mouth) and climbs back out. The grass is cut away over the open cutting so you can see down into it.
+- **How they're built:** level for 16 m at each end, then ramps of about 100 m at an 8 % slope, with the top and bottom rounded off; 6.6 m up on a bridge, 6.2 m down in a cutting, at least 5.6 m between the two roads everywhere they cross. Drawing a road that can't make it says why: "Needs a longer run-up", "Too close to the ramp", "Draw it over a road". Nothing is built on the ramps (no shops, driveways, sidewalks, bus stops or hiding police cars), and people on foot use the streets.
+- **Sidewalks.** The photo texture (blotchy, repeating, with big stains) is gone. Sidewalks are now poured concrete in 1.5 m panels that follow the street round every bend and corner: tooled joints, a broom finish, each panel a slightly different shade. House driveways and patios use the same concrete.
+- **Trees.** The crowns used to be lumpy blobs with ragged edges. Now each crown is built from dozens of clusters of leaves (lit from above, shaded underneath) around a dark core, so it reads as a real leafy tree with gaps and depth, and casts dappled shade. The woods out of town keep their shape from far away. Shrubs are built the same way.
+- **Lawns.** Yards, grass strips and roundabout islands use the same grass as the fields, a little greener (mown and watered), instead of a brown speckled photo.
+- **Smaller fixes from the screenshots:** shop signs no longer sit behind the shopfront canopy (they fit the wall above it, or stand on the canopy's front edge if there's no room); the black crack-sealant lines on the roads are thinner and rarer (they looked like squiggles); back-yard fences stop short of any road built across the yard.
+- **Tests:** new `tests/bridge.mjs` (over- and underpasses), `tests/lanes.mjs` now checks that widening every road as far as it fits knocks no building down; the other checks and the browser check pass.
+

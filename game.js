@@ -22,7 +22,7 @@ let Q = QS[qName] || QS.high;
 
 // ---------------- renderer + scene ----------------
 const canvas = $('view');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, stencil: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, Q.pr));
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
@@ -60,7 +60,9 @@ function hillH(x, z) {
 }
 const groundGeo = new THREE.PlaneGeometry(12000, 12000, 160, 160).rotateX(-Math.PI / 2);
 { const p = groundGeo.attributes.position; for (let i = 0; i < p.count; i++) p.setY(i, hillH(p.getX(i), p.getZ(i))); groundGeo.computeVertexNormals(); }
-const groundMat = new THREE.MeshStandardMaterial({ map: grassTex, roughness: 1, color: 0xb4bd8a, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 });   // (pushed back: roads and lots always draw over it)   // drier Hill Country grass
+const groundMat = new THREE.MeshStandardMaterial({ map: grassTex, roughness: 1, color: 0xb4bd8a, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 ,
+  // (not drawn where an underpass's cutting opens: draw.js marks those pixels in the stencil buffer first)
+  stencilWrite: true, stencilWriteMask: 0, stencilRef: 1, stencilFunc: THREE.NotEqualStencilFunc, stencilFail: THREE.KeepStencilOp, stencilZFail: THREE.KeepStencilOp, stencilZPass: THREE.KeepStencilOp });   // (pushed back: roads and lots always draw over it)   // drier Hill Country grass
 groundMat.onBeforeCompile = sh => {
   sh.uniforms.tDry = { value: dryTex }; cloudUniforms(sh);
   sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vGw; varying float vGny;').replace('#include <uv_vertex>', '#include <uv_vertex>\n vGw = (modelMatrix * vec4(position, 1.)).xyz; vGny = normal.y;');
@@ -351,11 +353,15 @@ const laneName = (nl, tl) => `${nl} lane${nl > 1 ? 's' : ''}${tl ? ' + turn lane
 const HINT = touch
   ? { build: 'Tap a street to build there, or land outside town to buy it', road: 'Hold, then drag to draw a road. Tap to keep going from the pin', curve: 'Hold, then drag to draw. Then drag to bend it', signal: 'Tap a junction for lights', ring: 'Tap a junction or road for a roundabout', oneway: 'Tap a road to switch its direction', lanes: 'Tap a road for more lanes', erase: 'Tap a road or roundabout to remove it' }
   : { build: 'Click a street to build there, or land outside town to buy it', road: 'Click to start, click to place. It keeps going from the end', curve: 'Click the start, click the end, then move to bend and click', signal: 'Click a junction for lights', ring: 'Click a junction or road for a roundabout', oneway: 'Click a road to switch its direction', lanes: 'Click a road for more lanes', erase: 'Click a road or roundabout to remove it' };
-const T = { tool: '', pts: [], pend: null, bend: null, draw: null, hover: null, mouse: null, plan: null };
+const T = { tool: '', pts: [], pend: null, bend: null, draw: null, hover: null, mouse: null, plan: null, lv: 0 };   // lv: draw at street level (0), an overpass (1) or an underpass (-1)
+const LV_NAME = { 0: 'Road', 1: 'Overpass', '-1': 'Underpass' };
+function setLv(v) { T.lv = v; for (const b of document.querySelectorAll('#lvl button')) b.classList.toggle('on', +b.dataset.lv === v); T.pts = []; T.pend = null; previewMesh.visible = false; hint(); }
+for (const b of document.querySelectorAll('#lvl button')) b.onclick = () => setLv(+b.dataset.lv);
 function setTool(t) {
   T.tool = T.tool === t ? '' : t; T.pts = []; T.pend = null; T.bend = null; T.draw = null; previewMesh.visible = false; hoverMesh.visible = false; pin.visible = false;
   if (!T.tool) { cursor.visible = false; T.hover = null; }   // (the cursor ring used to stay on the map after dropping a tool)
   for (const b of document.querySelectorAll('#tools button[data-tool]')) b.classList.toggle('on', b.dataset.tool === T.tool);
+  $('lvl').classList.toggle('show', T.tool === 'road' || T.tool === 'curve'); setLv(T.lv);
   hint();
 }
 function hint(msg) { $('hint').textContent = msg || HINT[T.tool] || ''; $('hint').classList.toggle('bad', !!msg); }
@@ -368,13 +374,14 @@ const through = (a, b, m) => m ? [2 * m[0] - (a[0] + b[0]) / 2, 2 * m[1] - (a[1]
 let planT = 0;
 function previewRoad(a, b, bend, force) {
   const now = performance.now(); if (!force && now - planT < 45) return; planT = now;
-  const plan = net.planRoad(a, b, through(a, b, bend), snapR()); T.plan = plan;
-  const A = plan.a || a, B = plan.b || b, c = plan.cc || [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2];
-  ribbon(previewMesh, qpts(A, c, B, 20), 3.6);
+  const plan = net.planRoad(a, b, through(a, b, bend), snapR(), T.lv); T.plan = plan;
+  const A = plan.a || a, B = plan.b || b, c = plan.cc || [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2], pts = qpts(A, c, B, 20);
+  ribbon(previewMesh, pts, 3.6);
   const cost = roadCost(A, B, plan.cc), poor = !plan.reason && !life.can(cost);
   previewMesh.material.color.setRGB(...(plan.reason || poor ? [1, .35, .25] : [.4, .9, 1]));
   cursor.position.set(B[0], .35, B[1]); cursor.visible = true;
-  hint(plan.reason || (poor ? 'Need ' + money(cost) + ' coins' : null)); if (!plan.reason && !poor) { $('hint').textContent = 'Road ' + money(cost) + ' coins'; }
+  hint(plan.reason || (poor ? 'Need ' + money(cost) + ' coins' : null));
+  if (!plan.reason && !poor) { const nb = city.inTheWay(pts, 3.5).length; $('hint').textContent = LV_NAME[T.lv] + ' ' + money(cost) + ' coins' + (nb ? ` · clears ${nb} building${nb > 1 ? 's' : ''}` : ''); }
 }
 function hoverUpdate() {
   const m = T.mouse; hoverMesh.visible = false; cursor.visible = !!m && !!T.tool;
@@ -405,12 +412,13 @@ function hoverUpdate() {
     return;
   }
   if (T.tool === 'oneway') { const h = net.nearestEdge(m[0], m[1], R); if (h && !h.e.ring) { T.hover = { e: h.e }; ribbon(hoverMesh, h.e.pts, hwOf(h.e) + .6); } return; }
-  if (T.tool === 'lanes') {   // show how wide it will be, and what it becomes
+  if (T.tool === 'lanes') {   // show how wide it will be, and what it becomes (never wider than the buildings beside it allow)
     const h = net.nearestEdge(m[0], m[1], R); if (!h || h.e.ring) { hint(); return; }
-    const [nl, tl] = net.nextLanes(h.e); T.hover = { e: h.e };
+    const nx = net.nextLanes(h.e, roomOf(h.e)), [nl, tl] = nx; T.hover = { e: h.e };
     ribbon(hoverMesh, h.e.pts, hwOf({ ...h.e, nl, tl }) + .6);
     const chainL = net.roadChain(h.e).reduce((a, e) => a + e.len, 0), up = nl * 2 + tl > (h.e.nl || 1) * 2 + (h.e.tl || 0), cost = up ? Math.round(chainL * COST.lane * (nl + tl * .5) / 5) * 5 : 0;
-    hint(`${laneName(nl, tl)}${cost ? ' · ' + money(cost) + ' coins' : ''}`); $('hint').classList.remove('bad');
+    const most = nx.max && (nx.max[0] !== 3 || nx.max[1] !== 1) ? ' · most here: ' + laneName(nx.max[0], nx.max[1]) : '';
+    hint(`${laneName(nl, tl)}${cost ? ' · ' + money(cost) + ' coins' : ''}${most}`); $('hint').classList.remove('bad');
     return;
   }
   if (T.tool === 'signal') {
@@ -429,22 +437,28 @@ function hoverUpdate() {
     if (T.hover.bad) hoverMesh.material.color.setRGB(1, .35, .25);
   }
 }
+// how wide this road may get (half width) before it would reach a building or a business's parking (worked out once per city change)
+const roomCache = new Map(); let roomVer = -1;
+function roomOf(e) {
+  if (roomVer !== city.ver + ':' + net.ver) { roomCache.clear(); roomVer = city.ver + ':' + net.ver; }
+  if (!roomCache.has(e.id)) roomCache.set(e.id, city.maxHalfW(net.roadChain(e)));
+  return roomCache.get(e.id);
+}
 function afterEdit(pts, rgb = [.4, .9, 1]) {
   if (pts) burstAlong(pts, rgb);
   const gone = city.sync();
   const nb = gone.filter(g => !g.lot).length;
-  const cb = city.cutBack || 0;
-  if (nb || cb) toast([nb ? `${nb} building${nb > 1 ? 's' : ''} cleared` : '', cb ? `${cb} set back` : ''].filter(Boolean).join(', '));
+  if (nb) toast(`${nb} building${nb > 1 ? 's' : ''} cleared`);
   sound.magic();
   save();
 }
 // what a road costs: by its length
-function roadCost(A, B, c) { const L = c ? Math.hypot(c[0] - A[0], c[1] - A[1]) + Math.hypot(B[0] - c[0], B[1] - c[1]) : Math.hypot(B[0] - A[0], B[1] - A[1]); return Math.round(L * COST.road / 5) * 5; }
+function roadCost(A, B, c, lv = T.lv) { const L = c ? Math.hypot(c[0] - A[0], c[1] - A[1]) + Math.hypot(B[0] - c[0], B[1] - c[1]) : Math.hypot(B[0] - A[0], B[1] - A[1]); return Math.round(L * COST.road * (lv ? 4 : 1) / 5) * 5; }   // (a bridge or a cutting costs four times as much)
 // build a road; on success keep going from its end
 function place(a, b, bend) {
-  const c = through(a, b, bend), plan = net.planRoad(a, b, c, snapR()), cost = plan.reason ? 0 : roadCost(plan.a || a, plan.b || b, plan.cc);
+  const c = through(a, b, bend), plan = net.planRoad(a, b, c, snapR(), T.lv), cost = plan.reason ? 0 : roadCost(plan.a || a, plan.b || b, plan.cc);
   if (!plan.reason && !life.can(cost)) { toast('Need ' + money(cost) + ' coins', true); return false; }
-  const made = net.addRoad(a, b, c, {}, snapR());
+  const made = net.addRoad(a, b, c, T.lv ? { lv: T.lv } : {}, snapR());
   if (made.reason) { toast(made.reason, true); return false; }
   life.spend(cost); life.stat.roads++; spentFx(cost);
   afterEdit(made.flatMap(e => e.pts));
@@ -475,10 +489,10 @@ function click(x, z) {
   }
   if (t === 'lanes') {
     if (!h) return;
-    const [nl, tl] = net.nextLanes(h.e), chainL = net.roadChain(h.e).reduce((a, e) => a + e.len, 0), cost = nl * 2 + tl > (h.e.nl || 1) * 2 + (h.e.tl || 0) ? Math.round(chainL * COST.lane * (nl + tl * .5) / 5) * 5 : 0;
+    const room = roomOf(h.e), nx = net.nextLanes(h.e, room), [nl, tl] = nx, chainL = net.roadChain(h.e).reduce((a, e) => a + e.len, 0), cost = nl * 2 + tl > (h.e.nl || 1) * 2 + (h.e.tl || 0) ? Math.round(chainL * COST.lane * (nl + tl * .5) / 5) * 5 : 0;
     if (cost && !life.can(cost)) return toast('Need ' + money(cost) + ' coins', true);
-    const r = net.cycleLanes(h.e.id); if (!r) return; if (cost) { life.spend(cost); spentFx(cost); }
-    afterEdit(net.roadChain(h.e).flatMap(e => e.pts)); toast(laneName(r.nl, r.tl) + (r.lights ? ' · lights added' : '')); hoverUpdate(); return;
+    const r = net.cycleLanes(h.e.id, room); if (!r) return; if (cost) { life.spend(cost); spentFx(cost); }
+    afterEdit(net.roadChain(h.e).flatMap(e => e.pts)); toast(laneName(r.nl, r.tl) + (r.lights ? ' · lights added' : '') + (nx.capped ? ' · no room for more' : '')); hoverUpdate(); return;
   }
   if (t === 'oneway') { if (!h) return; const r = net.cycleOneWay(h.e.id); if (r != null) { afterEdit(h.e.pts); toast(r === 0 ? 'Two-way' : 'One-way'); } return; }
   if (t === 'signal') {
@@ -504,7 +518,7 @@ function buildSite(x, z, R) {
     const adj = city.unlocked.some(u => Math.abs(u[0] - i) + Math.abs(u[1] - j) === 1);
     return adj && Math.abs(i) <= 3 && Math.abs(j) <= 3 ? { land: [i, j] } : null;
   }
-  const h = net.nearestEdge(x, z, Math.max(R, 34)); if (!h || h.e.ring) return null;
+  const h = net.nearestEdge(x, z, Math.max(R, 34)); if (!h || h.e.ring || h.e.lv) return null;
   const q = along(h.e.pts, h.e.cum, h.s), sg = Math.sign((x - q[0]) * -q[3] + (z - q[1]) * q[2]) || 1;
   return { e: h.e, s: h.s, sg };
 }
@@ -952,12 +966,13 @@ function drawCars() {
     if (c.hide) continue;   // (still in its parking stall: the parked copy is drawn below)
     const look = LOOK(c), m = fleet[look], i = cnt[look]++; if (i >= m.instanceMatrix.count) continue;
     const yaw = Math.atan2(-c.hz, c.hx) + (c.spin || 0);
-    dummy.position.set(c.x, 0, c.z); dummy.rotation.set(0, yaw, c.crashed ? .02 : 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix();
+    const cy = c.y || 0;
+    dummy.position.set(c.x, cy, c.z); dummy.rotation.set(0, yaw, (c.crashed ? .02 : 0) + (c.pitch || 0)); dummy.scale.set(1, 1, 1); dummy.updateMatrix();
     if (c.siren || c.lights) flashes.push([c.x, c.z, c.id]);
-    if (nBlob < carBlobs.instanceMatrix.count) { dummy.position.set(c.x, .2, c.z); dummy.scale.set(c.len + 1.4, 1, c.w + 1.3); dummy.updateMatrix(); carBlobs.setMatrixAt(nBlob++, dummy.matrix); dummy.position.set(c.x, 0, c.z); dummy.scale.set(1, 1, 1); dummy.updateMatrix(); }
+    if (nBlob < carBlobs.instanceMatrix.count) { dummy.position.set(c.x, cy + .2, c.z); dummy.scale.set(c.len + 1.4, 1, c.w + 1.3); dummy.updateMatrix(); carBlobs.setMatrixAt(nBlob++, dummy.matrix); dummy.position.set(c.x, cy, c.z); dummy.scale.set(1, 1, 1); dummy.updateMatrix(); }
     m.setMatrixAt(i, dummy.matrix); m.setColorAt(i, c.type === 'bus' ? col.setRGB(.96, .6, .03, THREE.SRGBColorSpace) : c.type === 'police' || c.type === 'ems' || c.type === 'fire' ? col.setRGB(1, 1, 1) : c.type === 'truck' ? carColor((c.color * 3) % 1, col) : carColor(c.color, col));
     m.geometry.attributes.aBrake.array[i] = c.brake + 2 * (c.sig || 0) + (c.siren || c.lights ? 8 : 0);
-    if (lit) { const f = c.len / 2 + 6.5; dummy.position.set(c.x + c.hx * f, .1, c.z + c.hz * f); dummy.scale.set(13, 1, 7.5); dummy.updateMatrix(); beams.setMatrixAt(nb++, dummy.matrix); }
+    if (lit) { const f = c.len / 2 + 6.5; dummy.position.set(c.x + c.hx * f, cy + .1, c.z + c.hz * f); dummy.scale.set(13, 1, 7.5); dummy.updateMatrix(); beams.setMatrixAt(nb++, dummy.matrix); }
   }
   // cars in the parking lots: parked, pulling in, backing out
   const pk = life.park, putCar = (type, id, color, x, z, yaw, brake) => {
@@ -1294,7 +1309,7 @@ requestAnimationFrame(frame);
 // test hooks
 window.FT = {
   dbg() { return { tris: renderer.info.render.triangles, calls: renderer.info.render.calls, shadowOn: renderer.shadowMap.enabled, sunCast: sun.castShadow, map: !!sun.shadow.map, ms: sun.shadow.mapSize.x, bg: scene.background && scene.background.isTexture, env: !!scene.environment, cam: sun.shadow.camera.right, sunPos: sun.position.toArray().map(Math.round), q: qName, prog: renderer.info.programs.length }; },
-  get net() { return net; }, get scene() { return scene; }, along, toScreen(x, z) { const v = new THREE.Vector3(x, 0, z).project(camera), r = canvas.getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; }, hover(x, z) { T.mouse = [x, z]; hoverUpdate(); }, get T() { return T; }, get city() { return city; }, get S() { return S; }, cam, placeCamera() { fly = zoomTo = coast = null; placeCamera(); }, setTool, click, setSpeed, toggleView,
+  get net() { return net; }, get scene() { return scene; }, along, setLv, toScreen(x, z) { const v = new THREE.Vector3(x, 0, z).project(camera), r = canvas.getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; }, hover(x, z) { T.mouse = [x, z]; hoverUpdate(); }, get T() { return T; }, get city() { return city; }, get S() { return S; }, cam, placeCamera() { fly = zoomTo = coast = null; placeCamera(); }, setTool, click, setSpeed, toggleView,
   step(sec) { for (let t = 0; t < sec; t += .1) simStep(.1); },
   render() { if (net.ver !== seenNet) rebuildRoads(); if (city.ver !== seenCity) rebuildCity(); lighting((S.time / DAY * 24) % 24); drawCars(); updatePeds(.05); drawCoins(1); drawSignals(); paintOverlay(); drawJams(1); renderer.render(scene, camera); },
   setHour(h) { S.time = Math.floor(S.time / DAY) * DAY + h / 24 * DAY; },

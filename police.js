@@ -69,7 +69,7 @@ export function createLaw(net, city, life) {
       out.push({ x, z, yaw, e, s, side, kind, busy: 0 });
     };
     for (const e of net.edges.values()) {
-      if (e.ring || e.len < 40) continue;
+      if (e.ring || e.lv || e.len < 40) continue;
       const fast = e.kind === 'avenue' || (e.nl || 1) > 1;
       for (const s of [e.len * .25, e.len * .5, e.len * .75]) for (const side of [1, -1]) if (fast || R() < .35) tryAt(e, s, side, 'lot');
     }

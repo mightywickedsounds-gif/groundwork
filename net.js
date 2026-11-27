@@ -17,6 +17,35 @@ export const MAP_EDGE = 1600;       // no roads further out (the hills round the
 // what the Lanes tool steps through: [lanes each way, turn lanes]
 export const LANE_STEPS = [[1, 0], [1, 1], [2, 0], [2, 1], [3, 1]];
 
+// ---- over- and underpasses: a road with lv = 1 climbs over what it crosses, lv = -1 dips under it ----
+// It leaves each end at street level (FLAT metres of level road by the junction), climbs at GRADE with smooth
+// vertical curves (VCURVE long) at the top and bottom of each ramp, and holds its height over the middle.
+export const H_OVER = 6.6;          // deck surface over the street (5.2 m under the beams, US minimum is about 5)
+export const H_UNDER = -6.2;        // road surface in a cutting (5 m clear under the street deck above)
+export const GRADE = .08;           // steepest climb (8 %: steep for a highway, normal for a town ramp)
+export const VCURVE = 16, FLAT = 16;
+export const CLEARANCE = 5.6;       // height difference two crossing roads need (deck and headroom)
+export const lvH = lv => lv > 0 ? H_OVER : lv < 0 ? H_UNDER : 0;
+export const rampLen = lv => Math.abs(lvH(lv)) / GRADE + VCURVE;   // horizontal length of one ramp
+// height of the road surface s metres along a road of length len
+export function profileH(lv, len, s) {
+  if (!lv) return 0;
+  const H = Math.abs(lvH(lv)), u = Math.min(s, len - s) - FLAT; if (u <= 0) return 0;
+  const g = GRADE, V = VCURVE, Lr = H / g + V;
+  const h = u < V ? g * u * u / (2 * V) : u < Lr - V ? g * V / 2 + g * (u - V) : u < Lr ? H - g * (Lr - u) ** 2 / (2 * V) : H;
+  return Math.sign(lv) * h;
+}
+export const edgeH = (e, s) => e && e.lv ? profileH(e.lv, e.len, s) : 0;
+// where two roads cross without a junction: is one far enough above the other all the way across?
+// hA/hB: height along each road, sA/sB: where they cross, dA/dB: unit headings, wA/wB: half widths (with sidewalks)
+export function clears(hA, sA, dA, wA, hB, sB, dB, wB) {
+  const sin = Math.abs(dA[0] * dB[1] - dA[1] * dB[0]); if (sin < .26) return false;   // too shallow an angle to bridge
+  const fa = (wB + 1.5) / sin, fb = (wA + 1.5) / sin;
+  let a0 = 1e9, a1 = -1e9, b0 = 1e9, b1 = -1e9;
+  for (let k = -1; k <= 1; k += .25) { const a = hA(sA + k * fa), b = hB(sB + k * fb); a0 = Math.min(a0, a); a1 = Math.max(a1, a); b0 = Math.min(b0, b); b1 = Math.max(b1, b); }
+  return a0 - b1 >= CLEARANCE || b0 - a1 >= CLEARANCE;
+}
+
 // half the width of a road's carriageway (kerb to kerb / 2)
 export function halfW(e) {
   const nl = e.ring ? Math.min(2, e.nl || 1) : (e.nl || 1), tl = e.ring ? 0 : (e.tl || 0);
@@ -129,7 +158,7 @@ export class Net {
     for (const id of this.nodes.get(a).edges) { const f = this.edges.get(id); if ((f.a === a && f.b === b) || (f.a === b && f.b === a)) return null; }
     const A = this.nodes.get(a), B = this.nodes.get(b);
     if (cx == null) { cx = (A.x + B.x) / 2; cz = (A.z + B.z) / 2; }
-    const e = { id: this.eid++, a, b, cx, cz, oneway: o.oneway || 0, ring: o.ring || 0, kind: o.kind || 'street', nl: o.nl || 1, tl: o.tl || 0, lanes: [] };
+    const e = { id: this.eid++, a, b, cx, cz, oneway: o.oneway || 0, ring: o.ring || 0, kind: o.kind || 'street', nl: o.nl || 1, tl: o.tl || 0, lv: o.lv || 0, lanes: [] };
     this.edgeGeom(e); if (e.len < 4) return null;
     this.edges.set(e.id, e); A.edges.add(e.id); B.edges.add(e.id);
     return e;
@@ -143,7 +172,7 @@ export class Net {
   splitEdge(e, t, at) {
     const A = this.nodes.get(e.a), B = this.nodes.get(e.b), a = [A.x, A.z], c = [e.cx, e.cz], b = [B.x, B.z];
     const q0 = lerp2(a, c, t), q1 = lerp2(c, b, t), m = at || lerp2(q0, q1, t);
-    const n = this.addNode(m[0], m[1]); const o = { oneway: e.oneway, ring: e.ring, kind: e.kind, nl: e.nl, tl: e.tl };
+    const n = this.addNode(m[0], m[1]); const o = { oneway: e.oneway, ring: e.ring, kind: e.kind, nl: e.nl, tl: e.tl, lv: e.lv };
     this.delEdge(e.id);
     if (!this.nodes.has(A.id)) this.nodes.set(A.id, A);
     if (!this.nodes.has(B.id)) this.nodes.set(B.id, B);
@@ -167,10 +196,19 @@ export class Net {
         if (f === e || f.a === e.a || f.a === e.b || f.b === e.a || f.b === e.b) continue;
         const [fx0, fx1, fz0, fz1] = f.bb;
         if (fx0 > x1 || x0 > fx1 || fz0 > z1 || z0 > fz1) continue;
-        for (let i = 1; i < e.pts.length; i++) for (let j = 1; j < f.pts.length; j++) { const x = segX(e.pts[i - 1], e.pts[i], f.pts[j - 1], f.pts[j]); if (x && x[0] > .01 && x[0] < .99 && x[1] > .01 && x[1] < .99) return true; }
+        for (let i = 1; i < e.pts.length; i++) for (let j = 1; j < f.pts.length; j++) {
+          const x = segX(e.pts[i - 1], e.pts[i], f.pts[j - 1], f.pts[j]); if (!(x && x[0] > .01 && x[0] < .99 && x[1] > .01 && x[1] < .99)) continue;
+          if ((e.lv || f.lv) && this.sepAt(e, e.cum[i - 1] + (e.cum[i] - e.cum[i - 1]) * x[0], f, f.cum[j - 1] + (f.cum[j] - f.cum[j - 1]) * x[1])) continue;   // one goes over the other
+          return true;
+        }
       }
     }
     return false;
+  }
+  // two existing roads crossing at sE on e and sF on f: is it a clean over/underpass?
+  sepAt(e, sE, f, sF) {
+    const a = along(e.pts, e.cum, sE), b = along(f.pts, f.cum, sF);
+    return clears(s => edgeH(e, s), sE, [a[2], a[3]], halfW(e) + WALK_W, s => edgeH(f, s), sF, [b[2], b[3]], halfW(f) + WALK_W);
   }
   // put the network back as it was (cars keep their places where their lanes still exist)
   restore(snap) { const cars = this.cars; this.load(snap); this.cars = cars; this.built = -1; }
@@ -192,6 +230,7 @@ export class Net {
       if (h.e.ring) return { n: Math.hypot(A.x - x, A.z - z) < Math.hypot(B.x - x, B.z - z) ? A : B };
       if (h.s < 9) return { n: A };
       if (h.s > h.e.len - 9) return { n: B };
+      if (h.e.lv) return n ? { n } : { p: [x, z] };   // (no junctions on an over/underpass: only at its ends)
       const p = along(h.e.pts, h.e.cum, h.s); return { e: h.e, s: h.s, p: [p[0], p[1]] };
     }
     return { p: [x, z] };
@@ -206,7 +245,8 @@ export class Net {
     return this.addNode(q.p[0], q.p[1]);
   }
   // plan a road without changing anything: endpoints, curve, crossings, or a reason it can't be built
-  planRoad(p0, p1, c = null, r = SNAP) {
+  // lv: 0 a street (crossings become junctions), 1 an overpass, -1 an underpass (crossings are bridged; junctions only at the ends)
+  planRoad(p0, p1, c = null, r = SNAP, lv = 0) {
     let qa = this.probe(p0[0], p0[1], r), qb = this.probe(p1[0], p1[1], r);
     const P = q => q.n ? [q.n.x, q.n.z] : q.p;
     if (qa.n && qb.n && qa.n === qb.n) { if (dist(p0, p1) > 14) qb = { p: p1 }; else return { reason: 'Too short' }; }
@@ -219,19 +259,22 @@ export class Net {
     let pts = curve();
     // crossings; a free end just past a road snaps back onto it
     const hitsOf = pts => {
-      const out = [], M = pts.length - 1;
+      const out = [], M = pts.length - 1, pc = cumOf(pts);
       let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; for (const p of pts) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); }
       for (const e of this.edges.values()) if (!(e.bb[0] > x1 || e.bb[1] < x0 || e.bb[2] > z1 || e.bb[3] < z0)) for (let i = 1; i < pts.length; i++) for (let j = 1; j < e.pts.length; j++) {
         const x = segX(pts[i - 1], pts[i], e.pts[j - 1], e.pts[j]); if (!x) continue;
-        out.push({ t: (i - 1 + x[0]) / M, e, s: e.cum[j - 1] + (e.cum[j] - e.cum[j - 1]) * x[1], pt: lerp2(pts[i - 1], pts[i], x[0]) });
+        const dl = dist(pts[i - 1], pts[i]) || 1, df = dist(e.pts[j - 1], e.pts[j]) || 1;
+        out.push({ t: (i - 1 + x[0]) / M, e, s: e.cum[j - 1] + (e.cum[j] - e.cum[j - 1]) * x[1], pt: lerp2(pts[i - 1], pts[i], x[0]),
+          sa: pc[i - 1] + (pc[i] - pc[i - 1]) * x[0], L: pc[M], da: [(pts[i][0] - pts[i - 1][0]) / dl, (pts[i][1] - pts[i - 1][1]) / dl], df: [(e.pts[j][0] - e.pts[j - 1][0]) / df, (e.pts[j][1] - e.pts[j - 1][1]) / df] });
       }
       out.sort((p, q) => p.t - q.t);
       return out.filter((h, i) => !out.slice(0, i).some(g => g.e === h.e && dist(g.pt, h.pt) < .5));   // a crossing right on a sample point counts once
     };
     let hits = hitsOf(pts);
+    const high = h => h.e.lv && Math.abs(edgeH(h.e, h.s)) > .05;   // that road is up on its bridge or down in its cutting there
     const endFix = (q, near) => { if (q.n || q.e) return q; const h = near(); if (!h) return q; return h.e.ring ? q : (h.s < 9 ? { n: this.nodes.get(h.e.a) } : h.s > h.e.len - 9 ? { n: this.nodes.get(h.e.b) } : { e: h.e, s: h.s, p: h.pt }); };
-    const nqb = endFix(qb, () => [...hits].reverse().find(h => dist(h.pt, b) < 10 && dist(h.pt, a) > 10));
-    const nqa = endFix(qa, () => hits.find(h => dist(h.pt, a) < 10 && dist(h.pt, b) > 10));
+    const nqb = endFix(qb, () => [...hits].reverse().find(h => !high(h) && dist(h.pt, b) < 10 && dist(h.pt, a) > 10));
+    const nqa = endFix(qa, () => hits.find(h => !high(h) && dist(h.pt, a) < 10 && dist(h.pt, b) > 10));
     if (nqa !== qa || nqb !== qb) {
       qa = nqa; qb = nqb; const a2 = P(qa), b2 = P(qb);
       if (!c) cc = lerp2(a2, b2, .5); a = a2; b = b2;
@@ -240,10 +283,19 @@ export class Net {
     }
     // every crossing becomes a junction: an end of the crossed road if one is close, else a new one on it
     const ends = new Set([qa.n, qb.n].filter(Boolean)), endEdges = new Set([qa.e, qb.e].filter(Boolean));
-    const stops = [];
+    const stops = []; let bridged = 0;
     for (const h of hits) {
       if (endEdges.has(h.e)) continue;
       if ((qa.n && (h.e.a === qa.n.id || h.e.b === qa.n.id) && dist(h.pt, a) < 12) || (qb.n && (h.e.a === qb.n.id || h.e.b === qb.n.id) && dist(h.pt, b) < 12)) continue;
+      if (lv || h.e.lv) {   // an over/underpass: one road must clear the other all the way across
+        const ok = clears(s => profileH(lv, h.L, s), h.sa, h.da, ROAD_W / 2 + WALK_W, s => edgeH(h.e, s), h.s, h.df, halfW(h.e) + WALK_W);
+        if (ok) { bridged++; continue; }
+        const nearEnd = h.e.lv && !lv && (h.s < 9 || h.s > h.e.len - 9);   // the level end of an overpass: an ordinary junction there
+        if (!nearEnd) {
+          if (lv && Math.abs(profileH(lv, h.L, h.sa)) < CLEARANCE) return { reason: 'Needs a longer run-up', bad: h.pt };
+          return { reason: lv ? 'Too close to another bridge' : 'Too close to the ramp', bad: h.pt };
+        }
+      }
       const EA = this.nodes.get(h.e.a), EB = this.nodes.get(h.e.b);
       let st = null;
       for (const N of [EA, EB]) if (Math.hypot(N.x - h.pt[0], N.z - h.pt[1]) < 9 && (!st || Math.hypot(N.x - h.pt[0], N.z - h.pt[1]) < Math.hypot(st.n.x - h.pt[0], st.n.z - h.pt[1]))) st = { t: h.t, n: N };
@@ -260,12 +312,21 @@ export class Net {
       if (dist(list[k].pt, list[k - 1].pt) < 5) return { reason: 'Too close to another road' };
     }
     for (const q of pts) if (Math.max(Math.abs(q[0]), Math.abs(q[1])) > MAP_EDGE) return { reason: 'Too far out of town' };   // the hills start out there
-    return { qa, qb, a, b, cc, stops, pts };
+    if (lv && !bridged) return { reason: lv > 0 ? 'Draw it over a road' : 'Draw it under a road' };
+    if (lv) {   // a bridge can't run along on top of (or under) another road
+      const run = new Map(), pc = cumOf(pts);
+      for (let i = 1; i < pts.length; i++) {
+        const q = pts[i]; if (dist(q, a) < 15 || dist(q, b) < 15) continue;
+        for (const e of this.edges.values()) { const bb = e.bb, w = halfW(e) + ROAD_W / 2 + 1; if (q[0] < bb[0] - w || q[0] > bb[1] + w || q[1] < bb[2] - w || q[1] > bb[3] + w) continue;
+          if (closestOnPoly(e.pts, e.cum, q[0], q[1]).d < w) { const r = (run.get(e) || 0) + pc[i] - pc[i - 1]; run.set(e, r); if (r > 60) return { reason: 'Too close to another road' }; } }
+      }
+    }
+    return { qa, qb, a, b, cc, stops, pts, lv };
   }
   // build a road from p0 to p1 (optional bend control c). Crossings become junctions.
   // Returns the new edges (array); if nothing was built, the array has .reason
   addRoad(p0, p1, c = null, o = {}, r = SNAP) {
-    const plan = this.planRoad(p0, p1, c, r), made = [];
+    const plan = this.planRoad(p0, p1, c, r, o.lv || 0), made = [];
     if (plan.reason) { made.reason = plan.reason; return made; }
     const snap = this.serialize(), eid0 = this.eid;
     const A = this.realize(plan.qa), B = this.realize(plan.qb);
@@ -324,10 +385,28 @@ export class Net {
     return out;
   }
   // Lanes tool: 1 lane -> 1 + turn lanes -> 2 -> 2 + turn lanes -> 3 + turn lanes -> 1
-  nextLanes(e) { const i = LANE_STEPS.findIndex(s => s[0] === (e.nl || 1) && s[1] === (e.tl || 0)); return LANE_STEPS[(i + 1) % LANE_STEPS.length]; }
-  cycleLanes(eid) {
+  // maxHW: how wide (half width) the road may get before it would reach a building (the city works that out); steps that
+  // don't fit are skipped, so the road goes back to one lane instead of knocking anything down. .capped = something was skipped
+  nextLanes(e, maxHW = Infinity) {
+    const chain = this.roadChain(e), cur = halfW(e), wOf = st => Math.max(...chain.map(f => halfW({ ...f, nl: st[0], tl: st[1] })));
+    const i = LANE_STEPS.findIndex(s => s[0] === (e.nl || 1) && s[1] === (e.tl || 0));
+    let capped = false;
+    for (let k = 1; k <= LANE_STEPS.length; k++) {
+      const st = LANE_STEPS[(i + k) % LANE_STEPS.length], w = wOf(st);
+      if (w <= cur + 1e-6 || w <= maxHW) { const out = st.slice(); out.capped = capped; out.max = this.maxStep(e, maxHW); return out; }
+      capped = true;
+    }
+    return LANE_STEPS[0];
+  }
+  // the widest step that fits
+  maxStep(e, maxHW = Infinity) {
+    const chain = this.roadChain(e); let best = LANE_STEPS[0];
+    for (const st of LANE_STEPS) if (Math.max(...chain.map(f => halfW({ ...f, nl: st[0], tl: st[1] }))) <= Math.max(maxHW, halfW(e) + 1e-6)) best = st;
+    return best;
+  }
+  cycleLanes(eid, maxHW = Infinity) {
     const e = this.edges.get(eid); if (!e || e.ring) return null;
-    const [nl, tl] = this.nextLanes(e), chain = this.roadChain(e);
+    const [nl, tl] = this.nextLanes(e, maxHW), chain = this.roadChain(e);
     for (const f of chain) { f.nl = nl; f.tl = tl; }
     // a roundabout at either end gets a second lane when a wide road now comes in
     for (const f of chain) for (const nid of [f.a, f.b]) {
@@ -385,7 +464,7 @@ export class Net {
         if (!this.nodes.has(n.id)) this.nodes.set(n.id, n);
         if (!node) { node = m; continue; }
         for (const id of [...m.edges]) {   // hook this road onto the shared entrance
-          const f = this.edges.get(id), o = { oneway: f.oneway, kind: f.kind, nl: f.nl, tl: f.tl };
+          const f = this.edges.get(id), o = { oneway: f.oneway, kind: f.kind, nl: f.nl, tl: f.tl, lv: f.lv };
           if (f.a === m.id) this.addEdge(node.id, f.b, f.cx, f.cz, o); else this.addEdge(f.a, node.id, f.cx, f.cz, o);
           this.delEdge(id);
         }
@@ -420,6 +499,7 @@ export class Net {
   }
   // a roundabout on a plain stretch of road: split it there first
   roundaboutOnRoad(e, s) {
+    if (e.lv) return 'Not on a bridge';
     const R = Math.min(this.ringWant([e, e]), s - 7, e.len - s - 7);
     if (R < 8) return 'Too close to a junction';
     const p = along(e.pts, e.cum, s);
@@ -440,7 +520,7 @@ export class Net {
       for (const id of [...m.edges]) {
         const f = this.edges.get(id), far = f.a === m.id ? f.b : f.a, toward = f.a === m.id;
         const F = this.nodes.get(far); this.delEdge(id); if (!this.nodes.has(far)) this.nodes.set(far, F);
-        const o = { oneway: f.oneway, kind: f.kind, nl: f.nl, tl: f.tl };
+        const o = { oneway: f.oneway, kind: f.kind, nl: f.nl, tl: f.tl, lv: f.lv };
         if (toward) this.addEdge(center.id, far, (center.x + F.x) / 2, (center.z + F.z) / 2, o);
         else this.addEdge(far, center.id, (center.x + F.x) / 2, (center.z + F.z) / 2, o);
       }
@@ -451,14 +531,14 @@ export class Net {
   }
   serialize() {
     return { nodes: [...this.nodes.values()].map(n => [n.id, +n.x.toFixed(2), +n.z.toFixed(2), n.sig ? 1 : 0, n.ring, n.rc || 0]),
-      edges: [...this.edges.values()].map(e => [e.id, e.a, e.b, +e.cx.toFixed(2), +e.cz.toFixed(2), e.oneway, e.ring, e.kind, e.nl || 1, e.tl || 0]), nid: this.nid, eid: this.eid, rid: this.rid };
+      edges: [...this.edges.values()].map(e => [e.id, e.a, e.b, +e.cx.toFixed(2), +e.cz.toFixed(2), e.oneway, e.ring, e.kind, e.nl || 1, e.tl || 0, e.lv || 0]), nid: this.nid, eid: this.eid, rid: this.rid };
   }
   load(d) {
     this.nodes.clear(); this.edges.clear(); this.cars = [];
     for (const [id, x, z, sig, ring, rc] of d.nodes) this.nodes.set(id, { id, x, z, sig: sig ? { phase: 0, t: 0, st: 'g' } : null, ring, rc: rc || null, edges: new Set() });
-    for (const [id, a, b, cx, cz, oneway, ring, kind, nl, tl] of d.edges) {
+    for (const [id, a, b, cx, cz, oneway, ring, kind, nl, tl, lv] of d.edges) {
       if (!this.nodes.has(a) || !this.nodes.has(b)) continue;
-      const e = { id, a, b, cx, cz, oneway, ring, kind, nl: nl || 1, tl: tl || 0, lanes: [] }; this.edgeGeom(e); this.edges.set(id, e);
+      const e = { id, a, b, cx, cz, oneway, ring, kind, nl: nl || 1, tl: tl || 0, lv: lv || 0, lanes: [] }; this.edgeGeom(e); this.edges.set(id, e);
       this.nodes.get(a).edges.add(id); this.nodes.get(b).edges.add(id);
     }
     for (const n of [...this.nodes.values()]) if (!n.edges.size) this.nodes.delete(n.id);
@@ -923,6 +1003,9 @@ export class Net {
       let hx = f[0] - r[0], hz = f[1] - r[1]; const L = Math.hypot(hx, hz);
       if (L > .3) { hx /= L; hz /= L; } else { hx = f[2]; hz = f[3]; }
       car.x = (f[0] + r[0]) / 2; car.z = (f[1] + r[1]) / 2; car.hx = hx; car.hz = hz;
+      // up a ramp or down into a cutting: height, and the nose up or down with the slope
+      const yf = this.hAt(car, car.s - car.len * .2), yr = this.hAt(car, car.s - car.len * .8);
+      car.y = (yf + yr) / 2; car.pitch = yf === yr ? 0 : Math.atan2(yf - yr, car.len * .6);
       // pulling in at the end of a trip
       if (car.lane === car.dest && car.destS - car.s < 14 && !car.lane.conn && !car.keep) car.latT = 1.5;
       const want = car.aside ? (car.lane.conn ? .6 : 2.1) : (car.latT || 0);
@@ -951,6 +1034,18 @@ export class Net {
     if (s >= 0 || (!car.prev && !car.side)) return along(l.pts, l.cum, s);
     if (car.side) return along(car.side.pts, car.side.cum, this.mapS(l, s, car.side));
     const p = car.prev; return along(p.pts, p.cum, p.len + s);
+  }
+  // road height under a lane at s (0 at junctions and on ordinary roads)
+  laneH(l, s) {
+    if (!l || l.conn || !l.edge.lv) return 0;
+    const F = l.Fa + Math.max(0, Math.min(1, s / l.len)) * (l.Fb - l.Fa), e = l.edge;
+    return edgeH(e, (l.dir > 0 ? F : 1 - F) * e.len);
+  }
+  hAt(car, s) {
+    const l = car.lane;
+    if (s >= 0 || (!car.prev && !car.side)) return this.laneH(l, s);
+    if (car.side) return this.laneH(car.side, this.mapS(l, s, car.side));
+    return this.laneH(car.prev, car.prev.len + s);
   }
   // is there room to move into lane B at sb (cars ahead and behind far enough)?
   gapOK(car, B, sb) {

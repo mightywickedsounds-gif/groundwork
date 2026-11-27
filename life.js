@@ -155,7 +155,7 @@ export function createLife(net, city, seed = 1) {
         let bi = 0; for (let i = 1; i < todo.length; i++) if (dist.get(todo[i]) < dist.get(todo[bi])) bi = i;
         const n = todo.splice(bi, 1)[0], dn = dist.get(n), node = net.nodes.get(n); if (!node || dn > 2500) continue;
         for (const id of node.edges) {
-          const e = net.edges.get(id); if (!e || e.ring) continue; const m = e.a === n ? e.b : e.a, d = dn + e.len;
+          const e = net.edges.get(id); if (!e || e.ring || e.lv) continue; const m = e.a === n ? e.b : e.a, d = dn + e.len;
           if (d < (dist.get(m) ?? 1e18)) { if (!dist.has(m)) todo.push(m); dist.set(m, d); prev.set(m, [n, e]); }
         }
       }
@@ -270,7 +270,7 @@ export function createLife(net, city, seed = 1) {
     for (const n of net.nodes.values()) {
       if (n.edges.size !== 1) continue;
       if (city.inCity(n.x, n.z) && Math.min(Math.abs(n.x - bb.x0), Math.abs(n.x - bb.x1), Math.abs(n.z - bb.z0), Math.abs(n.z - bb.z1)) > 20) continue;   // out of town, or on its edge
-      const e = net.edges.get([...n.edges][0]); if (!e || e.ring || e.len < 25) continue;
+      const e = net.edges.get([...n.edges][0]); if (!e || e.ring || e.lv || e.len < 25) continue;
       const s = e.a === n.id ? 6 : e.len - 6, q = along(e.pts, e.cum, s);
       out.push({ id: -n.id, e, fx: q[0], fz: q[1], exit: true, x: q[0], z: q[1] });
     }
@@ -353,7 +353,7 @@ export function createLife(net, city, seed = 1) {
   // an evening walk round the block
   function stroll(p) {
     const A = D(L.bmap.get(p.home)); if (!A) return;
-    const E = [...net.edges.values()].filter(e => !e.ring && e.len > 30 && Math.hypot(e.cx - A.walk[0], e.cz - A.walk[1]) < 260); if (!E.length) return;
+    const E = [...net.edges.values()].filter(e => !e.ring && !e.lv && e.len > 30 && Math.hypot(e.cx - A.walk[0], e.cz - A.walk[1]) < 260); if (!E.length) return;
     const e = E[Math.floor(hash(p.id, Math.floor(now()), seed) * E.length)], s = e.len * (.2 + hash(p.id, 2, Math.floor(now())) * .6);
     const mid = { e, s, side: hash(p.id, 3, Math.floor(now())) < .5 ? 1 : -1 }; mid.walk = swPt(e, s, mid.side, 2.2); mid.door = mid.walk;
     const o = 1.75 + hash(p.id, 5, seed) * .95, out = walkRoute(A, mid, o), back = walkRoute(mid, A, o);

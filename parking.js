@@ -32,7 +32,7 @@ export function layout(l) {
 export function entries(l, net) {
   let best = null, bd = 90;
   for (const e of net.edges.values()) {
-    if (e.ring || !e.bb || e.bb[0] - 90 > l.x || e.bb[1] + 90 < l.x || e.bb[2] - 90 > l.z || e.bb[3] + 90 < l.z) continue;
+    if (e.ring || e.lv || !e.bb || e.bb[0] - 90 > l.x || e.bb[1] + 90 < l.x || e.bb[2] - 90 > l.z || e.bb[3] + 90 < l.z) continue;
     const c = closestOnPoly(e.pts, e.cum, l.x, l.z); if (c.d < bd) { bd = c.d; best = { e, c }; }
   }
   if (!best) return [];
