@@ -1,8 +1,8 @@
 // Parking lots: their layout (rows of stalls, aisles, driveways to the street) and the cars that drive in, park,
 // and back out again. Shared by the drawing (draw.js) and the town (life.js). No three.js here (runs in Node).
-import { along, closestOnPoly, halfW, WALK_W, TYPES } from './net.js';
+import { along, closestOnPoly, halfW, TYPES } from './net.js';
 
-const STALL_W = 2.6, STALL_D = 5, ROW_GAP = 5.2, AISLE = 6.4;
+const STALL_W = 2.6, ROW_GAP = 5.2, AISLE = 6.4;
 // a lot's own frame: x along its rows, z across them (for a lot in front of a building, +z points to the street)
 export function frame(l) {
   const r = l.rot || 0, c = Math.cos(r), s = Math.sin(r);
@@ -138,14 +138,15 @@ export function createParking(net, city) {
   // nothing coming that would hit a car crossing these points (visible traffic heading for them, or a car right there)
   function clear(pts, me, mv, at, patient) {
     for (const c of net.cars) {
-      if (c === me || (c.hide && c.aside)) continue;
+      if (c === me || (c.hide && !c.lotGo)) continue;   // (another car still waiting in its lot)
+      if (me && !me.aside && c.lane === me.lane && c.s < me.s) continue;   // (behind its kept place in the lane: held up by it)
       if (at && c.hx * at[2] + c.hz * at[3] > .6) continue;   // (going its way, beside or behind: turning left across the other side, only that traffic matters)
       for (const p of pts) {
         const dx = p[0] - c.x, dz = p[1] - c.z, d = Math.hypot(dx, dz);
-        if (d < 4.2) return false;
+        if (d < (patient > 1 ? 2.6 : 4.2)) { if (mv) mv.why = c; return false; }
         if (c.v < .5 || patient) continue;   // (standing still: waiting for something else)
         const ahead = dx * c.hx + dz * c.hz, side = Math.abs(dx * c.hz - dz * c.hx);
-        if (ahead > 0 && side < 3 && ahead < 9 + c.v * 3.4) return false;
+        if (ahead > 0 && side < 3 && ahead < 9 + c.v * 3.4) { if (mv) mv.why = c; return false; }
       }
     }
     for (const m of P.movers) if (m.onRoad && m !== mv && (m.go || m.v > .3)) { const q = P.pose(m); for (const p of pts) if (Math.hypot(q[0] - p[0], q[1] - p[1]) < 5) return false; }   // (one already turning)
@@ -213,6 +214,16 @@ export function createParking(net, city) {
     m.legs.push(fwd); m.sBar = sNear(fwd, m.bar); m.sK = sNear(fwd, m.K); m.cross = crossing(fwd, m.K, m.sK, fwd.len);
   }
   P.free = k => { P.parked.delete(k); };
+  // the driver's walk from their parked car to the shop door: out of the driver's door, along the line between
+  // the stalls (clear of the parked cars), along the walkway in front of the shop, in at the door
+  P.walkPath = function (k, door) {
+    const sp = P.parked.get(k); if (!sp) return null;
+    const b = city.buildings.find(o => o.id === sp.bid), L = P.lotFor(b); if (!L) return null;
+    const [, r, i] = k.split(':').map(Number), lay = layout(L.l), row = lay.rows[r], st = row && row.stalls.find(s => s.i === i); if (!st) return null;
+    const F = frame(L.l), nose = row.flip ? 1 : -1, xl = st.x - nose * 1.3, zw = lay.z0 + 1.3, d = F.L(door[0], door[1]);
+    const pts = [F.W(xl, st.z + nose * .4), F.W(xl, zw), F.W(Math.max(lay.x0 + .5, Math.min(lay.x1 - .5, d[0])), zw), door];
+    return pts.filter((q, j) => !j || Math.hypot(q[0] - pts[j - 1][0], q[1] - pts[j - 1][1]) > .05);
+  };
   const unblock = m => { for (const b of m.blk || []) net.unblock(b); m.blk = []; };
   // a mover's front (or rear, backing) wheels, heading and middle
   function frontBack(m) {
@@ -232,16 +243,20 @@ export function createParking(net, city) {
         if (!m.park) vt = Math.min(vt, Math.sqrt(2 * 1.9 * Math.max(0, m.sBar - lg.s)));   // up to the stop bar
         if (m.park || lg.s >= m.sBar - .4) {
           m.held = (m.held || 0) + dt; if (!m.park) m.sig = m.turn;
-          if (m.held > (m.park ? 0 : .9) && clear(m.cross, m.car, m, m.park ? m.at : null, m.held > 25)) {   // a gap: go, holding the lanes it crosses
+          if (m.held > (m.park ? 0 : .9) && clear(m.cross, m.car, m, m.park ? m.at : null, m.held > 45 ? 2 : m.held > 25 ? 1 : 0)) {   // a gap: go, holding the lanes it crosses
             m.go = true; m.onRoad = true;
-            if (m.car) m.car.aside = false;
+            if (m.car) { m.car.aside = false; m.car.lotGo = true; }
             const mine = new Set(m.blk.map(b => b.lane)); if (m.car) mine.add(m.car.lane);
             for (const l of m.e.lanes || []) {
               if (mine.has(l)) continue;
               let best = null; for (const p of m.cross) { const c = closestOnPoly(l.pts, l.cum, p[0], p[1]); if (!best || c.d < best.d) best = c; }
               if (best && best.d < 1.9) m.blk.push(net.block(l, Math.min(l.len, best.s + 2.5), 5));
             }
-          } else vt = 0;
+          } else {
+            vt = 0;
+            // waiting a while: the driver coming up behind leaves a gap to let it out (its place in the lane is kept clear)
+            if (!m.park && m.car && m.held > 6 && m.car.aside) m.car.aside = false;
+          }
         }
       }
       {
@@ -266,7 +281,7 @@ export function createParking(net, city) {
         m.li++; m.v = 0; m.pause = .5; m.sig = 0; P.parked.delete(m.k); continue;
       }
       P.movers.splice(i, 1); unblock(m);
-      if (m.park) { const sp = P.parked.get(m.k); if (sp) sp.moving = false; if (m.done) m.done(sp ? sp.x : lg.pts[lg.pts.length - 1][0], sp ? sp.z : lg.pts[lg.pts.length - 1][1]); }
+      if (m.park) { const sp = P.parked.get(m.k); if (sp) sp.moving = false; if (m.done) m.done(sp ? sp.x : lg.pts[lg.pts.length - 1][0], sp ? sp.z : lg.pts[lg.pts.length - 1][1], m.k); }
       else if (m.car) {   // in the lane: the car on the road takes over, at this speed, with its wheels where these are
         const c = m.car, fb = frontBack(m);
         c.hide = false; c.hold = false; c.aside = false; c.v = m.v; c.lat = 0; c.latV = 0; c.rx = fb.other[0]; c.rz = fb.other[1];

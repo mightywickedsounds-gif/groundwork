@@ -213,13 +213,13 @@ export function createLife(net, city, seed = 1) {
     car.hide = true; car.hold = true; car.aside = true;
     const ok = car.lotOut && L.park.leave(p.parked.k, car, walkT, () => { car.hide = false; car.hold = false; car.aside = false; });
     if (!ok) { car.hide = false; car.hold = false; car.aside = false; p.parked = null; return false; }
-    ghost(p, [dA.door, [sp.x, sp.z]]); p.parked = null; return true;
+    const wp = L.park.walkPath(p.parked.k, dA.door); ghost(p, wp ? wp.reverse() : [dA.door, [sp.x, sp.z]]); p.parked = null; return true;
   }
   function unpark(p) { if (p.parked) { L.park.free(p.parked.k); p.parked = null; } }
   // drove in: park in the lot if there's one (and a free stall), then walk in from the car
   function parkAndWalk(p, car, B, why) {
     const dB = D(B); if (!dB) return false;
-    const k = L.park.arrive(car, B, p.id, (x, z) => { startWalk(p, [[x, z], dB.walk, dB.door], B.id, why); });
+    const k = L.park.arrive(car, B, p.id, (x, z, k2) => { startWalk(p, L.park.walkPath(k2, dB.door) || [[x, z], dB.walk, dB.door], B.id, why); });
     if (!k) return false;
     p.parked = { k, bid: B.id }; p.state = 'park'; p.dest = B.id; p.why = why; p.at = B.id;
     return true;
@@ -244,6 +244,8 @@ export function createLife(net, city, seed = 1) {
   L.collect = function (b) { if (!b || !b.biz || !b.biz.cash) return 0; const c = Math.floor(b.biz.cash); L.coins += c; L.day.biz += c; b.biz.cash -= c; return c; };
   L.cashCap = b => { const B = BIZ[b.biz.t]; return Math.max(60, B.rate * lvlMul(b.biz.lvl) * 7 + (B.spend || 0) * 20); };
 
+  // where the driver steps out: beside the car on the kerb side (not out of the middle of it)
+  const outSide = car => [car.x - (car.hz || 0) * (car.w / 2 + .35), car.z + (car.hx || 0) * (car.w / 2 + .35)];
   // a car got there (or gave up): the driver walks in
   L.carDone = function (car) {
     const g = car.pid < 0 && L.guests.get(car.pid);
@@ -251,7 +253,7 @@ export function createLife(net, city, seed = 1) {
       if (g.car !== car) return; g.car = null;
       const to = g.dest; if (!to || to.exit || car.gave) { L.guests.delete(g.id); return; }   // out of town
       const dB = D(to); if (!dB) { L.guests.delete(g.id); return; }
-      g.at = to.id; if (parkAndWalk(g, car, to, 'shop')) return; startWalk(g, [[car.x, car.z], dB.kerb, dB.walk, dB.door], to.id, 'shop'); return;
+      g.at = to.id; if (parkAndWalk(g, car, to, 'shop')) return; startWalk(g, [outSide(car), dB.kerb, dB.walk, dB.door], to.id, 'shop'); return;
     }
     const p = car.pid && L.people.get(car.pid); if (!p || p.car !== car) return;
     const to = p.dest, B = L.bmap.get(to); p.car = null;
@@ -259,7 +261,7 @@ export function createLife(net, city, seed = 1) {
     if (car.gave) { L.day.late++; arrive(p, to, p.why); return; }
     const dB = D(B); if (!dB) { arrive(p, to, p.why); return; }
     if (B.biz && parkAndWalk(p, car, B, p.why)) return;
-    startWalk(p, [[car.x, car.z], dB.kerb, dB.walk, dB.door], to, p.why);
+    startWalk(p, [outSide(car), dB.kerb, dB.walk, dB.door], to, p.why);
   };
 
   // ---------- visitors: through traffic on the edge roads, and out-of-towners stopping at the shops ----------
