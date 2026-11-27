@@ -328,3 +328,7 @@ The owner's phone screenshot after building a gas station: it looked buggy (yell
 - **Pause on iPhone:** the speed buttons now act the moment they're touched (not only on a full "click"), their icons can't take the tap away from the button, and taps no longer wait for a possible double-tap zoom. Also: closing the menu no longer un-pauses a game that was paused before the menu was opened.
 - **Tests:** life, law, lanes, bridge and the browser check pass.
 
+### Round 21: the version label
+
+The owner: the title screen still said v18 after the update. The label in the corner was typed into the page by hand and never updated (the game itself was version 20). It now shows the version of the game file the phone actually loaded, so it always matches, and if a phone is still holding an old copy it shows the old number.
+
