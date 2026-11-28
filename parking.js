@@ -1,6 +1,6 @@
 // Parking lots: their layout (rows of stalls, aisles, driveways to the street) and the cars that drive in, park,
 // and back out again. Shared by the drawing (draw.js) and the town (life.js). No three.js here (runs in Node).
-import { along, closestOnPoly, halfW, TYPES } from './net.js';
+import { along, closestOnPoly, halfW, TYPES, WALK_W } from './net.js';
 
 const STALL_W = 2.6, ROW_GAP = 5.2, AISLE = 6.4;
 // a lot's own frame: x along its rows, z across them (for a lot in front of a building, +z points to the street)
@@ -115,6 +115,12 @@ export function createParking(net, city) {
     return ok;
   };
   // where a trip to or from a building with a lot starts or ends: in the lane by one of its driveways (`lot` = the kerb point there)
+  // can a car (of this kind) park in the building's lot right now?
+  P.hasFree = function (b, kindRoll, type) {
+    if (!b) return false; type = type || (kindRoll != null ? typeOf(kindRoll) : 'car');
+    if (['truck', 'bus', 'ems', 'fire'].includes(type)) return false;
+    const L = P.lotFor(b); return !!(L && freeStall(L, L.E[0]));
+  };
   P.gate = function (b, pick = 0) { const L = P.lotFor(b); if (!L) return null; const en = L.E[Math.abs(Math.floor(pick)) % L.E.length]; return { e: en.e, x: en.K[0], z: en.K[1], lot: en.K }; };
   const key = (l, r, i) => l.bid + ':' + r + ':' + i;
   const entNear = (L, x, z) => L.E.reduce((b, e) => Math.hypot(e.K[0] - x, e.K[1] - z) < Math.hypot(b.K[0] - x, b.K[1] - z) ? e : b, L.E[0]);
@@ -152,6 +158,9 @@ export function createParking(net, city) {
     for (const m of P.movers) if (m.onRoad && m !== mv && (m.go || m.v > .3)) { const q = P.pose(m); for (const p of pts) if (Math.hypot(q[0] - p[0], q[1] - p[1]) < 5) return false; }   // (one already turning)
     return true;
   }
+  // a line to drive along an aisle, kept clear of the parked cars' tails (shallow lots have a narrow aisle) and inside the lot
+  const aisleZ = (row, lay, z) => { const tail = row.flip ? row.z : row.z + ROW_GAP, away = row.flip ? -1 : 1, near = tail + away * 1.55, far = away > 0 ? lay.z1 - 1.1 : lay.z0 + 1.1;
+    return away > 0 ? Math.min(far, Math.max(near, z)) : Math.max(far, Math.min(near, z)); };
   // a car has arrived at a building with a lot: it turns in at the driveway, finds a stall and parks. done(x, z) once parked
   P.arrive = function (car, b, pid, done) {
     if (car.type === 'truck' || car.type === 'bus' || car.type === 'ems' || car.type === 'fire') return false;   // (too big for a stall: they stop at the kerb)
@@ -162,14 +171,14 @@ export function createParking(net, city) {
     const g = net.posAt(car, car.s - car.len * .2), lat = car.lat || 0, g0 = [g[0] - g[3] * lat, g[1] + g[2] * lat];   // the car's front wheels, where they are now
     const hv = car.rx === undefined ? [g[2], g[3]] : [g0[0] - car.rx, g0[1] - car.rz], hl = Math.hypot(hv[0], hv[1]) || 1, h = [hv[0] / hl, hv[1] / hl];
     const deep = Math.min(3, Math.max(1, (Kl[1] - Pl[1]) * .8)), poses = [[g0, h], [w.p(xin, Kl[1] - deep), IN]];
-    const end = [w.p(st.x, st.z + nose * wb / 2), w.h(0, nose)], mouth = [w.p(st.x, st.z - nose * 1.2), w.h(0, nose)];
-    const dir = Math.sign(st.x - xin) || 1, zl = row.aisle + dir * KEEP * .9;
+    const end = [w.p(st.x, st.z + nose * wb / 2), w.h(0, nose)], mouth = [w.p(st.x, st.z - nose * 3.4), w.h(0, nose)];   // (square to the stall before it goes in: no clipping the cars either side)
+    const dir = Math.sign(st.x - xin) || 1, zl = aisleZ(row, lay, row.aisle - nose * 1.0);   // (swings in from the far side of the aisle)
     if (!row.flip && Math.abs(st.x - xin) < 2 * R_TURN + .6) {   // straight ahead from the driveway: ease across into it
       if (Kl[1] - deep - Pl[1] > .5) poses.push([w.p(xin, Pl[1]), IN]);
       poses.push(mouth, end);
     } else {
       if (Pl[1] - zl > R_TURN + .8 && Kl[1] - deep - Pl[1] > .5) poses.push([w.p(xin, Pl[1]), IN]);
-      const a3 = xin + dir * R_TURN, a4 = st.x - dir * R_TURN;
+      const a3 = xin + dir * R_TURN, a4 = st.x - dir * (R_TURN + .6);
       poses.push([w.p(a3, zl), w.h(dir, 0)]);
       if ((a4 - a3) * dir > .4) poses.push([w.p(a4, zl), w.h(dir, 0)]);
       poses.push(mouth, end);
@@ -193,17 +202,20 @@ export function createParking(net, city) {
     const F = frame(L.l), w = toW(F), wb = car.len * .6, nose = row.flip ? 1 : -1;
     const tg = along(car.lane.pts, car.lane.cum, Math.max(0, car.s - car.len * .2));   // where its front wheels will be in the lane
     const ent = entNear(L, tg[0], tg[1]), Pl = F.L(ent.P[0], ent.P[1]), Kl = F.L(ent.K[0], ent.K[1]), xout = Pl[0] - KEEP, OUT = w.h(0, 1);
-    const dOut = Math.sign(xout - st.x) || 1, zl = row.aisle + dOut * KEEP * .9;
+    const dOut = Math.sign(xout - st.x) || 1, zl = aisleZ(row, lay, row.aisle + dOut * KEEP * .9);
     // backing out: the rear wheels lead, swinging away from the way out so it ends up facing it
-    const rb = Math.max(1.6, Math.min(R_TURN, dOut > 0 ? st.x - (lay.x0 + .4) : (lay.x1 - .4) - st.x));
-    const r0 = [st.x, st.z - nose * wb / 2], rEnd = [st.x - dOut * rb, zl];
-    const back = leg([[w.p(...r0), w.h(0, -nose)], [w.p(...rEnd), w.h(-dOut, 0)]], wb, 1.6, 0, true);
+    const room = dOut > 0 ? st.x - (lay.x0 + .4) : (lay.x1 - .4) - st.x, rb = Math.max(1.6, Math.min(R_TURN + 1, room)), str = Math.max(0, Math.min(wb * .8, room - rb));
+    const r0 = [st.x, st.z - nose * wb / 2], rEnd = [st.x - dOut * rb, aisleZ(row, lay, row.aisle - nose * .6)];   // (backs right out into the aisle before pulling away)
+    const bp = [[w.p(...r0), w.h(0, -nose)], [w.p(...rEnd), w.h(-dOut, 0)]];
+    if (str > .5) { bp.push([w.p(rEnd[0] - dOut * str, rEnd[1]), w.h(-dOut, 0)]); rEnd[0] -= dOut * str; }   // ... and on, straight, until it's square to the aisle
+    const back = leg(bp, wb, 1.6, 0, true);
     // then forward (planned once it has backed out, from where it really is): along the aisle, up the driveway to the stop bar, out into the lane
     const rest = [], f0x = rEnd[0] + dOut * wb, deep = Math.min(3, Math.max(1, (Kl[1] - Pl[1]) * .8));
     if ((xout - dOut * R_TURN - f0x) * dOut > .4) rest.push([w.p(xout - dOut * R_TURN, zl), w.h(dOut, 0)]);
     if (Kl[1] - deep - (zl + R_TURN) > .5) rest.push([w.p(xout, zl + R_TURN), OUT]);
     rest.push([w.p(xout, Kl[1] - deep), OUT], [[tg[0], tg[1]], [tg[2], tg[3]]]);
     const cr = OUT[0] * tg[3] - OUT[1] * tg[2];
+    sp.moving = true;   // (drawn as the car backing out from now on, not as a parked one too)
     P.movers.push({ legs: [back], li: 0, v: 0, wb, len: car.len, type: sp.type, color: sp.color, id: sp.id, pid: sp.pid, k, wait, car, ready,
       sig: 0, turn: cr > 0 ? 2 : 1, e: ent.e, blk: [], rest, bar: w.p(xout, Pl[1] + (Kl[1] - Pl[1]) * .3), K: ent.K });
     return true;
@@ -222,6 +234,30 @@ export function createParking(net, city) {
     const [, r, i] = k.split(':').map(Number), lay = layout(L.l), row = lay.rows[r], st = row && row.stalls.find(s => s.i === i); if (!st) return null;
     const F = frame(L.l), nose = row.flip ? 1 : -1, xl = st.x - nose * 1.3, zw = lay.z0 + 1.3, d = F.L(door[0], door[1]);
     const pts = [F.W(xl, st.z + nose * .4), F.W(xl, zw), F.W(Math.max(lay.x0 + .5, Math.min(lay.x1 - .5, d[0])), zw), door];
+    return pts.filter((q, j) => !j || Math.hypot(q[0] - pts[j - 1][0], q[1] - pts[j - 1][1]) > .05);
+  };
+  // on foot between the shop door and the street sidewalk, for a building with a lot in front: along the walkway by the
+  // shopfront, out between two stalls of the first row (the striped aisle by the accessible stall where there is one),
+  // along the back of the parked cars to the driveway, and down the side of the driveway to the sidewalk.
+  // Points from the door to the sidewalk, or null (no lot)
+  P.footPath = function (b, door) {
+    const l = city.lots.find(o => o.bid === b.id && o.k === 'parking'); if (!l) return null;
+    const lay = layout(l); if (!lay.rows.length) return null;
+    const E = entries(l, net); if (!E.length) return null;
+    const F = frame(l), dl = F.L(door[0], door[1]);
+    const en = E.reduce((a, c) => Math.abs(F.L(c.P[0], c.P[1])[0] - dl[0]) < Math.abs(F.L(a.P[0], a.P[1])[0] - dl[0]) ? c : a, E[0]);
+    const Pl = F.L(en.P[0], en.P[1]); if (en.alongX) return null;   // (a lot whose street runs along its end: no shopfront walkway to follow)
+    const row = lay.rows[0], zw = lay.z0 + (l.bid ? 1.3 : .5), xd = Pl[0] + (dl[0] >= Pl[0] ? 1 : -1) * 3;
+    // where to cross the first row: the striped aisle, else the line between two stalls nearest the driveway
+    let xc = row.access ? row.access.ax : null;
+    if (xc == null) { let bd = 1e9; for (const st of row.stalls) for (const x of [st.x - STALL_W / 2, st.x + STALL_W / 2]) { const d = Math.abs(x - xd) + Math.abs(x - dl[0]) * .3; if (d < bd) { bd = d; xc = x; } } }
+    if (xc == null) xc = xd;
+    const zb = row.z + ROW_GAP + .8;   // just behind the parked cars' tails
+    const dx = Math.max(lay.x0 + .5, Math.min(lay.x1 - .5, dl[0]));
+    const loc = [[dx, zw], [xc, zw], [xc, zb], [xd, zb], [xd, lay.z1 - .3]];
+    const n = en.n, side = F.W(xd, lay.z1)[0] - en.P[0], sideZ = F.W(xd, lay.z1)[1] - en.P[1];
+    const walk = [en.P[0] + side + n[0] * (en.L - WALK_W * .75), en.P[1] + sideZ + n[1] * (en.L - WALK_W * .75)];
+    const pts = [door, ...loc.map(q => F.W(q[0], q[1])), walk];
     return pts.filter((q, j) => !j || Math.hypot(q[0] - pts[j - 1][0], q[1] - pts[j - 1][1]) > .05);
   };
   const unblock = m => { for (const b of m.blk || []) net.unblock(b); m.blk = []; };
@@ -265,6 +301,12 @@ export function createParking(net, city) {
           if (o === m || o.wait > 0 || o.yieldTo === m) continue;
           const q = P.pose(o), dx = q[0] - me[0], dz = q[1] - me[1], ahead = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx);
           if (ahead > 1 && ahead < 6.8 && side < 2.3) { vt = Math.min(vt, Math.max(0, (ahead - 4.8) * .8)); if (vt < .2) { m.stuck = (m.stuck || 0) + dt; m.yieldTo = o; } }
+        }
+        for (const q of P.peds || []) {   // someone walking across the lot in front: stop for them
+          if (q[2] === m.pid) continue;
+          const dx = q[0] - me[0], dz = q[1] - me[1]; if (Math.abs(dx) > 9 || Math.abs(dz) > 9) continue;
+          const ahead = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx);
+          if (ahead > 0 && ahead < m.len / 2 + 2.6 + m.v * 1.2 && side < 1.45) vt = Math.min(vt, Math.max(0, (ahead - m.len / 2 - .9) * .7));
         }
         if (vt > .2) { m.stuck = 0; m.yieldTo = null; }
         if ((m.stuck || 0) > 6) vt = Math.max(vt, .8);   // (never stuck for good)

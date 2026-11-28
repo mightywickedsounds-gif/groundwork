@@ -1,5 +1,6 @@
 // The city: street plan, buildings, growth and the trips people make. No drawing here.
 import { rng, closestOnPoly, halfW, ROAD_W, WALK_W, along } from './net.js';
+import { makePlan, pieces, sample } from './layout.js';
 
 export const BLOCK = 100;          // street grid spacing (m)
 export const CHUNK = 3;            // blocks per district side
@@ -18,8 +19,9 @@ export function rushCurve(h) {
   return .14 + .95 * g(8, 1.0) + .85 * g(17.5, 1.25) + .35 * g(12.5, 2.2) + (h > 20 || h < 5 ? -.08 : 0);
 }
 
-export function createCity(net, seed = 7) {
-  const C = { buildings: [], trees: [], lots: [], unlocked: [], bid: 1, seed, queue: [], ver: 0, pending: 0 };
+export function createCity(net, seed = 7, plan = 2) {
+  // plan 1: the old straight grid (towns saved before round 24 keep it); plan 2: winding roads (layout.js)
+  const C = { buildings: [], trees: [], lots: [], unlocked: [], bid: 1, seed, queue: [], ver: 0, pending: 0, plan, names: [] };
   const lineOn = (axis, k, a) => {        // is the street on grid line k (segment index a) part of the plan?
     if (((k % CHUNK) + CHUNK) % CHUNK === 0) return true;   // district edges: avenues, always there
     return hash(axis * 7 + 3, k * 131 + a, seed) > .13;
@@ -227,8 +229,122 @@ export function createCity(net, seed = 7) {
     }
   }
 
+  // ---------- plan 2: roads from the street plan (layout.js) ----------
+  let P2 = null; const plan2 = () => P2 || (P2 = makePlan(seed));
+  const segX = (p1, p2, p3, p4) => { const d = (p2[0] - p1[0]) * (p4[1] - p3[1]) - (p2[1] - p1[1]) * (p4[0] - p3[0]); if (Math.abs(d) < 1e-9) return null; const t = ((p3[0] - p1[0]) * (p4[1] - p3[1]) - (p3[1] - p1[1]) * (p4[0] - p3[0])) / d, u = ((p3[0] - p1[0]) * (p2[1] - p1[1]) - (p3[1] - p1[1]) * (p2[0] - p1[0])) / d; return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? [t, u] : null; };
+  const near = (pts, e, R) => { const [x0, x1, z0, z1] = e.bb; return pts.some(p => p[0] > x0 - R && p[0] < x1 + R && p[1] > z0 - R && p[1] < z1 + R); };
+  // a street fits if it doesn't crowd alongside another road, cross one at a shallow angle, or make a junction
+  // right next to another one (a road it starts or ends on is fine)
+  function fits(pts) {
+    const cum = [0]; for (let k = 1; k < pts.length; k++) cum.push(cum[k - 1] + Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]));
+    const L = cum[cum.length - 1]; if (L < 30) { fits.why = 'short'; return false; }
+    const dirAt = k => { const a = pts[Math.max(0, k - 1)], b = pts[Math.min(pts.length - 1, k + 1)], l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1; return [(b[0] - a[0]) / l, (b[1] - a[1]) / l]; };
+    const E = [...net.edges.values()].filter(e => near(pts, e, 40));
+    for (let k = 0; k < pts.length; k++) {
+      if (cum[k] < 40 || L - cum[k] < 40) continue;
+      for (const e of E) {
+        const c = closestOnPoly(e.pts, e.cum, pts[k][0], pts[k][1]); if (c.d > 30) continue;
+        const q = along(e.pts, e.cum, c.s), dk = dirAt(k), cos = Math.abs(dk[0] * q[2] + dk[1] * q[3]);
+        if (c.d < 12 + halfW(e) || (cos > .8 && c.d < 30 + halfW(e))) { fits.why = 'alongside ' + e.kind + ' d' + c.d.toFixed(0) + ' at ' + (cum[k] | 0) + '/' + (L | 0); return false; }   // (on top of it, or running alongside it)
+      }
+    }
+    const nodes = [...net.nodes.values()];
+    for (let k = 1; k < pts.length; k++) for (const e of E) for (let m = 1; m < e.pts.length; m++) {
+      const x = segX(pts[k - 1], pts[k], e.pts[m - 1], e.pts[m]); if (!x) continue;
+      const at = [pts[k - 1][0] + (pts[k][0] - pts[k - 1][0]) * x[0], pts[k - 1][1] + (pts[k][1] - pts[k - 1][1]) * x[0]];
+      const end = cum[k - 1] < 6 || L - cum[k] < 6, dk = dirAt(k), de = [e.pts[m][0] - e.pts[m - 1][0], e.pts[m][1] - e.pts[m - 1][1]], dl = Math.hypot(de[0], de[1]) || 1;
+      if (Math.abs(dk[0] * de[1] - dk[1] * de[0]) / dl < .55) { fits.why = 'shallow'; return false; }          // a shallow crossing
+      if (!end) for (const n of nodes) { const dn = Math.hypot(n.x - at[0], n.z - at[1]); if (dn > 1.5 && dn < 24) { fits.why = 'bunched'; return false; } }   // bunched up with another junction
+    }
+    for (const p of [pts[0], pts[pts.length - 1]]) for (const n of nodes) { const dn = Math.hypot(n.x - p[0], n.z - p[1]); if (dn > 9 && dn < 22 && n.edges.size > 1) { fits.why = 'end near junction'; return false; } }
+    return true;
+  }
+  // cut a street where it first meets another road (past its first few metres): a new control polygon
+  function trimmed(pcs) {
+    const pts = sample(pcs, 1); let cut = -1, run = 0;
+    for (let k = 1; k < pts.length && cut < 0; k++) { run += Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]); if (run < 8) continue; const h = net.nearestEdge(pts[k][0], pts[k][1], 1.2); if (h) cut = k; }
+    if (cut < 0) return null;
+    const keep = pts.slice(0, cut + 1), poly = [keep[0]]; let acc = 0;
+    for (let k = 1; k < keep.length - 1; k++) { acc += Math.hypot(keep[k][0] - keep[k - 1][0], keep[k][1] - keep[k - 1][1]); if (acc > 22) { poly.push(keep[k]); acc = 0; } }
+    if (poly.length > 1 && Math.hypot(poly[poly.length - 1][0] - keep[cut][0], poly[poly.length - 1][1] - keep[cut][1]) < 10) poly.pop();
+    poly.push(keep[cut]);
+    return pieces(poly.length === 2 ? [poly[0], [(poly[0][0] + poly[1][0]) / 2, (poly[0][1] + poly[1][1]) / 2], poly[1]] : poly);
+  }
+  // lay one planned road (check: a neighbourhood street, only where it fits). Returns the new edges
+  function road(spec, check) {
+    let pcs = spec.quad ? [spec.poly] : pieces(spec.poly, spec.loop);
+    if (spec.trim) { pcs = trimmed(pcs); if (!pcs) return []; }
+    if (check && !spec.loop) {   // an end just short of a junction: onto it (a crossroads, not two junctions side by side)
+      pcs = pcs.map(q => q.map(p => [p[0], p[1]]));
+      for (const [k, m] of [[0, 0], [pcs.length - 1, 2]]) { const p = pcs[k][m]; let best = null, bd = 24;
+        for (const n of net.nodes.values()) { if (n.edges.size < 2) continue; const d = Math.hypot(n.x - p[0], n.z - p[1]); if (d < bd) { bd = d; best = n; } }
+        if (best && bd > .5) { const h = net.nearestEdge(p[0], p[1], 4); if (h && (h.e.a === best.id || h.e.b === best.id)) pcs[k][m] = [best.x, best.z]; } }
+    }
+    const pts = sample(pcs, 3);
+    if (check) {
+      if (!fits(pts)) { if (C.dbg) C.dbg('fits', spec.name, fits.why); return []; }
+      const on = p => { const h = net.nearestEdge(p[0], p[1], 4); return !!h; };   // (a street joins the roads there already: never one on its own)
+      if (!on(pts[0]) && !on(pts[pts.length - 1]) && !spec.loop) { if (C.dbg) C.dbg('alone', spec.name); return []; }
+    }
+    const before = new Set(net.edges.keys()), snap = check ? net.serialize() : null;
+    for (const [a, c, b] of pcs) { const r = net.addRoad(a, b, c, spec.o); if (r.reason && snap) { if (C.dbg) C.dbg('refused', spec.name, r.reason); net.restore(snap); return []; } }   // (all of it or none)
+    C.names.push({ name: spec.name, pts: sample(pcs, 6) });
+    return [...net.edges.values()].filter(e => !before.has(e.id));
+  }
+  // already built along there? (a main road shared with a square bought before)
+  const covered = spec => { const pcs = spec.quad ? [spec.poly] : pieces(spec.poly); const pts = sample(pcs, 20); let n = 0; for (const p of pts.slice(1, -1)) { const h = net.nearestEdge(p[0], p[1], 3); if (h) n++; } return n >= Math.max(1, (pts.length - 2) * .7); };
+  // the highway, the ranch road and the old town's streets (a new game, or a test starting from bare land)
+  function base() {
+    const P = plan2(); for (const r of [...P.highway, ...P.ranch, ...P.village]) road(r, false);
+    // through the old town the ranch road widens (a centre lane for turning left, like a Texas town's main drag)
+    for (const e of net.edges.values()) if (e.kind === 'avenue' && (e.nl || 1) === 1 && !e.tl && Math.abs(e.cx) < 150 && Math.abs(e.cz) < 150) e.tl = 1;
+    net.ver++;
+    lights();   // (the old town's crossroads)
+  }
+  // traffic lights where three or more legs of main roads meet (the highway, the ranch road, the parkways)
+  function lights() { for (const n of net.nodes.values()) { if (n.ring || n.sig || n.edges.size < 3) continue; let a = 0; for (const id of n.edges) if (net.edges.get(id).kind === 'avenue') a++; if (a >= 3) n.sig = { phase: 0, t: 0, st: 'g' }; } }
+  // the names of the planned streets (not saved: the plan makes them again)
+  function names2() {
+    C.names = []; const P = plan2(), put = r => C.names.push({ name: r.name, pts: sample(r.quad ? [r.poly] : pieces(r.poly, r.loop), 6) });
+    for (const r of [...P.highway, ...P.ranch, ...P.village]) put(r);
+    for (const [i, j] of C.unlocked) { const D = P.district(i, j); if (!(i === 0 && j === 0)) for (const r of D.streets) put(r); for (const r of D.arterials) put(r); }
+  }
+  C.nameOf = function (e) {
+    if (!e || !e.pts || C.plan !== 2) return null;
+    const m = e.pts[e.pts.length >> 1]; let best = null, bd = 6;
+    for (const n of C.names) { const q = n.pts; for (let k = 0; k < q.length; k++) { const d = Math.hypot(q[k][0] - m[0], q[k][1] - m[1]); if (d < bd) { bd = d; best = n.name; } } }
+    return best;
+  };
+  // trees along new main roads, just behind the sidewalk
+  function avenueTrees(edges) {
+    for (const e of edges) { if (e.kind !== 'avenue' || e.ring || e.lv) continue; const o = halfW(e) + WALK_W + .65;
+      for (let s = 12; s < e.len - 10; s += 16) { const q = along(e.pts, e.cum, s); for (const sg of [-1, 1]) {
+        const p = [q[0] - q[3] * o * sg + q[2] * (hash(s | 0, e.id, 3) - .5) * 3, q[1] + q[2] * o * sg + q[3] * (hash(s | 0, e.id, 3) - .5) * 3];
+        if (inCity(p[0], p[1]) && !treeNearBuilding(p)) C.trees.push([+p[0].toFixed(2), +p[1].toFixed(2), +(.55 + hash(s | 0, e.id, sg + 5) * .25).toFixed(2), +(hash(s | 0, e.id, 9) * .7).toFixed(2)]); } } }
+  }
+  // new land filled at once (tests, and towns grown without a player): homes along the streets, shops and offices on main roads
+  function fillDistrict(edges, R) {
+    for (const e of edges) {
+      if (e.ring || e.lv || e.len < 30) continue;
+      const mid = along(e.pts, e.cum, e.len / 2); if (!inCity(mid[0], mid[1])) continue;
+      const [s0, s1] = C.span(e), zone = zoneAt(e, mid);
+      for (const sg of [1, -1]) for (let s = s0 + 2; s < s1 - 8;) {
+        const q = R();
+        const ck = q < .45 ? 'shop' : q < .75 ? 'apt' : 'office';   // (downtown: shops downstairs, flats and offices)
+        const plan = zone === 'home' ? homePlan('home', R) : zone === 'corridor' ? (q < .5 ? ['shop', 36 + R() * 24, 17 + R() * 4, 14, 5.5 + R() * 1.5, 0] : q < .75 ? ['office', 20 + R() * 10, 18 + R() * 6, 8, 7.5 + (R() * 3 | 0) * 3.6, 0] : ['apt', 30 + R() * 16, 15 + R() * 3, 13, 10 + R() * 1.5, 1])
+          : [ck, 12 + R() * 14, 18 + R() * 6, .8, ck === 'shop' ? 5.5 + R() * 3.5 : 7.5 + (R() * 3 | 0) * 3.6, 0];
+        const [kind, fw, fd, gap, h, roof] = plan;
+        if (s + fw > s1) break;
+        const b = placeOn(e, s + fw / 2, sg, kind, fw, fd, gap, h, roof, {}, R);
+        if (b && kind !== 'house' && zone !== 'core') C.frontLot(b);
+        s += fw + (kind === 'house' ? 1 : 4);
+      }
+    }
+  }
+
   // open a district: its streets and buildings
   C.unlock = function (i, j, bare = false) {
+    if (C.plan === 2) return unlock2(i, j, bare);
     if (C.unlocked.some(u => u[0] === i && u[1] === j)) return false;
     C.unlocked.push(bare ? [i, j, 1] : [i, j]);
     const k0 = i * CHUNK, l0 = j * CHUNK;
@@ -256,6 +372,36 @@ export function createCity(net, seed = 7) {
     C.ver++;
     return true;
   };
+  function unlock2(i, j, bare) {
+    if (C.unlocked.some(u => u[0] === i && u[1] === j)) return false;
+    C.unlocked.push(bare ? [i, j, 1] : [i, j]);
+    const P = plan2(), D = P.district(i, j), made = [];
+    if (i === 0 && j === 0 && !net.edges.size) base();
+    for (const a of D.arterials) if (!covered(a)) made.push(...road(a, false));
+    // the neighbourhood: its own pattern, or if most of that won't fit (the highway or the ranch road runs through), another
+    if (!(i === 0 && j === 0)) {
+      const tries = [null, ...[0, 1, 2].flatMap(k => [[k, false], [k, true]])];
+      for (const t of tries) {
+        const Dt = t ? P.district(i, j, t[0], t[1]) : D, snap = net.serialize(), got = [], nm0 = C.names.length;
+        for (const s of Dt.streets) got.push(...road(s, true));
+        const n = new Set(got.map(e => e.id)).size;
+        if (n >= Math.min(4, Dt.streets.length) || t === tries[tries.length - 1]) { made.push(...got); break; }
+        net.restore(snap); C.names.length = nm0;
+      }
+    }
+    // anything not joined to the rest of the roads (a street whose way in didn't fit): gone
+    { const seen = new Set(), start = [...net.nodes.values()].find(n => n.edges.size && [...n.edges].some(id => net.edges.get(id).kind === 'avenue'));
+      if (start) { const todo = [start.id]; seen.add(start.id); while (todo.length) { const n = net.nodes.get(todo.pop()); for (const id of n.edges) { const e = net.edges.get(id), m = e.a === n.id ? e.b : e.a; if (!seen.has(m)) { seen.add(m); todo.push(m); } } }
+        for (const e of [...net.edges.values()]) if (!seen.has(e.a)) net.removeEdge(e.id); } }
+    // traffic lights where main roads cross
+    lights();
+    const nb0 = C.buildings.length, mine = [...net.edges.values()].filter(e => { const m = along(e.pts, e.cum, e.len / 2); return Math.floor((m[0] - g0) / (BLOCK * CHUNK)) === i && Math.floor((m[1] - g0) / (BLOCK * CHUNK)) === j; });
+    if (!bare) fillDistrict(mine, rng((i * 9973 + j * 7919 + seed * 31) >>> 0));
+    for (let n = nb0; n < C.buildings.length; n++) C.buildings[n].chunk = C.unlocked.length;
+    avenueTrees(made);
+    C.ver++;
+    return true;
+  }
   function treeNearBuilding(p) { for (let n = C.buildings.length - 1; n >= Math.max(0, C.buildings.length - 400); n--) { const b = C.buildings[n]; if (Math.abs(p[0] - b.x) < b.w / 2 + 2 && Math.abs(p[1] - b.z) < b.d / 2 + 2) return true; } return false; }
   C.nextDistrict = function () {
     for (const [i, j] of C.order) {
@@ -425,6 +571,7 @@ export function createCity(net, seed = 7) {
   };
   // a new game: a crossroads village of a few streets and a handful of houses and shops
   C.startTown = function (shops) {
+    if (C.plan === 2) return startTown2(shops);
     C.unlocked.push([0, 0, 1]);
     const R = rng((seed * 7 + 11) >>> 0), ART = { kind: 'avenue', nl: 2, tl: 1 }, ST = { kind: 'street' };
     const L = (a, b, o) => net.addRoad(a, b, null, o);
@@ -448,6 +595,26 @@ export function createCity(net, seed = 7) {
     }
     C.ver++;
   };
+  // plan 2: the old town at the crossroads of the highway (Main Street) and the ranch road, a few streets behind it
+  function startTown2(shops) {
+    C.unlocked.push([0, 0, 1]);
+    base();
+    const R = rng((seed * 7 + 11) >>> 0), P = plan2();
+    // Main Street: the highway's pieces through the old town, west to east
+    const onMain = e => { const m = along(e.pts, e.cum, e.len / 2); return e.kind === 'avenue' && (e.nl || 1) === 2 && Math.abs(m[0]) < 150 && Math.abs(m[1] - P.mainAt(m[0])[1]) < 2; };
+    const main = [...net.edges.values()].filter(onMain).sort((a, b) => a.cx - b.cx);
+    for (const [k, mi, side, frac] of shops) { const e = main[Math.min(mi, main.length - 1)]; if (!e) continue; const [s0, s1] = C.span(e); k(e, s0 + (s1 - s0) * frac, side); }
+    // houses along the side streets
+    let houses = 0;
+    const streets = [...net.edges.values()].filter(e => e.kind === 'street' && e.len > 40 && inCity(e.cx, e.cz)).sort((a, b) => Math.hypot(a.cx, a.cz + 50) - Math.hypot(b.cx, b.cz + 50));
+    for (const e of streets) { const [s0, s1] = C.span(e);
+      for (const sg of [1, -1]) for (let s = s0 + 9; s < s1 - 8 && houses < 12; s += 17 + R() * 3) {
+        if (R() < .35) continue;
+        const [kind, fw, fd, gap, h, roof] = homePlan('home', R);
+        if (placeOn(e, s, sg, kind, fw, fd, gap, h, roof, { res: 2 + (R() * 3 | 0) }, R)) houses++;
+      } }
+    C.ver++;
+  }
   // a parking lot between a building and its street, filling the space there (head-in stalls, wider than the building where there's room)
   C.frontLot = function (b) {
     if (b.face !== 'r' || !b.e || C.lots.some(l => l.bid === b.id)) return null;
@@ -512,12 +679,14 @@ export function createCity(net, seed = 7) {
   };
 
   C.serialize = function () {
-    return { unlocked: C.unlocked, bid: C.bid, seed: C.seed,
+    return { unlocked: C.unlocked, bid: C.bid, seed: C.seed, plan: C.plan,
       b: C.buildings.map(b => [b.id, b.x, b.z, b.w, b.d, b.h, b.kind, b.res, b.jobs, b.roof, b.face, b.fx, b.fz, b.tone, b.chunk, b.rot ? +b.rot.toFixed(4) : 0, b.lw || 0, b.ld || 0, b.biz ? [b.biz.t, b.biz.name, b.biz.lvl, Math.round(b.biz.cash)] : 0]),
       t: C.trees.map(t => t.map(v => +v.toFixed(2))), l: C.lots };
   };
   C.load = function (d) {
-    C.unlocked = d.unlocked; C.bid = d.bid; C.seed = d.seed;
+    C.unlocked = d.unlocked; C.bid = d.bid; C.seed = d.seed; C.plan = d.plan || 1;   // (towns saved before round 24: the grid)
+    if (C.seed !== seed) { seed = C.seed; P2 = null; }
+    if (C.plan === 2) names2();
     C.buildings = d.b.map(a => ({ id: a[0], x: a[1], z: a[2], w: a[3], d: a[4], h: a[5], kind: a[6], res: a[7], jobs: a[8], roof: a[9], face: a[10], fx: a[11], fz: a[12], tone: a[13], chunk: a[14], rot: a[15] || 0, lw: a[16] || 0, ld: a[17] || 0, ...(a[18] ? { biz: { t: a[18][0], name: a[18][1], lvl: a[18][2], cash: a[18][3] } } : {}) }));
     C.trees = d.t; C.lots = d.l; seenVer = -1; C.ver++;
     const gas = new Set(C.buildings.filter(b => b.biz && b.biz.t === 'gas').map(b => b.id)); for (const l of C.lots) if (l.bid && gas.has(l.bid)) l.fuel = 1;   // (saves from before pumps)

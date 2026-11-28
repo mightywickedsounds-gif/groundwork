@@ -2,7 +2,7 @@
 import { Net } from '../net.js';
 import { createCity, DAY } from '../city.js';
 const days = +(process.argv[2] || 3);
-const net = new Net(), city = createCity(net, 7);
+const net = new Net(), city = createCity(net, 7, +(process.env.PLAN || 2));   // (PLAN=1: the old straight grid)
 for (let i = 0; i < 3; i++) { const d = city.nextDistrict(); city.unlock(d[0], d[1]); }
 city.sync();
 let time = DAY * 6.5 / 24, growT = 0, districts = 3, meter = 0, jamT = 0, lastGave = 0, maxMs = 0, t0 = Date.now();

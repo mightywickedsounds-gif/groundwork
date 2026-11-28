@@ -61,6 +61,9 @@ export function laneOff(e, i) {
   return (tl ? LANE_W / 2 : 0) + (nl - 1 - i + .5) * LANE_W;
 }
 
+// how far right a car moves to pull in by the curb (about 30 cm off it), from the middle of its lane
+export const kerbLat = (l, w = 1.85) => l && l.edge && !l.conn ? Math.max(.2, halfW(l.edge) - Math.abs(l.off || 0) - w / 2 - .3) : .5;
+
 export function rng(seed) {
   let s = seed >>> 0 || 1;
   return () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; };
@@ -592,7 +595,7 @@ export class Net {
     const ang = Math.atan2(cr, dt), turn = Math.abs(ang) < .5 ? 0 : ang > 0 ? 1 : 2;  // 0 straight, 1 right, 2 left
     const chord = dist(p0, p1), R = Math.abs(ang) > .1 ? chord / (2 * Math.sin(Math.abs(ang) / 2)) : 1e3;
     const c = { key, conn: true, in: L, out: O, node: n, pts, cum, len: Math.max(.5, len), cars: [], turn, ang,
-      vmax: Math.min(LIMIT, Math.max(3.2, Math.sqrt(2.6 * R))), conflicts: [], busy: 0, next: [O], spd: LIMIT, prio: L.prio };
+      vmax: Math.abs(cr) <= .08 && dt < 0 ? 2.2 : Math.min(LIMIT, Math.max(3.2, Math.sqrt(2.6 * R))), conflicts: [], busy: 0, next: [O], spd: LIMIT, prio: L.prio };   // (a U-turn at a dead end: slowly, on full lock)
     const o = old.get(c.key); if (o) c.spd = o.spd;
     this.lanes.set(c.key, c); n.conns.push(c); L.next.push(c);
   }
@@ -770,6 +773,20 @@ export class Net {
     else if (!car.route) car.route = null;
     return !!r;
   }
+  // a new end for a trip on the way: the kerb lane by (x, z) on edge e (the quickest way there from here)
+  retarget(car, at) {
+    if (!at || !at.e || !this.edges.has(at.e.id)) return false;
+    let best = null;
+    for (const b of this.spotOn(at.e, at.x, at.z)) {
+      if (b.lane === car.lane && b.s < car.s + 6) continue;
+      const r = this.route(car.lane, car.s, b.lane, b.s); if (!r) continue;
+      let c = 0; for (let i = 1; i < r.length; i++) c += this.cost(r[i]);
+      if (!best || c < best.c) best = { b, r, c };
+    }
+    if (!best) return false;
+    car.route = best.r; car.ri = 0; car.dest = best.b.lane; car.destKey = best.b.lane.key; car.destS = best.b.s; car.lotIn = false; car.lotSig = 0;
+    return true;
+  }
   // lane + s for a spot on an edge (x,z near the road)
   spotOn(e, x, z) {
     const c = closestOnPoly(e.pts, e.cum, x, z), out = [];
@@ -793,8 +810,12 @@ export class Net {
       if (!b || c.d < b.d) near.set(l.dir, { l, d: c.d, s: c.s });
     }
     const dmin = Math.min(...[...near.values()].map(b => b.d));
+    // a driveway close to a junction: right turns only (no turning left across the queue for the junction)
+    const ck = closestOnPoly(e.pts, e.cum, K[0], K[1]), A = this.nodes.get(e.a), B = this.nodes.get(e.b);
+    const nearJ = (A && A.edges.size > 2 && ck.s < this.trimOf(A) + 45) || (B && B.edges.size > 2 && ck.s > e.len - this.trimOf(B) - 45);
     for (const { l, d, s } of near.values()) {
       const far = d > dmin + 1;   // across the road (a left turn in or out over the other lanes)
+      if (far && nearJ && near.size > 1) continue;
       const pre = dest ? (far ? 6 : 5) : 6.5, q = along(l.pts, l.cum, s), right = (K[0] - q[0]) * -q[3] + (K[1] - q[1]) * q[2] > 0;
       out.push({ lane: l, s: Math.max(1.5, Math.min(l.len - 1.5, dest ? s - pre : s + pre)), sig: right ? 2 : 1 });
     }
@@ -825,7 +846,7 @@ export class Net {
     const temper = .92 + ((colorRoll * 7919) % 1) * .16;
     const car = { id: this.carId++, lane: best.a.lane, s: best.a.s, v: 0, len: ty.len, w: ty.w, type: ty.k, slow: (ty.slow || 1) * temper, acc: ty.acc || 1,
       dest: best.b.lane, destKey: best.b.lane.key, destS: best.b.s, route: best.r, ri: 0, granted: null, wait: 0, stuck: 0, born: this.time,
-      color: colorRoll, arrT: 0, x: 0, z: 0, hx: 1, hz: 0, rerouteT: 0, brake: 0, sig: 1, lat: from.lot ? 0 : 1.6, latV: 0, latT: 0, prev: null, side: null,   // pulls out from the kerb
+      color: colorRoll, arrT: 0, x: 0, z: 0, hx: 1, hz: 0, rerouteT: 0, brake: 0, sig: 1, lat: from.lot ? 0 : kerbLat(best.a.lane, ty.w), latV: 0, latT: 0, prev: null, side: null,   // pulls out from the kerb
       lotIn: !!to.lot, lotOut: !!from.lot, lotSig: best.b.sig || 0 };   // (to or from a parking lot: the lot's own driving takes over at the driveway)
     best.a.lane.cars.push(car); this.cars.push(car); this.stats.spawned++;
     return car;
@@ -959,6 +980,15 @@ export class Net {
         if (q.id === car.id) continue;
         const g = q.s - q.len - car.s; if (g > .5 && g < 30 && g < gap) { gap = g; lv = 0; car.gw = 'let'; }
       }
+      // someone on foot out in the road in front: stop for them (sirens too, just later)
+      if (this.peds && this.peds.length) {
+        const fx = car.x + car.hx * car.len / 2, fz = car.z + car.hz * car.len / 2, look = 6 + car.v * car.v / 3;
+        for (const p of this.peds) {
+          const dx = p.x - fx, dz = p.z - fz; if (Math.abs(dx) > look + 2 || Math.abs(dz) > look + 2) continue;
+          const ahead = dx * car.hx + dz * car.hz, side = Math.abs(dx * car.hz - dz * car.hx);
+          if (ahead > -.6 && ahead < look && side < car.w / 2 + .9) { const g = Math.max(0, ahead - 1.6); if (g < gap) { gap = g; lv = 0; car.gw = 'ped'; } }
+        }
+      }
       // destination: stop at it
       if (car.chgTo) {
         const g = mustBy - car.s; if (g < gap) { gap = Math.max(0, g); lv = 0; car.gw = 'merge'; }
@@ -1022,7 +1052,8 @@ export class Net {
         car.ri++; car.lane = nx; nx.cars.push(car); car.prev = was; car.side = null;
         if (!nx.conn) car.granted = null;
       }
-      if (car.lane === car.dest && car.s >= car.destS - .5) { if (car.keep) { car.v = 0; car.there = true; } else done.push(car); } else car.there = false;
+      if (car.lotIn && car.kerbAt && car.lane === car.dest && car.destS - car.s < 70 && !car.lotChk && this.lotFull) { car.lotChk = true; if (this.lotFull(car)) this.retarget(car, car.kerbAt); }   // the lot filled up: the kerb out front instead
+      if (car.lane === car.dest && car.s >= car.destS - .5 && (car.lotIn || car.keep || car.v < 1.2 || car.s >= car.destS + 2.5)) { if (car.keep) { car.v = 0; car.there = true; } else done.push(car); } else car.there = false;   // (pulls up and stops first: a lot's driveway takes over on the move)
       // waiting
       if (car.v < .6) { car.stuck += dt; } else if (car.v > 2.5) car.stuck = 0;
       if (car.v < 3) car.wait += dt;
@@ -1041,7 +1072,7 @@ export class Net {
     // body turns smoothly through every bend, lane change and hand-over and never slides sideways or snaps round
     for (const car of this.cars) {
       // pulling in at the end of a trip (not into a lot: the lot's driving takes over at the driveway)
-      if (car.lane === car.dest && car.destS - car.s < 14 && !car.lane.conn && !car.keep && !car.lotIn) car.latT = 1.5;
+      if (car.lane === car.dest && car.destS - car.s < 14 && !car.lane.conn && !car.keep && !car.lotIn) car.latT = kerbLat(car.lane, car.w);
       const want = car.aside ? (car.lane.conn ? .6 : 2.1) : (car.latT || 0);
       if (car.lat || want || car.latV) {   // eases across (no faster than the car could steer at its speed)
         const w = 1.7, cap = .15 + .3 * car.v;

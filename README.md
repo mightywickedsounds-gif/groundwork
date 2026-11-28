@@ -60,7 +60,8 @@ The game saves in your browser every 10 seconds and when you leave. Menu → Gra
 - `police.js`: police, fire and ambulances; crashes, traffic stops, robberies, carjackings, chases, road rage
 - `scenery.js`: shop signs with names, street trees, power poles and wires, hydrants, street signs, benches, bus stops, grass and wildflowers
 - `net.js`: the road network and the traffic (lanes, junction rules, lights, roundabouts, route finding, car following)
-- `city.js`: the city (street plan, districts, buildings, trips)
+- `city.js`: the city (districts, buildings, trips; it lays the roads from the street plan)
+- `layout.js`: the street plan of a new town (the winding highway, the ranch road, the main roads round each piece of land and the curving streets, loops and cul-de-sacs inside it)
 - `draw.js`: everything you see (roads, curbs, sidewalks, markings, buildings with windows, trees, cars, people, lights)
 - `sky.js`: the sky (time of day, sunrise and sunset, clouds, stars and moon); it also lights the reflections
 - `assets/`: grass photo; `assets/tex/` photo textures for asphalt, brick, limestone, stucco, roof shingles, gravel roofs and lawns (all from Poly Haven, CC0, shrunk for the web); `assets/fonts/` Overpass, a highway-sign style typeface (SIL Open Font License, see `LICENSE.txt`)
@@ -75,6 +76,7 @@ The game saves in your browser every 10 seconds and when you leave. Menu → Gra
 - `node tests/bridge.mjs` checks over- and underpasses: crossing without junctions, the rules (too short, over nothing, a street into a ramp), cars driving over and under, saving.
 - `node tests/life.mjs [days]` runs the starting town: people, jobs, trips, walks, earnings and growth.
 - `node tests/law.mjs [days]` adds a police station, fire station and hospital and checks hiding units, stops and tickets, a crash being cleared, a robbery and a chase.
+- `node tests/cars.mjs [days] [seed]` watches every car and person on foot, step by step, and counts what would look wrong: cars driving through each other or through parked cars, cars disappearing while still moving, sudden jumps and snaps, people walking into cars or buildings, people out in the road away from a crossing.
 - `node tests/play.cjs [folder]` opens the game in a hidden browser, checks the tools work and saves screenshots.
 
 ## History
@@ -375,3 +377,42 @@ The owner's notes and phone screenshot: a person walking straight through a park
 **New test:** `node tests/soak.cjs` plays the game by itself at a desktop and a phone size: random roads, curves, overpasses, roundabouts, lights, lanes, removals, undo, building, buying land, following people, every menu, day and night, plus a save and reload in the middle. It checks for page errors, broken car or walker positions, roads crossing without a junction, cars stuck hidden, and graphics memory piling up.
 
 **Still known:** on the smallest phones (320 px wide) the tool buttons are 35 px wide. Cars still appear and disappear at the kerb outside houses. Everything was checked in a test browser that draws in software, not on a real phone.
+
+### Round 24: drivers and people that behave, and a town laid out like a real one
+
+The owner's phone video and screenshot: lots of bugs and rough edges with the cars, the drivers and the people; and the roads were all straight lines and right angles instead of a real town's layout.
+
+Before changing anything, a new test (`tests/cars.mjs`) watched every car and every person on foot, step by step, for a whole game day, and counted everything that would look wrong. Numbers below are one game day in the starting town, before and after, on three different towns.
+
+**Cars and drivers**
+- **Cars no longer vanish while moving.** At the end of a trip a car used to disappear at the kerb while still rolling (73 to 111 times a day). Now it pulls in, stops, and then the driver gets out. (0 now.)
+- **Cars pull in next to the curb, not onto it.** Pulling in or out at the kerb moved a car 1.5 m sideways, which put it 0.6 m up on the curb. Now it stops about 30 cm off the curb.
+- **No more ghost car when backing out.** While a car backed out of a parking stall, the game also kept drawing it parked in the stall, so for a few seconds there were two of the same car.
+- **Cars in the parking lots stop clipping the parked cars** (23 to 48 times a day, now 0 or 1). They swing in from the far side of the aisle, are straight before they go into the stall, back right out into the aisle before pulling away, and keep clear of long vans sticking out of their stalls in narrow lots.
+- **A full lot:** drivers heading for a lot that has filled up now pull in at the kerb out front instead of stopping in the middle lane and getting out there.
+- **Driveways near a junction are right turn only** (in and out), like real ones. Cars used to sit for minutes waiting to turn left across the queue for the light.
+- **Cars give way to people on the crosswalks**, and cars in the lots stop for people walking across.
+- **U-turns at the end of a cul-de-sac** are taken slowly, on full lock.
+
+**People on foot**
+- **People no longer walk through parked cars** (16 to 40 times a day, now 0 or 1). The path from a shop's door to the street used to cut straight across its parking lot. Now people walk along the shopfront, out between two stalls (by the striped space next to the accessible stall where there is one), behind the parked cars to the driveway, and down beside it to the sidewalk.
+- **People cross on the zebra crossings.** They used to cross about 3.5 m back from the painted crosswalk; now they use it, crossing each road on its own crosswalk.
+- **No more running across a 4-lane road in the middle of the block.** To reach the other side of a busy road people walk to the nearest crossing (on a quiet street they still just cross).
+- **People look both ways.** They wait at the curb until nothing is coming (not for ever), and cars stop for anyone already in the road.
+- **Lot cars:** people wait for a car moving in a lot, and walk round one that is standing still.
+- **Getting in and out of a car parked across the street,** people walk over to that side's sidewalk and cross properly instead of cutting diagonally across all the lanes.
+
+**A town laid out like a real Hill Country town** (new towns: Menu, New city. A town you already have keeps its own roads.)
+- **The highway winds in** across the ranch land and runs straight through the old town for a few blocks as Main Street.
+- **A ranch road crosses it at a slant** in the old town (the town's crossroads, with traffic lights) and wanders off north and south. Through the old town it has a centre lane for turning left.
+- **The old town** has a few back streets that curve round behind the shops, with a cul-de-sac.
+- **The main roads round each piece of land you can buy bend:** a gentle C or an S like a road going round a hill, with their corners shifted, so they meet at odd angles. Now and then one is just a two-lane street.
+- **Inside each piece of land, a neighbourhood that follows the bends of the roads round it:** a winding collector street with side streets and cul-de-sacs off it, a loop street, or a collector with a crescent dipping off it. Neighbouring pieces always agree where their streets meet, so streets carry on when you buy the next piece.
+- **Every town is different** (the layout comes from the town's own random number), and the streets have names: Main St, the ranch road, parkways and drives, lanes and courts.
+- Visitors now drive in from the far ends of the highway and the ranch road, not out of a cul-de-sac in town.
+- **Traffic:** in the 4-day test where the town grows by itself, the new layout peaks at 64% on the gridlock meter (the old grid reached 100%), with about as many drivers giving up (47 against 51). It holds fewer people after 4 days (2,367 against 3,172), because cul-de-sacs leave less road frontage to build on.
+
+**Tests:** life, law, lanes, bridge, build (0 roads crossing without a junction) and the browser check all pass. The browser check and the life test were updated for the new layout: the start town is counted by its roads in town (the highway and ranch road now run out to 1,250 m), and the overpass is drawn where the new town has open ground.
+
+**Still known:** the end of a cul-de-sac is a plain rounded end the width of the street, not a wide turning circle. Cars still appear at the kerb outside houses when someone sets off from home, and disappear there when they get back (they now stop first). In a few squares of land where the highway or the ranch road runs through, the neighbourhood streets don't fit and only the main roads get built. Everything was checked in a test browser, not on a real phone.
+

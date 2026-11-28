@@ -61,6 +61,7 @@ export function createLife(net, city, seed = 1) {
   const newDay = () => ({ biz: 0, tax: 0, fines: 0, upkeep: 0, spent: 0, trips: 0, late: 0, crashes: 0, stops: 0, arrests: 0, robberies: 0 });
   L.day = newDay();
   L.park = createParking(net, city);   // cars in the parking lots
+  net.lotFull = car => { const b = car.kerbAt && L.bmap.get(car.kerbAt.b); return !b || !L.park.hasFree(b, null, car.type); };   // (heading for a lot: still a stall free?)
   const now = () => net.time;
   L.T = 0;   // the game clock (S.time); the game sets it every step
   L.hour = () => (L.T / DAY * 24) % 24;
@@ -136,17 +137,51 @@ export function createLife(net, city, seed = 1) {
     let ux = b.x - sx, uz = b.z - sz; const D = Math.hypot(ux, uz) || 1; ux /= D; uz /= D;
     const r = b.rot || 0, cs = Math.cos(r), sn = Math.sin(r), lx = ux * cs + uz * sn, lz = -ux * sn + uz * cs;
     const hd = Math.min(b.w / 2 / Math.max(1e-3, Math.abs(lx)), b.d / 2 / Math.max(1e-3, Math.abs(lz)));
-    const dd = Math.max(0, D - hd + .3);
-    return { e, s: c.s, side, walk: [sx, sz], door: [sx + ux * dd, sz + uz * dd], kerb: [q[0] - q[3] * (halfW(e) - 1.2) * side, q[1] + q[2] * (halfW(e) - 1.2) * side] };
+    const dd = Math.max(0, D - hd + .3), door = [sx + ux * dd, sz + uz * dd];
+    const out = { e, s: c.s, side, walk: [sx, sz], door, path: [door, [sx, sz]], kerb: [q[0] - q[3] * (halfW(e) - 1.2) * side, q[1] + q[2] * (halfW(e) - 1.2) * side] };
+    // a lot in front: on foot round the parked cars (not straight through them), out by the driveway
+    const fp = L.park && L.park.footPath(b, door);
+    if (fp) { const w2 = fp[fp.length - 1], c2 = closestOnPoly(e.pts, e.cum, w2[0], w2[1]); if (c2.d < halfW(e) + WALK_W + 1.5) { out.path = fp; out.walk = w2; out.s = c2.s; } }
+    return out;
   };
+  const rev = a => a.slice().reverse();
   const swPt = (e, s, side, o) => { const q = along(e.pts, e.cum, s), w = halfW(e) + o; return [q[0] - q[3] * w * side, q[1] + q[2] * w * side]; };
+  // where the sidewalk meets a junction: just short of the junction mouth, in line with the zebra across each leg
+  const zebraT = node => net.trimOf(node) - 2.1;
+  const trimAt = (e, nid) => { const node = net.nodes.get(nid), big = node && node.edges.size > 2 && !node.ring, t = !node || node.edges.size < 2 ? 1 : big ? Math.max(1, zebraT(node)) : net.trimOf(node) + 1.5; return e.a === nid ? Math.min(e.len / 2, t) : Math.max(e.len / 2, e.len - t); };
+  // round a junction on foot from the sidewalk of leg e (side se) to that of leg f (side sf), crossing each road in
+  // between on its zebra (the fewest crossings). Points to walk through
+  function roundCorner(nid, e, se, f, sf, o) {
+    const node = net.nodes.get(nid); if (!node || node.edges.size < 3 || node.ring) return [];
+    const legs = [...node.edges].map(id => net.edges.get(id)).filter(Boolean).map(g => { const h = net.endHeading(g, nid, false); return { g, a: Math.atan2(h[1], h[0]) }; }).sort((p, q) => p.a - q.a);
+    const n = legs.length, sec = (g, sd) => { const i = legs.findIndex(L => L.g === g); if (i < 0) return -1; return (g.a === nid ? sd : -sd) > 0 ? i : (i - 1 + n) % n; };
+    const si = sec(e, se), sj = sec(f, sf); if (si < 0 || sj < 0 || si === sj) return [];
+    const ccw = (sj - si + n) % n, cw = (si - sj + n) % n, seq = [];
+    const wid = list => list.reduce((a, L) => a + halfW(L.g), 0), A = [], B = [];
+    for (let k = 1; k <= ccw; k++) A.push(legs[(si + k) % n]);
+    for (let k = 0; k < cw; k++) B.push(legs[(si - k + n) % n]);
+    seq.push(...(A.length < B.length || (A.length === B.length && wid(A) <= wid(B)) ? A : B));
+    const t = Math.max(1, zebraT(node)), out = [], d2 = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
+    let at = swPt(e, e.a === nid ? Math.min(e.len / 2, t) : Math.max(e.len / 2, e.len - t), se, o);
+    for (const { g } of seq) {
+      if (g.lv) return [];   // (a ramp: no zebra on it)
+      const sg = g.a === nid ? Math.min(g.len / 2, t) : Math.max(g.len / 2, g.len - t), p1 = swPt(g, sg, 1, o), p2 = swPt(g, sg, -1, o);
+      const [a, b] = d2(p1, at) < d2(p2, at) ? [p1, p2] : [p2, p1]; out.push(a, b); at = b;
+    }
+    return out;
+  }
   // a walk along the sidewalks from one building to another (or back home), crossing at corners
   function walkRoute(A, B, o) {
     if (!A || !B) return null;
-    const pts = [A.door, A.walk];
+    const pts = A.path ? [...A.path] : [A.door, A.walk];
     const run = (e, s0, s1, side) => { const st = s1 > s0 ? 2.5 : -2.5; for (let s = s0; st > 0 ? s < s1 : s > s1; s += st) pts.push(swPt(e, s, side, o)); pts.push(swPt(e, s1, side, o)); };
-    if (A.e === B.e) { run(A.e, A.s, B.s, A.side); if (A.side !== B.side) pts.push(B.walk); }
-    else {
+    const quiet = e => e.kind !== 'avenue' && (e.nl || 1) < 2 && !e.tl;
+    if (A.e === B.e) {
+      // the other side of a busy road: over at the nearer junction's zebra (a quiet street: straight across)
+      const e = A.e, ends = A.side === B.side || quiet(e) ? [] : [[e.a, A.s + B.s], [e.b, 2 * e.len - A.s - B.s]].filter(([nid]) => { const nd = net.nodes.get(nid); return nd && nd.edges.size > 2 && !nd.ring; }).sort((x, y) => x[1] - y[1]);
+      if (ends.length) { const nid = ends[0][0], t = trimAt(e, nid); run(e, A.s, t, A.side); pts.push(...roundCorner(nid, e, A.side, e, B.side, o)); run(e, t, B.s, B.side); }
+      else { run(e, A.s, B.s, A.side); if (A.side !== B.side) pts.push(swPt(e, B.s, B.side, o)); }
+    } else {
       // nodes: shortest way by street length (no roundabouts)
       const dist = new Map(), prev = new Map(), todo = [];
       for (const [nid, d0] of [[A.e.a, A.s], [A.e.b, A.e.len - A.s]]) { dist.set(nid, d0); prev.set(nid, null); todo.push(nid); }
@@ -165,24 +200,106 @@ export function createLife(net, city, seed = 1) {
       const chain = []; let n = end; while (prev.get(n)) { const [p, e] = prev.get(n); chain.unshift([p, e, n]); n = p; }
       const startNode = n;
       let side = A.side, e = A.e;
-      const trimAt = (e, nid) => { const node = net.nodes.get(nid), t = node && node.edges.size > 1 ? net.trimOf(node) + 1.5 : 1; return e.a === nid ? Math.min(e.len / 2, t) : Math.max(e.len / 2, e.len - t); };
       run(e, A.s, trimAt(e, startNode), side);
       for (const [from, f, to] of chain) {
         const s0 = trimAt(f, from), cur = pts[pts.length - 1];
         const fs = f === B.e ? B.side : (() => { const a = swPt(f, s0, 1, o), b = swPt(f, s0, -1, o); return Math.hypot(a[0] - cur[0], a[1] - cur[1]) < Math.hypot(b[0] - cur[0], b[1] - cur[1]) ? 1 : -1; })();
+        pts.push(...roundCorner(from, e, side, f, fs, o));
         run(f, s0, trimAt(f, to), fs); side = fs; e = f;
       }
-      const last = trimAt(B.e, end), cur = pts[pts.length - 1], a = swPt(B.e, last, B.side, o);
+      const last = trimAt(B.e, end);
+      pts.push(...roundCorner(end, e, side, B.e, B.side, o));
+      const cur = pts[pts.length - 1], a = swPt(B.e, last, B.side, o);
       if (Math.hypot(a[0] - cur[0], a[1] - cur[1]) > .5) pts.push(a);
-      run(B.e, last, B.s, B.side); void side; void e;
+      run(B.e, last, B.s, B.side);
     }
-    pts.push(B.walk, B.door);
+    pts.push(...(B.path ? rev(B.path) : [B.walk, B.door]));
     return pts;
+  }
+  // ---------- crossing the road on foot ----------
+  const walkAt = (w, s) => { let j = 0; while (j < w.cum.length - 2 && w.cum[j + 1] < s) j++; const a = w.pts[j], b = w.pts[Math.min(j + 1, w.pts.length - 1)], t = Math.max(0, Math.min(1, (s - w.cum[j]) / ((w.cum[j + 1] - w.cum[j]) || 1))); return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]; };
+  // the stretches of a walk out in the roadway: [{ s0, s1, pts }]
+  function crossings(w) {
+    const out = []; let cur = null;
+    for (let s = 0; s <= w.len + .49; s += .5) {
+      const q = walkAt(w, Math.min(s, w.len)), h = net.nearestEdge(q[0], q[1], 14), inR = h && !h.e.lv && h.d < halfW(h.e) - .15;
+      if (inR) { if (!cur) cur = { s0: Math.max(0, s - .5), pts: [] }; cur.pts.push(q); }
+      else if (cur) { cur.s1 = s; out.push(cur); cur = null; }
+    }
+    if (cur) { cur.s1 = w.len; out.push(cur); }
+    return out.filter(x => x.s1 - x.s0 > .9);
+  }
+  // nothing coming that would reach these points before someone on foot is across (cars standing still only if right there)
+  function roadClear(pts) {
+    const p0 = pts[0], p1 = pts[pts.length - 1];
+    for (const c of net.cars) {
+      if (c.hide || Math.min(Math.abs(c.x - p0[0]), Math.abs(c.x - p1[0])) > 70 || Math.min(Math.abs(c.z - p0[1]), Math.abs(c.z - p1[1])) > 70) continue;
+      for (let k = 0; k < pts.length; k += 2) {
+        const dx = pts[k][0] - c.x, dz = pts[k][1] - c.z, ahead = dx * c.hx + dz * c.hz, side = Math.abs(dx * c.hz - dz * c.hx);
+        if (Math.abs(ahead) < c.len / 2 + (c.v < .5 ? 1 : 2.2) && side < c.w / 2 + (c.v < .5 ? .8 : 1.6)) return false;   // right there
+        if (c.v >= .5 && ahead > 0 && side < c.w / 2 + 1.6 && ahead < c.len / 2 + 5 + c.v * 3.2) return false;             // on its way
+      }
+    }
+    for (const m of L.park.movers) if (m.onRoad) { const q = L.park.pose(m); for (const p of pts) if (Math.hypot(q[0] - p[0], q[1] - p[1]) < 5) return false; }
+    return true;
+  }
+  // would the next step put this walker in front of (or into) a car driving in a parking lot? (not their own; not for ever)
+  const LEN = { car: 4.6, suv: 4.9, van: 5.6 };
+  function lotCarAhead(w, dt) {
+    if (!L.park.movers.length) return false;
+    if ((w.lotHeld || 0) > 20) { w.lotHeld = 0; return false; }   // (never stuck for good)
+    const q = walkAt(w, Math.min(w.len, w.s + w.v * dt + .45)), q0 = walkAt(w, w.s);
+    for (const m of L.park.movers) {
+      if (m.wait > 0 || m.pid === w.pid) continue;
+      const me = L.park.pose(m); if (Math.abs(me[0] - q[0]) > 9 || Math.abs(me[1] - q[1]) > 9) continue;
+      const lg = m.legs[m.li], dir = lg && lg.rev ? -1 : 1, c = Math.cos(me[2]) * dir, sn = -Math.sin(me[2]) * dir, hl = (LEN[m.type] || 4.6) / 2;
+      const moving = m.v > .25, front = hl + (moving ? .7 + m.v * 1.3 : .35), sideMax = moving ? 1.55 : 1.3;
+      const inZone = p => { const dx = p[0] - me[0], dz = p[1] - me[1], al = dx * c + dz * sn, sd = Math.abs(-dx * sn + dz * c); return al < front && al > -hl - .35 && sd < sideMax; };
+      if (!moving) {   // standing still: walk round it if the way goes through it
+        const dx = q[0] - me[0], dz = q[1] - me[1];
+        if ((w.detours || 0) < 3 && Math.abs(dx * c + dz * sn) < hl + .2 && Math.abs(-dx * sn + dz * c) < 1.1 && aroundCar(w, me, hl)) { w.detours = (w.detours || 0) + 1; return true; }   // (a few times at most: never round and round two cars)
+        continue;
+      }
+      if (inZone(q0)) continue;   // (already beside or in front of it, e.g. just out of the car next to it: walk on out of the way)
+      if (inZone(q)) { w.lotHeld = (w.lotHeld || 0) + dt; return true; }   // moving: let it by
+    }
+    w.lotHeld = 0; return false;
+  }
+  // step round a car standing in the way: along the outside of its box (the shorter way), back onto the path beyond it
+  function aroundCar(w, me, hl) {
+    const c = Math.cos(me[2]), sn = -Math.sin(me[2]), hu = hl + .7, hv = 1.65;
+    const loc = p => { const dx = p[0] - me[0], dz = p[1] - me[1]; return [dx * c + dz * sn, -dx * sn + dz * c]; };
+    const wor = u => [me[0] + u[0] * c - u[1] * sn, me[1] + u[0] * sn + u[1] * c];
+    const inside = p => { const l = loc(p); return Math.abs(l[0]) < hu - .05 && Math.abs(l[1]) < hv - .05; };
+    let sx = null; for (let s = w.s; s <= w.len; s += .3) if (!inside(walkAt(w, s))) { if (s > w.s + .3) { sx = s; break; } } else sx = null;
+    if (sx == null) { for (let s = w.s + .3; s <= w.len; s += .3) if (!inside(walkAt(w, s))) { sx = s; break; } }
+    if (sx == null) return false;
+    // the box outline as a loop, and where on it we start and end
+    const C = [[hu, hv], [-hu, hv], [-hu, -hv], [hu, -hv]], per = 4 * hu + 4 * hv;
+    const tOf = l => { const u = Math.max(-hu, Math.min(hu, l[0])), v = Math.max(-hv, Math.min(hv, l[1])), du = hu - Math.abs(u), dv = hv - Math.abs(v);
+      const [x, y] = du < dv ? [Math.sign(u) * hu || hu, v] : [u, Math.sign(v) * hv || hv];   // onto the nearest side
+      if (y === hv) return hu - x; if (x === -hu) return 2 * hu + hv - y; if (y === -hv) return 2 * hu + 2 * hv + x + hu; return 4 * hu + 2 * hv + y + hv; };
+    const ptT = t => { t = ((t % per) + per) % per; if (t < 2 * hu) return [hu - t, hv]; t -= 2 * hu; if (t < 2 * hv) return [-hu, hv - t]; t -= 2 * hv; if (t < 2 * hu) return [-hu + t, -hv]; t -= 2 * hu; return [hu, -hv + t]; };
+    const cur = walkAt(w, w.s), out = walkAt(w, sx), t0 = tOf(loc(cur)), t1 = tOf(loc(out));
+    const fwd = ((t1 - t0) % per + per) % per, dirn = fwd <= per / 2 ? 1 : -1, span = dirn > 0 ? fwd : per - fwd;
+    const via = [ptT(t0)]; const cs = [0, 2 * hu, 2 * hu + 2 * hv, 4 * hu + 2 * hv];
+    const between = cs.map(t => ({ t, d: dirn > 0 ? ((t - t0) % per + per) % per : ((t0 - t) % per + per) % per })).filter(o => o.d > .01 && o.d < span - .01).sort((a, b) => a.d - b.d);
+    for (const o of between) via.push(ptT(o.t));
+    via.push(ptT(t1)); void C;
+    // the new walk: here, round the car, then the rest as before
+    let j = 0; while (j < w.cum.length - 2 && w.cum[j + 1] < sx) j++;
+    const rest = w.pts.slice(j + 1), pts = [cur, ...via.map(wor), out, ...rest].filter((p, k, a) => !k || Math.hypot(p[0] - a[k - 1][0], p[1] - a[k - 1][1]) > .05);
+    const cum = [0]; for (let k = 1; k < pts.length; k++) cum.push(cum[k - 1] + Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]));
+    const shift = cum[cum.length - 1] - (w.len - w.s);   // the crossings further on move by how much longer the walk got
+    for (const x of w.xs || []) if (!x.go) { x.s0 = x.s0 - w.s + shift; x.s1 = x.s1 - w.s + shift; }
+    w.pts = pts; w.cum = cum; w.len = cum[cum.length - 1]; w.s = 0; w.i = 0;
+    return true;
   }
   function startWalk(p, pts, to, why) {
     if (!pts || pts.length < 2) { arrive(p, to, why); return; }
     const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
     const w = { pid: p.id, pts, cum, s: 0, len: cum[cum.length - 1], v: (p.kid ? 1.25 : 1.05 + hash(p.id, 3, seed) * .5) * (p.age > 70 ? .75 : 1), to, why, ph: hash(p.id, 4, seed) * 6 };
+    w.xs = crossings(w); w.xi = 0;
     p.state = 'walk'; p.walk = w; L.walkers.push(w);
   }
   // ---------- going places ----------
@@ -201,8 +318,8 @@ export function createLife(net, city, seed = 1) {
     }
     // drive: queue a trip; the driver walks out to the car
     p.state = 'wait'; p.why = why; p.dest = to;
-    city.queue.push({ from: A, to: B, t: 0, pid: p.id, kindRoll: p.carK, colorRoll: p.carC, toAt: B.biz ? L.park.gate(B, p.id) : null, fromAt: p.parked && p.parked.bid === A.id ? L.park.gate(A, p.id + 1) : null,
-      ok: car => { car.pid = p.id; p.car = car; p.state = 'drive'; L.day.trips++; if (!pullOut(p, A, car, dA)) ghost(p, [dA.door, dA.walk, dA.kerb]); drives(p, car); },
+    city.queue.push({ from: A, to: B, t: 0, pid: p.id, kindRoll: p.carK, colorRoll: p.carC, toAt: L.park.hasFree(B, p.carK) ? L.park.gate(B, p.id) : null, fromAt: p.parked && p.parked.bid === A.id ? L.park.gate(A, p.id + 1) : null,
+      ok: car => { car.pid = p.id; p.car = car; car.kerbAt = { e: B.e, x: B.fx, z: B.fz, b: B.id }; p.state = 'drive'; L.day.trips++; if (!pullOut(p, A, car, dA)) ghost(p, rev(carWalk(car, dA))); drives(p, car); },
       fail: why2 => { if (why2 !== 'stranded') unpark(p); if (why2 === 'stranded') { p.state = 'in'; p.since = now(); p.until = now() + 40; p.blocked = why2; } else arrive(p, to, why); } });   // roads too full to pull out: they get there anyway (unseen)
   }
   // their car is in the building's lot: they walk out to it, it backs out and drives to the street, then the trip carries on
@@ -219,7 +336,7 @@ export function createLife(net, city, seed = 1) {
   // drove in: park in the lot if there's one (and a free stall), then walk in from the car
   function parkAndWalk(p, car, B, why) {
     const dB = D(B); if (!dB) return false;
-    const k = L.park.arrive(car, B, p.id, (x, z, k2) => { startWalk(p, L.park.walkPath(k2, dB.door) || [[x, z], dB.walk, dB.door], B.id, why); });
+    const k = L.park.arrive(car, B, p.id, (x, z, k2) => { startWalk(p, L.park.walkPath(k2, dB.door) || [[x, z], ...rev(dB.path)], B.id, why); });
     if (!k) return false;
     p.parked = { k, bid: B.id }; p.state = 'park'; p.dest = B.id; p.why = why; p.at = B.id;
     return true;
@@ -245,7 +362,21 @@ export function createLife(net, city, seed = 1) {
   L.cashCap = b => { const B = BIZ[b.biz.t]; return Math.max(60, B.rate * lvlMul(b.biz.lvl) * 7 + (B.spend || 0) * 20); };
 
   // where the driver steps out: beside the car on the kerb side (not out of the middle of it)
-  const outSide = car => [car.x - (car.hz || 0) * (car.w / 2 + .35), car.z + (car.hx || 0) * (car.w / 2 + .35)];
+  const outSide = car => {
+    if (car.x || car.z) return [car.x - (car.hz || 0) * (car.w / 2 + .35), car.z + (car.hx || 0) * (car.w / 2 + .35)];
+    const q = along(car.lane.pts, car.lane.cum, Math.max(0, car.s - car.len / 2)), o = (car.lat || 0) + car.w / 2 + .35;   // (just made: not drawn yet)
+    return [q[0] - q[3] * o, q[1] + q[2] * o];
+  };
+  // on foot between a car at the kerb and a building's door: if the car is on the far side of the street, over to
+  // the sidewalk there first and across (at the zebra on a busy road). Points from the car to the door
+  function carWalk(car, dB) {
+    const o = outSide(car), e = car.lane && !car.lane.conn ? car.lane.edge : null;
+    if (e && e === dB.e) {
+      const c = closestOnPoly(e.pts, e.cum, o[0], o[1]), q = along(e.pts, e.cum, c.s), side = Math.sign((o[0] - q[0]) * -q[3] + (o[1] - q[1]) * q[2]) || 1;
+      if (side !== dB.side) { const r = walkRoute({ e, s: c.s, side, path: [o, swPt(e, c.s, side, 2.2)] }, dB, 2.2); if (r) return r; }
+    }
+    return [o, dB.kerb, ...rev(dB.path)];
+  }
   // a car got there (or gave up): the driver walks in
   L.carDone = function (car) {
     const g = car.pid < 0 && L.guests.get(car.pid);
@@ -253,7 +384,7 @@ export function createLife(net, city, seed = 1) {
       if (g.car !== car) return; g.car = null;
       const to = g.dest; if (!to || to.exit || car.gave) { L.guests.delete(g.id); return; }   // out of town
       const dB = D(to); if (!dB) { L.guests.delete(g.id); return; }
-      g.at = to.id; if (parkAndWalk(g, car, to, 'shop')) return; startWalk(g, [outSide(car), dB.kerb, dB.walk, dB.door], to.id, 'shop'); return;
+      g.at = to.id; if (parkAndWalk(g, car, to, 'shop')) return; startWalk(g, carWalk(car, dB), to.id, 'shop'); return;
     }
     const p = car.pid && L.people.get(car.pid); if (!p || p.car !== car) return;
     const to = p.dest, B = L.bmap.get(to); p.car = null;
@@ -261,7 +392,7 @@ export function createLife(net, city, seed = 1) {
     if (car.gave) { L.day.late++; arrive(p, to, p.why); return; }
     const dB = D(B); if (!dB) { arrive(p, to, p.why); return; }
     if (B.biz && parkAndWalk(p, car, B, p.why)) return;
-    startWalk(p, [outSide(car), dB.kerb, dB.walk, dB.door], to, p.why);
+    startWalk(p, carWalk(car, dB), to, p.why);
   };
 
   // ---------- visitors: through traffic on the edge roads, and out-of-towners stopping at the shops ----------
@@ -270,7 +401,7 @@ export function createLife(net, city, seed = 1) {
     const bb = city.bounds(), out = [];
     for (const n of net.nodes.values()) {
       if (n.edges.size !== 1) continue;
-      if (city.inCity(n.x, n.z) && Math.min(Math.abs(n.x - bb.x0), Math.abs(n.x - bb.x1), Math.abs(n.z - bb.z0), Math.abs(n.z - bb.z1)) > 20) continue;   // out of town, or on its edge
+      if (city.inCity(n.x, n.z) && (city.plan === 2 || Math.min(Math.abs(n.x - bb.x0), Math.abs(n.x - bb.x1), Math.abs(n.z - bb.z0), Math.abs(n.z - bb.z1)) > 20)) continue;   // out of town (the old grid: or on its edge; a new town's cul-de-sacs are not ways out)
       const e = net.edges.get([...n.edges][0]); if (!e || e.ring || e.lv || e.len < 25) continue;
       const s = e.a === n.id ? 6 : e.len - 6, q = along(e.pts, e.cum, s);
       out.push({ id: -n.id, e, fx: q[0], fz: q[1], exit: true, x: q[0], z: q[1] });
@@ -279,8 +410,8 @@ export function createLife(net, city, seed = 1) {
   };
   function guestTrip(g, from, to) {
     g.state = 'wait'; g.dest = to;
-    city.queue.push({ from, to, t: 0, pid: g.id, kindRoll: g.carK, colorRoll: g.carC, toAt: !to.exit && to.biz ? L.park.gate(to, g.id) : null, fromAt: !from.exit && g.parked && g.parked.bid === from.id ? L.park.gate(from, g.id + 1) : null,
-      ok: car => { car.pid = g.id; g.car = car; g.state = 'drive'; if (!from.exit) { const dA = D(from); if (dA) pullOut(g, from, car, dA); } drives(g, car); if (L.onCarOut) L.onCarOut(car); },
+    city.queue.push({ from, to, t: 0, pid: g.id, kindRoll: g.carK, colorRoll: g.carC, toAt: !to.exit && L.park.hasFree(to, g.carK) ? L.park.gate(to, g.id) : null, fromAt: !from.exit && g.parked && g.parked.bid === from.id ? L.park.gate(from, g.id + 1) : null,
+      ok: car => { car.pid = g.id; g.car = car; if (!to.exit) car.kerbAt = { e: to.e, x: to.fx, z: to.fz, b: to.id }; g.state = 'drive'; if (!from.exit) { const dA = D(from); if (dA) pullOut(g, from, car, dA); } drives(g, car); if (L.onCarOut) L.onCarOut(car); },
       fail: () => { if (to.exit) L.guests.delete(g.id); else { g.state = 'in'; g.at = to.id; g.until = now() + 60; } } });
   }
   function guests(dt) {
@@ -356,7 +487,7 @@ export function createLife(net, city, seed = 1) {
     const A = D(L.bmap.get(p.home)); if (!A) return;
     const E = [...net.edges.values()].filter(e => !e.ring && !e.lv && e.len > 30 && Math.hypot(e.cx - A.walk[0], e.cz - A.walk[1]) < 260); if (!E.length) return;
     const e = E[Math.floor(hash(p.id, Math.floor(now()), seed) * E.length)], s = e.len * (.2 + hash(p.id, 2, Math.floor(now())) * .6);
-    const mid = { e, s, side: hash(p.id, 3, Math.floor(now())) < .5 ? 1 : -1 }; mid.walk = swPt(e, s, mid.side, 2.2); mid.door = mid.walk;
+    const mid = { e, s, side: hash(p.id, 3, Math.floor(now())) < .5 ? 1 : -1 }; mid.walk = swPt(e, s, mid.side, 2.2); mid.door = mid.walk; mid.path = [mid.walk];
     const o = 1.75 + hash(p.id, 5, seed) * .95, out = walkRoute(A, mid, o), back = walkRoute(mid, A, o);
     if (out && back) startWalk(p, out.concat(back.slice(1)), p.home, 'walk');
   }
@@ -390,12 +521,23 @@ export function createLife(net, city, seed = 1) {
     if (L.idsVer !== L.ver) { L.ids = [...L.people.keys()]; L.idsVer = L.ver; }
     const n = L.ids.length, k = Math.max(1, Math.ceil(n * dt / 2));
     for (let i = 0; i < k && n; i++) { const p = L.people.get(L.ids[L.sliceI++ % n]); if (p) decide(p); }
-    // walkers move on
+    // walkers move on (and the drivers see who is out in the road)
+    const peds = net.peds = [];
     for (let i = L.walkers.length - 1; i >= 0; i--) {
-      const w = L.walkers[i]; w.s += w.v * dt; w.ph += dt * w.v * 4.4;
+      const w = L.walkers[i], x = w.xs && w.xs[w.xi];
+      if (x && w.s > x.s1) { w.xi++; w.held = 0; }
+      else if (x && !x.go && w.s + w.v * dt >= x.s0 - .8) {   // at the curb: look both ways, wait for a gap (not for ever)
+        w.held = (w.held || 0) + dt;
+        if (x.s0 < 1 || w.held > (x.s1 - x.s0 > 9 ? 30 : 15) || roadClear(x.pts)) x.go = true;   // (already out in the road: getting out of a car)
+        else { w.s = Math.max(w.s, x.s0 - .8); w.ph = Math.round(w.ph / Math.PI) * Math.PI; continue; }
+      }
+      if (!w.ghost && lotCarAhead(w, dt)) { w.ph = Math.round(w.ph / Math.PI) * Math.PI; continue; }   // a car moving in the lot: let it by
+      w.s += w.v * dt; w.ph += dt * w.v * 4.4;
+      if (x && x.go && w.s >= x.s0 && w.s <= x.s1) { const q = walkAt(w, w.s); peds.push({ x: q[0], z: q[1] }); }
       if (w.s >= w.len) { L.walkers.splice(i, 1); if (!w.ghost) { const p = L.person(w.pid); if (p && p.walk === w) arrive(p, L.bmap.has(w.to) ? w.to : p.home, w.why); } }
     }
     guests(dt);
+    L.park.peds = L.walkers.map(w => { const q = walkAt(w, Math.min(w.s, w.len)); return [q[0], q[1], w.pid]; });   // (cars in the lots stop for them)
     L.park.step(dt);
     L.hireT += dt; if (L.hireT > 3) { L.hireT = 0; hire(); }
     L.earnT += dt; if (L.earnT >= 1) { earn(L.earnT); L.earnT = 0; }
@@ -427,6 +569,7 @@ export function createLife(net, city, seed = 1) {
   // ---------- streets and addresses ----------
   L.streetName = function (e) {
     if (!e) return '';
+    const planned = city.nameOf && city.nameOf(e); if (planned) return planned;   // (a new town: the street plan's names)
     const A = e.pts[0], B = e.pts[e.pts.length - 1], g0 = -BLOCK * 1.5;
     if (Math.abs(A[1] - B[1]) < 1 && Math.abs(e.cz - A[1]) < 1) { const k = Math.round((A[1] - g0) / BLOCK); if (Math.abs((A[1] - g0) / BLOCK - k) < .02) return EW[((k + 2) % EW.length + EW.length) % EW.length]; }
     if (Math.abs(A[0] - B[0]) < 1 && Math.abs(e.cx - A[0]) < 1) { const k = Math.round((A[0] - g0) / BLOCK); if (Math.abs((A[0] - g0) / BLOCK - k) < .02) return NS[((k - 1) % NS.length + NS.length) % NS.length]; }

@@ -10,7 +10,8 @@ life.startTown(); city.sync(); life.sync();
 const biz = city.buildings.filter(b => b.biz);
 console.log({ roads: net.edges.size, buildings: city.buildings.length, businesses: biz.map(b => b.biz.name + ' (' + b.biz.t + ')'), people: life.people.size, staff: biz.map(b => b.biz.staff.length + '/' + b.jobs) });
 let fails = 0; const check = (n, ok, info = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + n + (info ? '  ' + info : '')); if (!ok) fails++; };
-check('starts small: 5-10 roads', net.edges.size >= 5 && net.edges.size <= 10, net.edges.size);
+const inTown = [...net.edges.values()].filter(e => city.inCity(e.cx, e.cz)).length;
+check('starts small: 5-24 roads in town', inTown >= 5 && inTown <= 24, inTown + ' (' + net.edges.size + ' with the highway and ranch road out of town)');
 check('starts small: under 20 buildings', city.buildings.length < 20 && city.buildings.length >= 10, city.buildings.length);
 check('every business has staff', biz.every(b => b.biz.staff.length > 0));
 // buying the land next door brings its streets, joined to the highway (no road on top of another)

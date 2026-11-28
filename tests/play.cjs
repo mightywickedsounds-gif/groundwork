@@ -25,7 +25,8 @@ const TYPES = { js: 'text/javascript', mjs: 'text/javascript', jpg: 'image/jpeg'
   await p.click('#playBtn');
   await p.evaluate(() => { FT.setSpeed(0); FT.life.coins = 1e6; });
   const st = () => p.evaluate(() => ({ cars: FT.net.cars.length, nodes: FT.net.nodes.size, edges: FT.net.edges.size, b: FT.city.buildings.length, arrived: FT.net.stats.arrived, gave: FT.net.stats.gaveUp, meter: FT.S.meter }));
-  check('the town starts small (5-10 roads, under 20 buildings)', (await st()).edges >= 5 && (await st()).edges <= 10 && (await st()).b < 20 && (await st()).b >= 10, JSON.stringify(await st()));
+  const inTown = await p.evaluate(() => [...FT.net.edges.values()].filter(e => FT.city.inCity(e.cx, e.cz)).length);
+  check('the town starts small (5-24 roads in town, under 20 buildings)', inTown >= 5 && inTown <= 24 && (await st()).b < 20 && (await st()).b >= 10, inTown + ' in town ' + JSON.stringify(await st()));
   await p.evaluate(() => FT.step(120));
   const s1 = await st(); check('traffic runs', s1.cars > 5 && s1.arrived > 0, JSON.stringify(s1));
   // the economy, people and the law
@@ -82,13 +83,15 @@ const TYPES = { js: 'text/javascript', mjs: 'text/javascript', jpg: 'image/jpeg'
   await shot('lanes-top', { x: av[0], z: av[1], dist: 140, yaw: 0, pitch: 1.35 }, 10);
   // an overpass over Main Street with the Road tool on Overpass, and an underpass
   const br = await p.evaluate(() => {
-    FT.setTool('road'); FT.setLv(1); FT.click(-20, -330); FT.hover(-20, 160); FT.click(-20, 160);
-    FT.setLv(-1); FT.click(250, -300); FT.hover(250, 200); FT.click(250, 200); FT.setLv(0); FT.setTool('road');
+    const has = lv => [...FT.net.edges.values()].some(e => e.lv === lv);   // (every town is laid out differently: try a few lines across Main Street)
+    for (const x of [125, 110, 135, 95, 140]) { if (has(1)) break; FT.setTool('road'); FT.setLv(1); FT.click(x, -330); FT.hover(x, 160); FT.click(x, 160); }
+    for (const x of [250, 270, 230, 290]) { if (has(-1)) break; FT.setTool('road'); FT.setLv(-1); FT.click(x, -300); FT.hover(x, 200); FT.click(x, 200); }
+    FT.setLv(0); FT.setTool('road');
     return [...FT.net.edges.values()].filter(e => e.lv).map(e => e.lv);
   });
   check('overpass and underpass built with the Road tool', br.includes(1) && br.includes(-1), JSON.stringify(br));
   check('no road crosses another without a junction or a bridge', await p.evaluate(() => !FT.net.crossesOthers([...FT.net.edges.values()])));
-  await shot('overpass', { x: -20, z: -50, dist: 110, yaw: .9, pitch: .45 }, 10);
+  await shot('overpass', { x: 120, z: -50, dist: 110, yaw: .9, pitch: .45 }, 10);
   await shot('underpass', { x: 250, z: -100, dist: 140, yaw: 3.0, pitch: .7 }, 10);
   const s2 = await st(); check('traffic still flows after edits', s2.arrived > s1.arrived, JSON.stringify(s2));
   await shot('roundabout', { x: j[0], z: j[1], dist: 110, yaw: .3, pitch: 1.0 }, 10);
