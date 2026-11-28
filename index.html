@@ -7,7 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <title>Flowtown</title>
 <meta name="theme-color" content="#101214">
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/","./net.js":"./net.js?v=22","./city.js":"./city.js?v=22","./draw.js":"./draw.js?v=22","./sky.js":"./sky.js?v=22","./life.js":"./life.js?v=22","./police.js":"./police.js?v=22","./scenery.js":"./scenery.js?v=22","./parking.js":"./parking.js?v=22"}}</script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/","./net.js":"./net.js?v=23","./city.js":"./city.js?v=23","./draw.js":"./draw.js?v=23","./sky.js":"./sky.js?v=23","./life.js":"./life.js?v=23","./police.js":"./police.js?v=23","./scenery.js":"./scenery.js?v=23","./parking.js":"./parking.js?v=23"}}</script>
 <style>
   @font-face { font-family:Overpass; font-weight:600; src:url(assets/fonts/overpass-600.woff2) format('woff2'); font-display:swap; }
   @font-face { font-family:Overpass; font-weight:800; src:url(assets/fonts/overpass-800.woff2) format('woff2'); font-display:swap; }
@@ -105,10 +105,13 @@
   .bootIn { display:flex; flex-direction:column; align-items:center; gap:22px; }
   #loadBar { width:220px; height:8px; background:#2b2e33; border-radius:4px; overflow:hidden; }
   #loadBar i { display:block; height:100%; width:0; background:var(--yellow); transition:width .25s ease; }
-  .logo { --bg:var(--green); --line:var(--white); align-self:flex-start; display:flex; flex-direction:column; align-items:center; padding:14px 30px 16px; border-radius:14px; box-shadow:inset 0 0 0 4px var(--bg), inset 0 0 0 7px var(--line), 0 6px 0 rgba(0,0,0,.35); }
-  .logo .lt { font-weight:800; font-size:15px; }
-  .logo .lg { font-weight:900; font-size:58px; line-height:.95; margin-top:4px; letter-spacing:-.015em; }
-  .logo .lp { font-weight:900; font-size:22px; margin-top:6px; background:var(--white); color:var(--green); padding:3px 12px 1px; border-radius:6px; }
+  /* the city limit sign, like the real ones on a Texas highway: a flat green plate, a thin white border, plain white letters, on two posts */
+  .logo { --bg:#0f6b3c; --line:#f2f2ea; position:relative; align-self:flex-start; display:flex; flex-direction:column; align-items:center; padding:13px 28px 12px; margin-bottom:26px; border-radius:6px; background:var(--bg); color:var(--line); box-shadow:inset 0 0 0 3px var(--bg), inset 0 0 0 5px var(--line), 0 3px 0 rgba(0,0,0,.3); }
+  .logo::before, .logo::after { content:''; position:absolute; top:100%; width:7px; height:26px; background:#8d9196; box-shadow:inset -2px 0 0 #6e7277; }
+  .logo::before { left:22%; } .logo::after { right:22%; }
+  .logo .lg { font-weight:800; font-size:50px; line-height:1; }
+  .logo .lt { font-weight:700; font-size:17px; margin-top:3px; }
+  .logo .lp { font-weight:700; font-size:17px; margin-top:1px; }
   #title { background:none; justify-content:flex-start; align-items:stretch; }
   .titleCol { display:flex; flex-direction:column; gap:22px; padding:max(34px, env(safe-area-inset-top)) 0 34px max(40px, env(safe-area-inset-left)); width:400px; transform:translateX(0); transition:transform .5s cubic-bezier(.2,.8,.2,1); }
   #title.leaving .titleCol { transform:translateX(-120%); }
@@ -132,7 +135,7 @@
     .titleCol { width:auto; padding:max(28px, env(safe-area-inset-top)) 18px max(22px, env(safe-area-inset-bottom)); align-items:stretch; }
     #title .logo { align-self:center; }
     .titleCol .tbtns { margin-top:auto; }
-    .logo .lg { font-size:46px; }
+    .logo .lg { font-size:42px; }
     #title.leaving .titleCol { transform:translateY(120%); }
   }
 
@@ -152,7 +155,8 @@
   #card { --bg:var(--white); --line:var(--ink); color:var(--ink); position:fixed; left:max(14px, env(safe-area-inset-left)); bottom:calc(max(12px, env(safe-area-inset-bottom)) + 84px); width:330px; padding:14px 16px 14px; display:none; pointer-events:auto; }
   #card.show { display:block; animation:pop .2s cubic-bezier(.2,.8,.2,1); }
   #card .ch { display:flex; align-items:flex-start; gap:10px; }
-  #card .ch h4 { margin:0; font-size:21px; font-weight:900; line-height:1.05; flex:1; }
+  #card .ch h4 { margin:0; font-size:21px; font-weight:900; line-height:1.05; }
+  #card .ch > div { flex:1; min-width:0; }   /* (the close button sits at the right edge, whatever the name) */
   #card .sub { font-size:12.5px; font-weight:800; opacity:.65; margin-top:3px; }
   #card .x, .pickHead .x { width:34px; height:34px; border:0; border-radius:8px; background:var(--ink); color:var(--white); padding:8px; cursor:pointer; flex:none; }
   .pickHead .x { background:var(--tile); }
@@ -190,7 +194,8 @@
   #daySum .rows { font-size:16px; gap:7px 22px; }
   #daySum .rows span { opacity:.85; }
   #daySum .rows b { text-align:right; }
-  #daySum .rows .tot { border-top:2px solid rgba(246,246,241,.8); padding-top:6px; font-size:19px; font-weight:900; opacity:1; }
+  #daySum .rows .tot { border-top:2px solid #e6e8df; padding-top:6px; font-size:19px; font-weight:900; opacity:1; }
+  #daySum .rows { column-gap:0; } #daySum .rows span { padding-right:14px; }   /* (the line over the total runs straight across, no gap between the columns) */
   @media (max-width:760px) {
     #card { left:8px; right:8px; width:auto; bottom:calc(max(12px, env(safe-area-inset-bottom)) + 80px); padding:12px 13px; }
     #card .staff { max-height:96px; }
@@ -213,12 +218,21 @@
   #scanList .srow.cCLEAR b { background:var(--green); color:var(--white); }
   #scanList .srow:hover span { text-decoration:underline; }
   body.titleUp #scan { display:none; }
-  /* phones: the speed buttons sit under the gridlock sign, away from the browser's own buttons at the bottom of the screen */
-  #spdDock { position:fixed; right:max(8px, env(safe-area-inset-right)); top:calc(max(12px, env(safe-area-inset-top)) + 64px); display:none; padding:5px; background:var(--asphalt); border-radius:12px; box-shadow:var(--drop); transition:transform .45s cubic-bezier(.2,.8,.2,1); }
-  #spdDock #speed { width:auto; gap:5px; } #spdDock #speed button { flex:none; width:42px; min-width:0; height:38px; padding:0; }
-  body.titleUp #spdDock { transform:translateY(-260%); pointer-events:none; }
+  /* undo: shows for a few seconds after a road edit */
+  #undoBtn { position:fixed; left:max(14px, env(safe-area-inset-left)); bottom:calc(max(12px, env(safe-area-inset-bottom)) + 84px); height:44px; padding:0 14px 0 11px; border:0; border-radius:10px; background:var(--asphalt); color:var(--white); font:800 14px var(--font); display:flex; align-items:center; gap:7px; box-shadow:var(--drop); cursor:pointer; transform:scale(.5); visibility:hidden; pointer-events:none; transition:transform .16s cubic-bezier(.2,.8,.2,1), visibility 0s linear .16s; }
+  #undoBtn svg { width:19px; height:19px; } #undoBtn.show { transform:none; visibility:visible; pointer-events:auto; transition:transform .16s cubic-bezier(.2,.8,.2,1); } #undoBtn:active { background:var(--tile2); }
+  #card.show ~ #undoBtn, body.titleUp #undoBtn { display:none; }
+  #card.show ~ #lvl, #card.show ~ #hint { visibility:hidden; }   /* (an open card: the road level buttons and the hint wait behind it) */
+  @media (max-width:760px) and (max-height:500px) { #card { right:auto; width:330px; } }
+  /* phones: pause and speed as two tiles in a column under the menu button (the speed row at the bottom sat right on the browser's own toolbar) */
+  #spdCol { position:fixed; right:max(8px, env(safe-area-inset-right)); top:calc(max(12px, env(safe-area-inset-top)) + 52px); display:none; flex-direction:column; gap:8px; transition:transform .45s cubic-bezier(.2,.8,.2,1); }
+  #spdCol .tileBtn { width:44px; height:44px; padding:12px; font:900 15px var(--font); display:flex; align-items:center; justify-content:center; }
+  #spdCol .tileBtn.on { background:var(--yellow); color:var(--ink); }
+  #spdCol .tileBtn:active { transform:translateY(1px); }
+  body.titleUp #spdCol { transform:translateX(160%); pointer-events:none; }
   @media (max-width:760px) {
-    #spdDock { display:flex; }
+    #spdCol { display:flex; } #bar #speed { display:none; }
+    #undoBtn { left:8px; bottom:calc(max(12px, env(safe-area-inset-bottom)) + 76px); }
     #scan { top:auto; bottom:calc(max(12px, env(safe-area-inset-bottom)) + 76px); right:8px; left:auto; width:min(300px, 62vw); padding:7px 9px 5px; }
     #scanList .srow:nth-child(n+3) { display:none; }
     #scan:not(.fresh) #scanList { display:none; } #scan:not(.fresh) { width:auto; } #scan .sh { margin:0; cursor:pointer; }
@@ -230,10 +244,11 @@
     #stats { gap:2px 11px; font-size:10px; } #stats b { font-size:15px; }
     #grow { font-size:10.5px; }
     #jam { width:150px; padding:9px 12px 11px; } #jamLbl { font-size:12px; } #jamLbl b { font-size:17px; }
-    .tileBtn { width:42px; height:42px; padding:10px; }
-    #bar { flex-wrap:wrap; justify-content:center; width:calc(100vw - 16px); gap:5px; padding:5px; }
-    #tools { gap:5px; } .sep { display:none; }
-    #tools button, #viewBtn { min-width:0; width:calc((100vw - 16px - 10px - 40px) / 9); height:54px; font-size:10px; padding:6px 2px 4px; }
+    .tileBtn { width:44px; height:44px; padding:11px; }
+    #bar { flex-wrap:wrap; justify-content:center; width:calc(100vw - 8px); gap:3px; padding:5px; }
+    #tools { gap:3px; } .sep { display:none; }
+    #tools button { min-width:0; width:calc((100vw - 8px - 10px - 21px) / 8); height:54px; font-size:10px; padding:6px 2px 4px; }
+    #bar #viewBtn { display:none; }   /* (the traffic view is a tile in the column on the right, so each tool gets a 44 px button) */
     #speed { width:100%; } #speed button { flex:1; height:36px; }
     #tools button kbd { display:none; }
     #tools button .lg { display:none; } #tools button .sh { display:inline; }
@@ -257,7 +272,13 @@
   #card.mini .ch h4 { font-size:16px; }
   #card.mini .doing { margin-top:6px; padding:5px 8px 3px; font-size:12.5px; }
   #card.mini .cb { margin-top:7px; } #card.mini .cb button { height:34px; font-size:13px; }
-  #card.mini .x { width:28px; height:28px; padding:6px; }
+  #card.mini .x { width:36px; height:36px; padding:9px; }
+  #card { max-height:calc(100vh - 200px); overflow-y:auto; }
+  #card .x { width:40px; height:40px; padding:10px; }
+  /* phones on their side (short screens): the card goes on the right, under the sign and the menu */
+  @media (max-height:500px) and (min-width:761px) {
+    #card { left:auto; right:max(14px, env(safe-area-inset-right)); top:calc(max(12px, env(safe-area-inset-top)) + 70px); bottom:auto; max-height:calc(100vh - 70px - 96px); width:300px; }
+  }
   #card .cb button.rep { background:#10244a; }
   @media (max-width:760px) {
     #hud { pointer-events:auto; cursor:pointer; min-width:0; max-width:calc(100vw - 16px - 104px - 54px); padding:7px 10px 7px; }
@@ -268,8 +289,8 @@
     #hud:not(.open) #goalPay { display:none; }
     #topr { gap:6px; }
     #jam { width:96px; padding:6px 8px 7px; } #jamLbl { font-size:9.5px; gap:4px; } #jamLbl b { font-size:13px; } #jamBar { height:6px; margin-top:4px; }
-    .tileBtn { width:40px; height:40px; padding:10px; }
-    #card { padding:10px 11px; bottom:calc(max(12px, env(safe-area-inset-bottom)) + 124px); }
+    .tileBtn { width:44px; height:44px; padding:11px; }
+    #card { padding:10px 11px; bottom:calc(max(12px, env(safe-area-inset-bottom)) + 76px); max-height:calc(100vh - 210px); }
     #card .ch h4 { font-size:17px; } #card .rows { font-size:12px; gap:3px 10px; margin-top:8px; } #card .doing { font-size:12px; padding:5px 8px 3px; margin-top:7px; }
     #card .cb { margin-top:8px; } #card .cb button { height:36px; font-size:12.5px; } #card .staff { max-height:84px; }
     #card.mini { left:8px; right:8px; width:auto; }
@@ -316,7 +337,8 @@
   <button id="menuBtn" class="tileBtn" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
 </div>
 
-<div id="spdDock"></div>
+<div id="spdCol"><button id="pauseBtn" class="tileBtn" aria-label="Pause"><svg viewBox="0 0 24 24" fill="currentColor"><path class="ps" d="M6 4h4v16H6zM14 4h4v16h-4z"/><path class="pl" d="M7 4l13 8-13 8z" style="display:none"/></svg></button><button id="fastBtn" class="tileBtn" aria-label="Speed">1x</button><button id="viewTile" class="tileBtn" aria-label="Traffic view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M3 18h5M11 18h3M17 18h4M3 12h9M15 12h6M3 6h3M9 6h12"/></svg></button></div>
+<div id="card" class="sign"></div>
 <div id="scan" class="sign"><div class="sh"><i></i><span>SCANNER</span><button id="scanX" aria-label="Close the scanner"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div id="scanList"></div></div>
 <div id="lvl"><button data-lv="0">Street</button><button data-lv="1">Overpass</button><button data-lv="-1">Underpass</button></div>
 <div id="hint"></div>
@@ -343,7 +365,7 @@
   </div>
 </div>
 
-<div id="card" class="sign"></div>
+<button id="undoBtn" aria-label="Undo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6 4 11l5 5"/><path d="M4 11h10a6 6 0 0 1 0 12h-3"/></svg>Undo</button>
 <div id="pick" class="screen"><div class="panel dark pickP"><div class="pickHead"><h3>Build here</h3><button id="pickX" class="x" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div id="pickList"></div></div></div>
 <div id="daySum" class="screen"><div class="panel guide sign"><h1 id="dsTitle">DAY 1</h1><h2>Closing time</h2><div id="dsRows" class="rows"></div><div class="btns"><button id="dsGo" class="main">Start the next day</button></div></div></div>
 
@@ -356,7 +378,7 @@
 
 <div id="title" class="screen">
   <div class="titleCol">
-    <div class="logo sign"><span class="lt">CITY LIMIT</span><span class="lg">FLOWTOWN</span><span class="lp" id="titlePop">POP 0</span></div>
+    <div class="logo"><span class="lg">FLOWTOWN</span><span class="lt">CITY LIMIT</span><span class="lp" id="titlePop">POP 0</span></div>
     <div class="tbtns">
       <button id="playBtn" class="tb main"><span>Start</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg></button>
       <button id="newBtn" class="tb" style="display:none">New city</button>
@@ -364,7 +386,7 @@
       <button id="credBtn" class="tb">Credits</button>
     </div>
   </div>
-  <div class="ver">v22</div>
+  <div class="ver">v23</div>
 </div>
 
 <div id="menu" class="screen">
@@ -413,6 +435,6 @@
 </div>
 
 
-<script type="module" src="game.js?v=22"></script>
+<script type="module" src="game.js?v=23"></script>
 </body>
 </html>

@@ -348,3 +348,30 @@ What was wrong (measured frame by frame over 25 minutes of play before fixing an
 - **Deeper lots have a drive-through lane** in line with each driveway, so cars can reach the rows at the back (they used to drive through the parked cars).
 - **Pause on phones.** The pause, 1x, 2x and 4x buttons were at the very bottom of the screen, right above the browser's own toolbar, where taps get lost on iPhone. On phones they now sit in their own dock under the gridlock sign. (In a phone-sized test browser the button already worked, so the bottom edge of the screen was the likely cause.)
 - **Tests:** a new frame-by-frame check of how every car moves. After the changes it finds no jumps or flips, and the only snaps left are under 4 degrees a frame (cars on tight turns). The life test now checks the new lot driving. Life, law, lanes, bridge, build and the browser check pass; trips across town take about the same time as before.
+
+### Round 23: polish and bug hunt
+
+The owner's notes and phone screenshot: a person walking straight through a parked car, the title sign looking a bit AI-made, the speed buttons in a strange spot, daytime looking dim and orange like evening, and the town feeling like a toy rather than a real place. Then a full polish pass and a bug hunt over the whole game. The full bug list, with a scorecard, is in BUGS.md.
+
+**Looks and feel**
+- **Daylight.** With night switched off, the game squeezes the day, so at 9-10 am the sun was still very low: long shadows, weak light, orange tint. Now the sun climbs quickly after dawn, warm light only shows at sunrise and sunset, and the shade is lighter. Midday looks like a bright Texas day.
+- **The title sign** is now a plain green city-limit sign like the ones on a Texas highway: a flat plate, a thin white border, plain white letters (FLOWTOWN, CITY LIMIT, POP), standing on two posts.
+- **Speed buttons on phones.** A pause/play tile, a speed tile (tap to step through 1x, 2x, 4x) and the traffic view tile, in a column under the menu button. The tool dock at the bottom has the 8 tools, each a full 44 px wide. Desktop keeps the row in the bottom bar.
+- **Brake lights and blinkers** now glow, so you can see who is braking or turning at the normal zoom.
+- **Store roofs** are weathered grey instead of bright white, with grey inside the roof edge instead of a thick white rim. **Coins** over the businesses are smaller.
+- **People:** drivers who park in a lot get out of the driver's door, walk along the line between the stalls (not through the cars), along the walkway in front of the shop and in at the door, and the same way back. Drivers who stop at the kerb step out on the kerb side, not into the road. Feet no longer slide when people walk.
+- **Lane changes:** the blinker goes on for about a second before the car moves over.
+- **Undo.** After every road edit (draw, curve, remove, lanes, one-way, lights, roundabout), an Undo button shows for 8 seconds; Ctrl+Z on desktop. It puts back the roads, any buildings the edit knocked down and the coins it cost (the last 12 edits).
+- **Small things:** tools that need a road or a junction say "Tap a road" / "Tap a junction" instead of doing nothing; picking a tool puts away an open info card; the card's close button sits at its right edge; on a phone on its side the card stays on screen and scrolls; the line over the day's total runs straight across.
+
+**Bugs fixed** (24 of 25 found; see BUGS.md)
+- A crash when an open card's person left town or their building was removed.
+- A car pulling out of a lot could wait invisible in the road for minutes at a busy driveway (two cars waiting for each other). The life test caught this on some runs before; it passes every time now.
+- Road-rage calls never reached the police scanner (a misplaced line).
+- Graphics memory left behind each time the roads, lamps or buildings were rebuilt.
+- The space bar pressed the last-clicked button again as well as pausing.
+- The scanner could sit on top of an open card on phones; the road level buttons and the hint overlapped the card.
+
+**New test:** `node tests/soak.cjs` plays the game by itself at a desktop and a phone size: random roads, curves, overpasses, roundabouts, lights, lanes, removals, undo, building, buying land, following people, every menu, day and night, plus a save and reload in the middle. It checks for page errors, broken car or walker positions, roads crossing without a junction, cars stuck hidden, and graphics memory piling up.
+
+**Still known:** on the smallest phones (320 px wide) the tool buttons are 35 px wide. Cars still appear and disappear at the kerb outside houses. Everything was checked in a test browser that draws in software, not on a real phone.

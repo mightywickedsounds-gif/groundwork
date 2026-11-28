@@ -1,10 +1,10 @@
 // Flowtown: keep a growing city's traffic moving.
 import * as THREE from 'three';
-import { Net, RING_R, ONEWAY_W, WALK_W, LANE_W, along, closestOnPoly, laneOff } from './net.js';
+import { Net, ONEWAY_W, WALK_W, along } from './net.js';
 import { createCity, DAY, CHUNK, BLOCK } from './city.js';
 import { createLife, BIZ, BUILD_ORDER, MAX_LVL, COST, lvlMul, upCost } from './life.js';
 import { createLaw, aCar } from './police.js';
-import { makeMaterials, CLOUD, cloudUniforms, buildRoads, buildCity, vehicleGeos, vehicleMaterial, makeFleet, staticCarGeo, carColor, personGeo, personMaterial, lampGeo, signalGeo, buildSignals, hwOf, beamMaterial } from './draw.js';
+import { makeMaterials, CLOUD, cloudUniforms, buildRoads, buildCity, vehicleGeos, vehicleMaterial, makeFleet, staticCarGeo, carColor, personGeo, personMaterial, lampGeo, buildSignals, hwOf, beamMaterial } from './draw.js';
 import { makeSky } from './sky.js';
 import { buildScenery, driveRects, inRects } from './scenery.js';
 
@@ -189,7 +189,7 @@ function groundAt(cx, cy) {
 // ---------------- rebuild what's drawn ----------------
 let seenNet = -1, seenCity = -1;
 const dummy = new THREE.Object3D(), col = new THREE.Color();
-function disposeGroup(g) { if (!g) return; scene.remove(g); g.traverse(o => { if (o.geometry && o.geometry !== parkedGeo && !Object.values(VG).includes(o.geometry)) o.geometry.dispose(); }); }
+function disposeGroup(g) { if (!g) return; scene.remove(g); g.traverse(o => { if (o.geometry && o.geometry !== parkedGeo && !Object.values(VG).includes(o.geometry)) o.geometry.dispose(); if (o.isInstancedMesh) o.dispose(); }); }   // (instanced meshes keep their own buffers of positions on the GPU: free those too)
 let sigLamps = [], lampMesh = null, glowMesh = null, poolMesh = null;
 function rebuildRoads() {
   if (net.built !== net.ver) net.rebuild();
@@ -362,6 +362,7 @@ function setTool(t) {
   if (!T.tool) { cursor.visible = false; T.hover = null; }   // (the cursor ring used to stay on the map after dropping a tool)
   for (const b of document.querySelectorAll('#tools button[data-tool]')) b.classList.toggle('on', b.dataset.tool === T.tool);
   $('lvl').classList.toggle('show', T.tool === 'road' || T.tool === 'curve'); setLv(T.lv);
+  if (T.tool && sel && follow == null && typeof select === 'function') select(null);   // (picking a tool puts away an open card; following someone carries on)
   hint();
 }
 function hint(msg) { $('hint').textContent = msg || HINT[T.tool] || ''; $('hint').classList.toggle('bad', !!msg); }
@@ -444,7 +445,19 @@ function roomOf(e) {
   if (!roomCache.has(e.id)) roomCache.set(e.id, city.maxHalfW(net.roadChain(e)));
   return roomCache.get(e.id);
 }
+// undo: the town as it was before each road edit (the last 12), and the coins it cost
+const undoStack = []; let preEdit = null, undoT = 0;
+function snapTown() { return { net: JSON.stringify(net.serialize()), city: JSON.stringify(city.serialize()), staff: city.buildings.filter(b => b.biz).map(b => [b.id, b.biz.staff.slice()]), coins: life.coins }; }
+function undo() {
+  const u = undoStack.pop(); if (!u) { toast('Nothing to undo', true); return; }
+  net.restore(JSON.parse(u.net)); city.load(JSON.parse(u.city));
+  for (const [id, st] of u.staff) { const b = city.buildings.find(o => o.id === id); if (b && b.biz) b.biz.staff = st; }
+  city.sync(); life.sync(); life.coins = u.coins;
+  T.pts = []; T.pend = null; T.bend = null; T.hover = null; previewMesh.visible = false; hint(); hoverUpdate();
+  sound.magic(); toast('Undone'); save(); undoT = undoStack.length ? 8 : 0;
+}
 function afterEdit(pts, rgb = [.4, .9, 1]) {
+  if (preEdit) { undoStack.push(preEdit); if (undoStack.length > 12) undoStack.shift(); preEdit = null; undoT = 8; }
   if (pts) burstAlong(pts, rgb);
   const gone = city.sync();
   const nb = gone.filter(g => !g.lot).length;
@@ -456,6 +469,7 @@ function afterEdit(pts, rgb = [.4, .9, 1]) {
 function roadCost(A, B, c, lv = T.lv) { const L = c ? Math.hypot(c[0] - A[0], c[1] - A[1]) + Math.hypot(B[0] - c[0], B[1] - c[1]) : Math.hypot(B[0] - A[0], B[1] - A[1]); return Math.round(L * COST.road * (lv ? 4 : 1) / 5) * 5; }   // (a bridge or a cutting costs four times as much)
 // build a road; on success keep going from its end
 function place(a, b, bend) {
+  preEdit = snapTown();
   const c = through(a, b, bend), plan = net.planRoad(a, b, c, snapR(), T.lv), cost = plan.reason ? 0 : roadCost(plan.a || a, plan.b || b, plan.cc);
   if (!plan.reason && !life.can(cost)) { toast('Need ' + money(cost) + ' coins', true); return false; }
   const made = net.addRoad(a, b, c, T.lv ? { lv: T.lv } : {}, snapR());
@@ -480,28 +494,29 @@ function click(x, z) {
     T.pend = [a, [x, z]]; T.bend = null; previewRoad(a, [x, z], null, true); hint(touch ? 'Drag to bend it, tap to place' : 'Move to bend it, click to place'); return;
   }
   const h = T.hover;
+  if (t !== 'build') preEdit = snapTown();
   if (t === 'build') { if (h) openPicker(h); else toast('Pick a street', true); return; }
   if (t === 'erase') {
-    if (!h) return;
+    if (!h) return toast('Tap a road', true);
     if (h.ring) { const c = net.ringCenter(h.ring); net.removeRoundabout(h.ring); afterEdit(null); burst(c[0], c[1], 120, [1, .45, .3], 14); toast('Roundabout removed'); }
     else if (h.e) { const pts = h.e.pts; net.removeEdge(h.e.id); afterEdit(pts, [1, .45, .3]); }
     T.hover = null; return;
   }
   if (t === 'lanes') {
-    if (!h) return;
+    if (!h) return toast('Tap a road', true);
     const room = roomOf(h.e), nx = net.nextLanes(h.e, room), [nl, tl] = nx, chainL = net.roadChain(h.e).reduce((a, e) => a + e.len, 0), cost = nl * 2 + tl > (h.e.nl || 1) * 2 + (h.e.tl || 0) ? Math.round(chainL * COST.lane * (nl + tl * .5) / 5) * 5 : 0;
     if (cost && !life.can(cost)) return toast('Need ' + money(cost) + ' coins', true);
     const r = net.cycleLanes(h.e.id, room); if (!r) return; if (cost) { life.spend(cost); spentFx(cost); }
     afterEdit(net.roadChain(h.e).flatMap(e => e.pts)); toast(laneName(r.nl, r.tl) + (r.lights ? ' · lights added' : '') + (nx.capped ? ' · no room for more' : '')); hoverUpdate(); return;
   }
-  if (t === 'oneway') { if (!h) return; const r = net.cycleOneWay(h.e.id); if (r != null) { afterEdit(h.e.pts); toast(r === 0 ? 'Two-way' : 'One-way'); } return; }
+  if (t === 'oneway') { if (!h) return toast('Tap a road', true); const r = net.cycleOneWay(h.e.id); if (r != null) { afterEdit(h.e.pts); toast(r === 0 ? 'Two-way' : 'One-way'); } return; }
   if (t === 'signal') {
-    if (!h) return; if (h.n.ring) return toast('Roundabouts don\'t need lights', true);
+    if (!h) return toast('Tap a junction', true); if (h.n.ring) return toast('Roundabouts don\'t need lights', true);
     if (!h.n.sig && !life.can(COST.light)) return toast('Need ' + money(COST.light) + ' coins', true);
     const r = net.toggleSignal(h.n.id); if (r) { life.spend(COST.light); spentFx(COST.light); } afterEdit(null); burst(h.n.x, h.n.z, 70, r ? [.4, 1, .5] : [1, .45, .3], 8); toast(r ? 'Lights on' : 'Lights off'); return;
   }
   if (t === 'ring') {
-    if (!h) return; if (h.bad) return toast(h.bad, true);
+    if (!h) return toast('Tap a junction or a road', true); if (h.bad) return toast(h.bad, true);
     if (!life.can(COST.ring)) return toast('Need ' + money(COST.ring) + ' coins', true);
     const r = h.n ? net.makeRoundabout(h.n.id) : net.roundaboutOnRoad(h.e, h.s);
     if (typeof r !== 'number') return toast(r, true);
@@ -697,7 +712,7 @@ const selRing = new THREE.Mesh(new THREE.RingGeometry(1.5, 2.1, 36).rotateX(-Mat
 function selTick(dt) {
   selRing.visible = false;
   if (!sel) return;
-  cardT += dt; if (cardT > .5) { cardT = 0; drawCard(); }
+  cardT += dt; if (cardT > .5) { cardT = 0; drawCard(); if (!sel) return; }   // (the card may have closed: they left town, the building went)
   if (sel.k === 'p') {
     const p = life.person(sel.id); if (!p) return;
     const q = personPos(p); if (!q) return;
@@ -733,7 +748,7 @@ function drawCoins(t) {
   if (!titleUp) for (const b of city.buildings) {
     if (!b.biz || b.biz.lvl >= 3 || n >= 256) continue;
     const cap = life.cashCap(b); if ((b.biz.cash || 0) < Math.max(12, cap * .12)) continue;
-    const sc = Math.max(3.2, Math.min(16, cam.dist * .028)) * (b.biz.cash >= cap - 1 ? 1.25 : 1), y = b.h + 3 + sc * .6 + Math.sin(t * 2.4 + b.id) * sc * .08;
+    const sc = Math.max(2.4, Math.min(14, cam.dist * .025)) * (b.biz.cash >= cap - 1 ? 1.25 : 1), y = b.h + 3 + sc * .6 + Math.sin(t * 2.4 + b.id) * sc * .08;
     dummy.position.set(b.x, y, b.z); dummy.quaternion.copy(camera.quaternion); dummy.scale.set(sc, sc, sc); dummy.updateMatrix(); coinMesh.setMatrixAt(n++, dummy.matrix);
     coinSpots.push({ x: b.x, y, z: b.z, b });
   }
@@ -871,8 +886,9 @@ addEventListener('keydown', e => {
   keys.add(e.code);
   const n = '1234567'.indexOf(e.key); if (n >= 0) setTool(TOOLS[n]); if (e.code === 'KeyB') setTool('build');
   if (e.code === 'Escape') { if (T.pend) T.pend = null; else if (T.pts.length) T.pts = []; else setTool(''); previewMesh.visible = false; hint(); hoverUpdate(); }
-  if (e.code === 'Space') { e.preventDefault(); setSpeed(S.speed ? 0 : (S.lastSpeed || 1)); }
+  if (e.code === 'Space') { e.preventDefault(); if (document.activeElement && document.activeElement.tagName === 'BUTTON') document.activeElement.blur(); setSpeed(S.speed ? 0 : (S.lastSpeed || 1)); }   // (a button clicked last would otherwise be pressed again by the space bar)
   if (e.code === 'KeyT') toggleView();
+  if (e.code === 'KeyZ' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); undo(); }
 });
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
@@ -890,14 +906,18 @@ function keyMove(dt) {
 
 // ---------------- HUD ----------------
 function toast(msg, bad = false) { const t = $('toast'); t.textContent = msg; t.classList.toggle('bad', bad); t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 1800); }
-function setSpeed(v) { if (v) S.lastSpeed = v; S.speed = v; for (const b of document.querySelectorAll('#speed button')) b.classList.toggle('on', +b.dataset.speed === v); }
-function toggleView() { S.view = !S.view; $('viewBtn').classList.toggle('on', S.view); if (overlay) overlay.visible = S.view; paintOverlay(); }
+function setSpeed(v) { if (v) S.lastSpeed = v; S.speed = v; for (const b of document.querySelectorAll('#speed button')) b.classList.toggle('on', +b.dataset.speed === v); if ($('pauseBtn')) spdTiles(); }
+function toggleView() { S.view = !S.view; $('viewBtn').classList.toggle('on', S.view); $('viewTile').classList.toggle('on', S.view); if (overlay) overlay.visible = S.view; paintOverlay(); }
 for (const b of document.querySelectorAll('#tools button[data-tool]')) b.addEventListener('click', () => { setTool(b.dataset.tool); sound.start(); });
 // (acts on touch-down as well as click: on iPhones a tap on the pause button's icon didn't always come through as a click)
 for (const b of document.querySelectorAll('#speed button')) { const go = () => setSpeed(+b.dataset.speed); b.addEventListener('pointerdown', go); b.addEventListener('click', go); }
-// phones: the speed buttons go up under the gridlock sign (at the bottom, right above the browser's own toolbar, taps on them got lost)
-{ const mq = matchMedia('(max-width:760px)'), place = () => { const sp = $('speed'), to = mq.matches ? $('spdDock') : $('bar'); if (sp.parentNode !== to) to.appendChild(sp); }; place(); mq.addEventListener('change', place); }
-$('viewBtn').addEventListener('click', toggleView);
+// phones: a pause/play tile and a speed tile (1x, 2x, 4x round) under the menu button
+{ const tap = (el, fn) => { let t = 0; const go = e => { const n = performance.now(); if (n - t < 350) return; t = n; fn(); }; el.addEventListener('pointerdown', go); el.addEventListener('click', go); };
+  tap($('pauseBtn'), () => setSpeed(S.speed ? 0 : (S.lastSpeed || 1)));
+  tap($('fastBtn'), () => { const v = S.lastSpeed || 1; setSpeed(!S.speed ? v : v === 1 ? 2 : v === 2 ? 4 : 1); }); }   // (paused: a tap carries on at the last speed)
+function spdTiles() { const p = !S.speed; $('pauseBtn').classList.toggle('on', p); $('pauseBtn').querySelector('.ps').style.display = p ? 'none' : ''; $('pauseBtn').querySelector('.pl').style.display = p ? '' : 'none'; $('pauseBtn').setAttribute('aria-label', p ? 'Play' : 'Pause'); $('fastBtn').textContent = (S.speed || S.lastSpeed || 1) + 'x'; }
+$('viewBtn').addEventListener('click', toggleView); $('viewTile').addEventListener('click', toggleView);
+$('undoBtn').addEventListener('click', () => { undo(); sound.start(); });
 const fmt = n => n >= 1e4 ? (n / 1e3).toFixed(1) + 'k' : String(n);
 const money = n => Math.floor(n).toLocaleString('en-US');
 function hud() {
@@ -961,8 +981,25 @@ const kinds = Object.keys(fleet);
 const LOOK = c => c.type === 'car' ? (c.id % 3 === 0 ? 'hatch' : 'car') : c.type === 'suv' ? (c.id % 2 ? 'pickup' : 'suv') : c.type;
 const flashes = [];   // emergency lights: [x, z, phase]
 const beams = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), beamMat, Q.maxCars + 50); beams.count = 0; beams.frustumCulled = false; beams.renderOrder = 1; scene.add(beams);
+// brake lights and blinkers: a small soft glow at each lit lamp, so they read at the normal zoom (the lamps alone are a pixel or two)
+const flares = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: poolMat.map, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }), 900);
+flares.count = 0; flares.frustumCulled = false; flares.renderOrder = 3; scene.add(flares); flares.setColorAt(0, new THREE.Color());
+const RED = new THREE.Color(1, .08, .04), AMBER = new THREE.Color(1, .5, .05);
+let nFl = 0;
+function flare(x, y, z, sz, c) {
+  if (nFl >= 900) return;
+  dummy.position.set(x, y, z); dummy.quaternion.copy(camera.quaternion); dummy.scale.set(sz, sz, sz); dummy.updateMatrix(); flares.setMatrixAt(nFl, dummy.matrix); flares.setColorAt(nFl++, c);
+  dummy.quaternion.identity();
+}
+// a car's lit lamps: brake lights at the back, the blinker on its side front and back (flashing)
+function carFlares(x, y, z, hx, hz, len, w, brake, sig, t) {
+  const sz = Math.max(.9, Math.min(2.4, cam.dist * .007)), on = (t * 1.4) % 1 < .5, h = len / 2 + .05, sw = w / 2 - .3, rx = -hz, rz = hx;   // (rx, rz: to the right)
+  if (brake) for (const sd of [-1, 1]) flare(x - hx * h + rx * sw * sd, y + .75, z - hz * h + rz * sw * sd, sz, RED);
+  if (sig && on) { const sd = sig === 1 ? -1 : 1; for (const f of [h, -h]) flare(x + hx * f + rx * (w / 2 - .1) * sd, y + .7, z + hz * f + rz * (w / 2 - .1) * sd, sz * .8, AMBER);
+    if (sig === 3) for (const f of [h, -h]) flare(x + hx * f - rx * (w / 2 - .1) * sd, y + .7, z + hz * f - rz * (w / 2 - .1) * sd, sz * .8, AMBER); }
+}
 function drawCars() {
-  const cnt = {}; for (const k of kinds) cnt[k] = 0;
+  const cnt = {}; for (const k of kinds) cnt[k] = 0; nFl = 0; const ft = performance.now() / 1000;
   const lit = beamMat.opacity > .02; let nb = 0;
   flashes.length = 0; let nBlob = 0;
   for (const c of net.cars) {
@@ -975,6 +1012,7 @@ function drawCars() {
     if (nBlob < carBlobs.instanceMatrix.count) { dummy.position.set(c.x, cy + .2, c.z); dummy.scale.set(c.len + 1.4, 1, c.w + 1.3); dummy.updateMatrix(); carBlobs.setMatrixAt(nBlob++, dummy.matrix); dummy.position.set(c.x, cy, c.z); dummy.scale.set(1, 1, 1); dummy.updateMatrix(); }
     m.setMatrixAt(i, dummy.matrix); m.setColorAt(i, c.type === 'bus' ? col.setRGB(.96, .6, .03, THREE.SRGBColorSpace) : c.type === 'police' || c.type === 'ems' || c.type === 'fire' ? col.setRGB(1, 1, 1) : c.type === 'truck' ? carColor((c.color * 3) % 1, col) : carColor(c.color, col));
     m.geometry.attributes.aBrake.array[i] = c.brake + 2 * (c.sig || 0) + (c.siren || c.lights ? 8 : 0);
+    if (c.brake || c.sig) carFlares(c.x, cy, c.z, c.hx, c.hz, c.len, c.w, c.brake && c.v > .05 || c.brake && !c.hold, c.sig, ft);
     if (lit) { const f = c.len / 2 + 6.5; dummy.position.set(c.x + c.hx * f, cy + .1, c.z + c.hz * f); dummy.scale.set(13, 1, 7.5); dummy.updateMatrix(); beams.setMatrixAt(nb++, dummy.matrix); }
   }
   // cars in the parking lots: parked, pulling in, backing out
@@ -987,6 +1025,7 @@ function drawCars() {
   for (const mv of pk.movers) {
     if (mv.wait > 0) { const sp = pk.parked.get(mv.k); if (sp) putCar(sp.type, sp.id, sp.color, sp.x, sp.z, sp.yaw, 0); continue; }
     const q = pk.pose(mv); putCar(mv.type, mv.id, mv.color, q[0], q[1], q[2], (mv.v < 1.2 ? 1 : 0) + 2 * (mv.sig || 0));
+    if (mv.v < 1.2 || mv.sig) carFlares(q[0], 0, q[1], Math.cos(q[2]), -Math.sin(q[2]), 4.6, 1.9, mv.v < 1.2, mv.sig || 0, ft);
   }
   // police parked out of sight at their spots, watching the traffic
   for (const u of law.units) {
@@ -995,6 +1034,7 @@ function drawCars() {
   }
   for (const k of kinds) { const m = fleet[k]; m.count = cnt[k]; m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; m.geometry.attributes.aBrake.needsUpdate = true; }
   carBlobs.count = nBlob; carBlobs.instanceMatrix.needsUpdate = true;
+  flares.count = nFl; flares.instanceMatrix.needsUpdate = true; if (flares.instanceColor) flares.instanceColor.needsUpdate = true;
   beams.count = nb; beams.visible = lit; if (nb) beams.instanceMatrix.needsUpdate = true;
 }
 // people on foot: everyone you see walking is someone in the town (or a visitor), going somewhere
@@ -1046,10 +1086,11 @@ const MOON = new THREE.Color(.72, .8, 1), HEMI_NIGHT = new THREE.Color(.55, .64,
 const sunDir = new THREE.Vector3(), moonDir = new THREE.Vector3(), lightDir = new THREE.Vector3();
 function lighting(hour, t = performance.now() / 1000) {
   if (!nightOn) hour = 6.6 + ((hour - 6.6 + 24) % 24) * (11 / 24);
-  const e = Math.sin((hour - 6) / 12 * Math.PI), az = (hour - 6) / 12 * Math.PI;
-  const night = Math.min(1, Math.max(0, (.12 - e) / .3)), dark = night * .6;
+  const e0 = Math.sin((hour - 6) / 12 * Math.PI), az = (hour - 6) / 12 * Math.PI;
+  const e = e0 > 0 ? Math.pow(e0, .6) : e0;   // the sun climbs quickly after dawn: full daylight from mid morning, not a long golden hour
+  const night = Math.min(1, Math.max(0, (.12 - e0) / .3)), dark = night * .6;
   U.uNight.value = night;
-  const el = Math.asin(e) * .78, hx = Math.cos(az), hz = Math.sin(az) * .55, hl = Math.hypot(hx, hz);
+  const el = Math.asin(e) * .8, hx = Math.cos(az), hz = Math.sin(az) * .55, hl = Math.hypot(hx, hz);
   sunDir.set(hx / hl * Math.cos(el), Math.sin(el), hz / hl * Math.cos(el));
   moonDir.set(-sunDir.x * .7, Math.max(.42, -sunDir.y), -sunDir.z * .7 - .25).normalize();
   const sunUp = Math.max(0, e);
@@ -1057,21 +1098,21 @@ function lighting(hour, t = performance.now() / 1000) {
   const dayF = S ? S.time / DAY : 0, wh = d => { const v = Math.sin(Math.floor(d) * 12.9898 + ((S && S.seed) || 0) * .0137) * 43758.5453; return v - Math.floor(v); };
   const f = dayF - Math.floor(dayF), cover = .12 + .72 * (wh(dayF) * (1 - f) + wh(dayF + 1) * f);
   U.uCover.value = cover; sky.U.uCloud.value = cover;
-  sun.intensity = (3.6 * Math.pow(sunUp, .4) * (1 - night)) * (1 - .3 * cover * cover) + .9 * night;
-  const warm = 1 - Math.min(1, sunUp * 2.2);
-  sun.color.setRGB(1, .92 - warm * .26, .82 - warm * .48).lerp(MOON, night);
+  sun.intensity = (3.7 * Math.pow(sunUp, .3) * (1 - night)) * (1 - .3 * cover * cover) + .9 * night;
+  const warm = 1 - Math.min(1, Math.max(0, e0) * 3.4);   // (warm light only around sunrise and sunset)
+  sun.color.setRGB(1, .97 - warm * .3, .92 - warm * .55).lerp(MOON, night);
   // shadows: never from a sun lower than ~10 degrees (endless shadows); the moon at night
   if (night > .5) lightDir.copy(moonDir); else lightDir.set(sunDir.x, Math.max(.18, sunDir.y), sunDir.z).normalize();
   sun.position.set(cam.x + lightDir.x * 700, lightDir.y * 700, cam.z + lightDir.z * 700);
   sun.target.position.set(cam.x, 0, cam.z);
   const S2 = Math.max(160, Math.min(900, cam.dist * 1.1)), sc = sun.shadow.camera;
   if (sc.right !== S2) { sc.left = -S2; sc.right = S2; sc.top = S2; sc.bottom = -S2; sc.near = 10; sc.far = 2400; sc.updateProjectionMatrix(); }
-  hemi.intensity = (.3 + .12 * cover) * (1 - night) + .5 * night; hemi.color.setRGB(.87, .91, 1).lerp(HEMI_NIGHT, night);
+  hemi.intensity = (.46 + .14 * cover) * (1 - night) + .5 * night; hemi.color.setRGB(.9, .94, 1).lerp(HEMI_NIGHT, night);
   sky.update(sunDir, moonDir, night, t, camera.position, camera.far);
   sky.horizon(cam.x - camera.position.x, cam.z - camera.position.z, scene.fog.color);
   sky.env(scene);
   U.uTime.value = t; U.uCloudSh.value = Math.max(0, 1 - night * 1.6) * Math.min(1, sunUp * 4) * Math.min(1, .45 + .8 * cover);
-  renderer.toneMappingExposure = 1;
+  renderer.toneMappingExposure = 1 + .08 * (1 - night) * Math.min(1, sunUp * 3);
   lampGlowMat.color.setRGB(.25 + night * .9, .22 + night * .75, .18 + night * .5);
   poolMat.opacity = night * .4;
   if (sceneryG && sceneryG.userData.signMat) sceneryG.userData.signMat.emissiveIntensity = night * .5;
@@ -1303,6 +1344,7 @@ function frame(now) {
   ovT += rdt; if (ovT > .5) { ovT = 0; paintOverlay(); }
   drawJams(now / 1000);
   hudT += rdt; if (hudT > .25) { hudT = 0; hud(); }
+  if (undoT > 0) undoT -= rdt; $('undoBtn').classList.toggle('show', undoT > 0 && !titleUp);
   sound.tick(rdt, net.cars.length, S.meter);
   cursor.material.opacity = .6 + .3 * Math.sin(now / 180);
   renderer.render(scene, camera);
@@ -1314,7 +1356,7 @@ requestAnimationFrame(frame);
 
 // test hooks
 window.FT = {
-  dbg() { return { tris: renderer.info.render.triangles, calls: renderer.info.render.calls, shadowOn: renderer.shadowMap.enabled, sunCast: sun.castShadow, map: !!sun.shadow.map, ms: sun.shadow.mapSize.x, bg: scene.background && scene.background.isTexture, env: !!scene.environment, cam: sun.shadow.camera.right, sunPos: sun.position.toArray().map(Math.round), q: qName, prog: renderer.info.programs.length }; },
+  dbg() { return { tris: renderer.info.render.triangles, calls: renderer.info.render.calls, shadowOn: renderer.shadowMap.enabled, sunCast: sun.castShadow, map: !!sun.shadow.map, ms: sun.shadow.mapSize.x, bg: scene.background && scene.background.isTexture, env: !!scene.environment, cam: sun.shadow.camera.right, sunPos: sun.position.toArray().map(Math.round), q: qName, prog: renderer.info.programs.length, geo: renderer.info.memory.geometries, tex: renderer.info.memory.textures, heap: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1e6) : 0 }; },
   get net() { return net; }, get scene() { return scene; }, along, setLv, toScreen(x, z) { const v = new THREE.Vector3(x, 0, z).project(camera), r = canvas.getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; }, hover(x, z) { T.mouse = [x, z]; hoverUpdate(); }, get T() { return T; }, get city() { return city; }, get S() { return S; }, cam, placeCamera() { fly = zoomTo = coast = null; placeCamera(); }, setTool, click, setSpeed, toggleView,
   step(sec) { for (let t = 0; t < sec; t += .1) simStep(.1); },
   render() { if (net.ver !== seenNet) rebuildRoads(); if (city.ver !== seenCity) rebuildCity(); lighting((S.time / DAY * 24) % 24); drawCars(); updatePeds(.05); drawCoins(1); drawSignals(); paintOverlay(); drawJams(1); renderer.render(scene, camera); },

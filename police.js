@@ -353,8 +353,9 @@ export function createLaw(net, city, life) {
       const mad = (c.reckless && gap < 5 && L.v < c.v * .7 && L.v < 6) || (c.pid && (life.person(c.pid) || {}).temper > .92 && gap < 3 && c.v < 1 && c.stuck > 14);
       if (!mad || R() > .1) continue;
       c.rageAt = now(); W.lastRage = now(); W.rage.push({ car: c, t: 3.5, at: L });
-      W.events.push({ k: 'horn', x: c.x, z: c.z }); break;
+      W.events.push({ k: 'horn', x: c.x, z: c.z });
       if (R() < .35) feed('RAGE', `${who(c)} flipped off ${who(L)} on ${life.streetName(c.lane.edge || (c.lane.in && c.lane.in.edge))}`, c.x, c.z, { pid: c.pid });
+      break;
     }
   }
   // ---------- reports: you tip off the police about a driver; a unit goes out after them ----------

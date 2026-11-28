@@ -933,9 +933,10 @@ export class Net {
       if (car.yieldT > 0) { car.yieldT -= dt; car.aside = car.yieldT > 0; } else if (car.aside && !car.hold) car.aside = false;
       let lane = car.lane, mustBy = 1e4;
       const B = car.chgTo;
+      if (B !== car.sigFor) { car.sigFor = B; car.sigT = 0; } else if (B) car.sigT += dt;   // (the blinker goes on first, then it moves over)
       if (B) {   // moving over to the lane beside: when there's a gap, else slow down and wait near the end
         const sb = this.mapS(lane, car.s, B);
-        if (sb >= (B.pk ? .5 : car.len + 1) && sb < B.len - 1 && this.gapOK(car, B, sb)) {
+        if ((car.sigT > .9 || car.v < 1.5 || B.len - sb < 25) && sb >= (B.pk ? .5 : car.len + 1) && sb < B.len - 1 && this.gapOK(car, B, sb)) {
           lane.cars.splice(lane.cars.indexOf(car), 1);
           let j = 0; while (j < B.cars.length && B.cars[j].s > sb) j++; B.cars.splice(j, 0, car);
           car.lat = (car.lat || 0) + lane.off - B.off; car.side = lane; car.prev = null; car.lane = lane = B; car.s = sb; car.ri++; car.chgTo = null; car.chgWait = 0;

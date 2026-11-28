@@ -1,7 +1,7 @@
 // Everything you see: roads, junctions, markings, buildings, trees, cars, people, signals.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { ROAD_W, ONEWAY_W, WALK_W, LANE_W, RING_R, along, halfW, laneOff, rng, closestOnPoly, edgeH, FLAT } from './net.js';
+import { ONEWAY_W, WALK_W, LANE_W, along, halfW, laneOff, rng, closestOnPoly, edgeH, FLAT } from './net.js';
 import { frame as FR, layout as LAYOUT, entries as ENTRIES, pumpZone } from './parking.js';
 
 
@@ -604,7 +604,8 @@ function buildingMaterial(U, T) {
             diffuseColor.rgb = mix(diffuseColor.rgb, sc, band); }   // each tenant's sign panel
           diffuseColor.rgb *= 1. - slab * .25;
           // flat roofs: white membrane with seams on stores, gravel elsewhere (pitched roofs sit on top as their own mesh)
-          vec3 roofC = st > 2.5 ? mix(vec3(.4, .41, .41), texture2D(tGravel, vWp.xz / 4.).rgb * .85, .45) * (.9 + .1 * texture2D(tStucco, vWp.xz / 5.).r / .28) * (1. - .14 * step(fract(vWp.x / 3.05), .03))
+          vec3 roofC = st > 2.5 ? mix(vec3(.4, .41, .41), texture2D(tGravel, vWp.xz / 4.).rgb * .85, .45) * (.84 + .1 * texture2D(tStucco, vWp.xz / 5.).r / .28) * (1. - .14 * step(fract(vWp.x / 3.05), .03))
+                                  * (1. - .16 * smoothstep(.45, .75, texture2D(tStucco, vWp.xz / 31.).r / .28 * .5)) * .72   // (weathered: big darker patches, ponding)
                                 : texture2D(tGravel, vWp.xz / 5.).rgb * 1.05;
           diffuseColor.rgb = mix(diffuseColor.rgb, roofC * (.9 + .2 * h21(floor(vWp.xz * .1))), fRoof);
           float ao = clamp(y / 2.2, .62, 1.); diffuseColor.rgb *= mix(1., ao, 1. - fRoof) * (1. - csh(vWp.xz) * .4);
@@ -860,7 +861,7 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
       }
     } else {
       // parapet round a flat roof, the wall colour, with a lighter coping on top
-      const pc = [c[0] * .92, c[1] * .92, c[2] * .92], cc = [.6, .58, .55], ph = b.kind === 'house' ? 0 : .9, th = .3;
+      const pc = [c[0] * .92, c[1] * .92, c[2] * .92], pi = [.3 + c[0] * .25, .3 + c[1] * .25, .3 + c[2] * .25], cc = [.52, .51, .49], ph = b.kind === 'house' ? 0 : .9, th = .3;
       if (ph) {   // with a cornice: the top band stands a little proud of the wall
         const cx = .2, cy = b.h - .4;
         const outer = [at(-b.w / 2 - cx, -b.d / 2 - cx), at(b.w / 2 + cx, -b.d / 2 - cx), at(b.w / 2 + cx, b.d / 2 + cx), at(-b.w / 2 - cx, b.d / 2 + cx)];
@@ -868,7 +869,7 @@ export function buildCity(city, M, U, Q, carGeos, opt = {}) {
         const inner = [at(-b.w / 2 + th, -b.d / 2 + th), at(b.w / 2 - th, -b.d / 2 + th), at(b.w / 2 - th, b.d / 2 - th), at(-b.w / 2 + th, b.d / 2 - th)];
         for (let k = 0; k < 4; k++) {
           const o0 = outer[k], o1 = outer[(k + 1) % 4], a0 = corners[k], a1 = corners[(k + 1) % 4], i0 = inner[k], i1 = inner[(k + 1) % 4];
-          wallQ(par, o0, o1, cy, b.h + ph, pc, 1); wallQ(par, i0, i1, b.h, b.h + ph, pc, -1);
+          wallQ(par, o0, o1, cy, b.h + ph, pc, 1); wallQ(par, i0, i1, b.h, b.h + ph, pi, -1);
           flatBoth(par, a0, a1, o1, o0, cy, pc);      // underside of the cornice
           par.flat(o0, o1, i1, i0, b.h + ph, cc);
         }
@@ -1449,7 +1450,7 @@ attribute float aPart; attribute float aKind; attribute vec3 aLook; attribute fl
         { float pp = floor(aPart + .5);
           if (pp > .5) {
             float arm = step(2.5, pp), sd = mod(pp, 2.) > .5 ? 1. : -1.;
-            float piv = arm > .5 ? 1.44 : .92, ang = aWalk * (arm > .5 ? -.45 : .5) * sd;
+            float piv = arm > .5 ? 1.44 : .92, ang = aWalk * (arm > .5 ? -.45 : .4) * sd;   // (legs: a stride of about .7 m, as far as they walk in half a step cycle)
             float cs = cos(ang), sn = sin(ang), yy = transformed.y - piv;
             transformed.xy = vec2(transformed.x * cs - yy * sn, transformed.x * sn + yy * cs + piv);
           } }`)
